@@ -116,8 +116,16 @@ def _validate(target):
         raise UpdateError("MJ Cliproom is already up to date.")
     if _git("merge-base", "--is-ancestor", head, target).returncode:
         raise UpdateError("The configured update is not a fast-forward. Your app and data were left in place.")
-    if REQUIRE_SIGNATURE and _git("-c", "gpg.minTrustLevel=fully", "verify-commit", target).returncode:
-        raise UpdateError("The update commit was not signed by a trusted signer. Review your Git signing settings.")
+    if REQUIRE_SIGNATURE:
+        key_format = _git("config", "--get", "gpg.format").stdout.strip().casefold()
+        anchor = _git("config", "--path", "--get", "gpg.ssh.allowedSignersFile").stdout.strip()
+        if key_format == "ssh" or anchor:
+            path = Path(anchor)
+            if (not path.is_absolute() or not path.is_file() or
+                    path.resolve().is_relative_to(Path(config.ROOT).resolve())):
+                raise UpdateError("Configure an allowed signers file outside this checkout before updating.")
+        if _git("-c", "gpg.minTrustLevel=fully", "verify-commit", target).returncode:
+            raise UpdateError("The update commit was not signed by a trusted signer. Review your Git signing settings.")
     changed = _git("diff", "--name-only", "-z", "--no-renames", head, target, "--")
     if changed.returncode:
         raise UpdateError("Git could not inspect the update.")
@@ -205,7 +213,7 @@ def install_staged(target):
         raise UpdateError("The staged commit changed. Your checkout was left in place.")
     _stage_dependencies(target)
     _preflight()
-    r = _git("merge", "--ff-only", "--no-overwrite-ignore", target, timeout=180)
+    r = _git("-c", "submodule.recurse=false", "merge", "--ff-only", "--no-overwrite-ignore", target, timeout=180)
     if r.returncode or current() != target:
         raise UpdateError("Git could not apply the fast-forward. Check the app folder before retrying.")
 

@@ -22,6 +22,12 @@ release maintainer's signing key outside the repository. For SSH see
 [Git's allowed signers setting](https://git-scm.com/docs/git-config#Documentation/git-config.txt-gpgsshallowedSignersFile).
 Use `git verify-commit` for a stopped-server manual update.
 
+The `v0.10.0-beta` tag is signed with the one-time beta release key. The public
+[allowed signers entry](mj-beta-0.10.allowed-signers) has fingerprint
+`SHA256:JBWV5dl7SGB/0EugsC4vIMmAMiYQ11Azg+zc+QDxU+k`. Check the fingerprint against a
+trusted copy before using the entry. Store it outside the checkout and point Git at it before
+running `git verify-tag v0.10.0-beta`. Use the signing key published for each future release.
+
 ## Bootstrap an older Windows installation
 
 1. Note the exact live path under **Settings → Storage**. Resolve any pending move, finish active
