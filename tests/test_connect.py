@@ -208,13 +208,36 @@ with ctx.as_user(user.id):
     posting.on_clip_ready(post_job, post_job["clips"][1])
     check("signal-only fallback clips stay out of auto-posting", len(posting._posts), start_count + 2)
 
-direct = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "accounts": [accs["instagram"]["id"]], "now": True}, headers=ORIGIN)
+direct = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "accounts": [accs["instagram"]["id"]],
+                                    "metadata": {"title": "Final lap escape", "description": "A close GTA gameplay finish.",
+                                                 "hashtags": "#GTAOnline #Gaming"}, "now": True}, headers=ORIGIN)
 if direct.status_code != 200:
     print("DEBUG direct-post", direct.status_code, direct.text, posting._posts)
 check("Post now adds the chosen clip to the connected account", (direct.status_code, direct.json().get("queued")), (200, 1))
 with ctx.as_user(user.id):
     immediate = next((p for p in posting._mine() if p["job"] == "job-12345678" and p["clip"] == "clip01" and p["account"] == accs["instagram"]["id"]), None)
     check("direct posts are due immediately", immediate is not None and abs(immediate["due_at"] - time.time()) < 2)
+    check("Post now snapshots the edited title, description and hashtags",
+          (immediate.get("title"), immediate.get("description"), immediate.get("hashtags")),
+          ("Final lap escape", "A close GTA gameplay finish.", ["GTAOnline", "Gaming"]))
+
+    post_job = jobs.get("job-12345678")
+    edited_clip = {"id": "clip05", "file": "clip01.mp4", "status": "done", "title": "Clip", "start": 80, "end": 105}
+    post_job["clips"].append(edited_clip)
+    jobs.save(post_job)
+direct_yt = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip05", "accounts": [accs["youtube"]["id"]],
+                                       "metadata": {"title": "IShowSpeed escapes the cops", "description": "A wild GTA chase ends in a close escape.",
+                                                    "hashtags": "#GTA5 #Gaming #Shorts"}, "now": True}, headers=ORIGIN)
+check("YouTube Post now queues the edited clip", (direct_yt.status_code, direct_yt.json().get("queued")), (200, 1))
+with ctx.as_user(user.id):
+    direct_post = next(p for p in posting._mine() if p["job"] == "job-12345678" and p["clip"] == "clip05" and p["account"] == accs["youtube"]["id"])
+    yt_args = []
+    original_youtube_upload = accounts.youtube_upload
+    accounts.youtube_upload = lambda acc, path, title, description, tags, privacy: (yt_args.append((title, description, tags)) or ("yt-direct", "https://www.youtube.com/shorts/yt-direct"))
+    posting._post(direct_post)
+    accounts.youtube_upload = original_youtube_upload
+    check("YouTube receives the edited metadata and hashtag tags",
+          yt_args[0], ("IShowSpeed escapes the cops", "A wild GTA chase ends in a close escape.\n\n#GTA5 #Gaming #Shorts\n\n#Shorts", ["GTA5", "Gaming", "Shorts"]))
 
 # ---- posting
 with ctx.as_user(user.id):

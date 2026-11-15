@@ -194,7 +194,7 @@ def run_editor(client, root):
     assert job["status"] == "done" and len(job["clips"]) == 1 and job["clips"][0]["status"] == "done", job
     assert not job["ai"]["used"], job
     highlight = job["clips"][0]
-    assert "Gameplay highlight" in highlight["title"] and "Source time" in highlight["description"]
+    assert "Gameplay moment at" in highlight["title"] and "captured at" in highlight["description"]
     assert highlight["hashtags"] == ["Gaming", "Gameplay", "Shorts"], highlight
     graphics = next(root.rglob(f"{highlight['id']}.ass")).read_text(encoding="utf-8")
     assert "MJ PLAYS GTA" in graphics and any(line.endswith("}MJ") for line in graphics.splitlines()), graphics

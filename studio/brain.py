@@ -384,8 +384,9 @@ def gameplay_post(title, start, end, transcript="", use_ai=False):
         minutes, sec = divmod(remainder, 60)
         return f"{hours}:{minutes:02}:{sec:02}"
 
-    draft = {"title": f"{source[:60].rstrip()} | Gameplay highlight {timecode(start)}",
-             "description": f"A gameplay highlight from {source}. Source time {timecode(start)}–{timecode(end)}.",
+    draft = {"title": f"{source[:52].rstrip()} | Gameplay moment at {timecode(start)}",
+             "description": (f"A gameplay moment from {source}, captured at "
+                             f"{timecode(start)}–{timecode(end)}. Follow for more gaming clips."),
              "hashtags": tags}
     if not use_ai or len(transcript.split()) < 5:
         return draft

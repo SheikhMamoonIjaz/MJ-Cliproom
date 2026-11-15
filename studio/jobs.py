@@ -178,18 +178,61 @@ def _render_estimate(job):
 HIDDEN = ("dir", "user", "source_path", "recover", "gameplay_scan")
 
 
+_GENERIC_POST_TITLES = {"", "clip", "untitled clip", "untitled", "manual clip", "gameplay clip"}
+
+
+def post_metadata(job, clip, overrides=None) -> dict:
+    """Return complete, source-grounded post text for new and older clips."""
+    values = dict(clip)
+    if overrides:
+        values.update({key: overrides[key] for key in ("title", "description", "hashtags") if key in overrides})
+    source = str(job.get("title") or job.get("source", {}).get("name") or "Gameplay session").strip()
+    if job.get("source", {}).get("type") == "file":
+        source = Path(source).stem
+    source = source.replace("_", " ").strip() or "Gameplay session"
+    try:
+        start = max(0, float(clip.get("start") or 0))
+        end = max(start + 3, float(clip.get("end") or start + 30))
+    except (TypeError, ValueError):
+        start, end = 0, 30
+    draft = brain.gameplay_post(source, start, end)
+
+    title = str(values.get("title") or "").strip()
+    if title.lower() in _GENERIC_POST_TITLES:
+        hook = str(clip.get("hook") or "").strip()
+        if hook and hook.lower() not in _GENERIC_POST_TITLES:
+            title = f"{hook[:60].rstrip()} | {source}"[:100].rstrip(" |:-")
+        else:
+            title = draft["title"][:100]
+
+    description = str(values.get("description") or "").strip()[:2000] or draft["description"]
+    raw_tags = values.get("hashtags")
+    tags = []
+    if isinstance(raw_tags, list):
+        for value in raw_tags:
+            tag = "".join(char for char in str(value).lstrip("#") if char.isalnum() or char == "_")[:30]
+            if tag and tag not in tags:
+                tags.append(tag)
+            if len(tags) == 8:
+                break
+    if not tags:
+        tags = draft["hashtags"]
+    return {"title": title, "description": description, "hashtags": tags}
+
+
 def public(job) -> dict:
     """What the browser may see: no server paths, no owner id."""
     out = {k: v for k, v in job.items() if k not in HIDDEN}
     out["source"] = {k: v for k, v in job["source"].items() if k != "path"}
     now = time.time()
-    out["clips"] = [
-        {**{k: v for k, v in clip.items()
-            if k not in ("src", "fixed_words", "fixed_for", "caption_cues", "render_started_at")},
-         **({"render_elapsed_seconds": round(now - clip["render_started_at"])}
-            if clip.get("status") == "rendering" and clip.get("render_started_at") else {})}
-        for clip in job["clips"]
-    ]
+    out["clips"] = []
+    for clip in job["clips"]:
+        visible = {k: v for k, v in clip.items()
+                   if k not in ("src", "fixed_words", "fixed_for", "caption_cues", "render_started_at")}
+        visible.update(post_metadata(job, clip))
+        if clip.get("status") == "rendering" and clip.get("render_started_at"):
+            visible["render_elapsed_seconds"] = round(now - clip["render_started_at"])
+        out["clips"].append(visible)
     render_eta, render_pending, average_render_seconds = _render_estimate(job)
     out["render_eta_seconds"] = render_eta
     out["render_pending_clips"] = render_pending
@@ -531,7 +574,17 @@ def update_metadata(job, cid: str, changes: dict):
             raise ValueError("No such clip.")
         if clip.get("status") in ("queued", "rendering"):
             raise RuntimeError("Wait for this clip to finish before saving its post text.")
-        clip.update(clip_changes(job, clip, allowed))
+        if "title" in allowed:
+            clip["title"] = str(allowed["title"])[:100]
+        if "description" in allowed:
+            clip["description"] = str(allowed["description"])[:2000]
+        if "hashtags" in allowed:
+            if not isinstance(allowed["hashtags"], str):
+                raise ValueError("Enter hashtags as text.")
+            tags = ["".join(x for x in tag.lstrip("#") if x.isalnum() or x == "_")[:30]
+                    for tag in allowed["hashtags"][:500].replace(",", " ").split()]
+            clip["hashtags"] = list(dict.fromkeys(tag for tag in tags if tag))[:8]
+        clip.update(post_metadata(job, clip))
         sidecar = Path(job["dir"]) / "clips" / f"{cid}.json"
         if sidecar.parent.is_dir():
             sidecar.write_text(json.dumps({key: clip.get(key) for key in
@@ -616,6 +669,7 @@ def create_manual(job, changes):
                 "motion": job["options"].get("motion", "none"),
                 "watermark": job["options"].get("watermark", False)}
         clip.update(clip_changes(job, clip, changes), status="queued")
+        clip.update(post_metadata(job, clip))
         job["clips"].append(clip)
         save(job)
     _q.put(("clip", job["id"], clip["id"]))
@@ -715,6 +769,7 @@ def render_one(job, clip, words):
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
         clip["render_seconds"] = round(time.time() - clip["render_started_at"], 1)
         clip.pop("render_started_at", None)
+        clip.update(post_metadata(job, clip))
         post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
         (d / "clips" / f"{clip['id']}.json").write_text(json.dumps(post, indent=1), encoding="utf-8")
         if clip["version"] == 1:

@@ -26,5 +26,9 @@ User-facing changes to MJ Cliproom are listed here.
   has not restarted onto the matching code.
 - Kept the posting controls for direct publishing and configurable 15–20 minute scheduling. YouTube posting still
   requires a connected channel and content rights confirmation.
+- Fixed Post now so the title, description and hashtags currently in the editor are saved and sent with the upload.
+  YouTube receives them as both Shorts description text and video tags, and each queued post keeps its own snapshot.
+- Replaced blank or generic clip names with source-based gameplay titles, clip times, descriptions and gaming hashtags.
+  Upload progress and the resulting YouTube link stay visible in the app.
 - Kept licensed instrumental music at a 30% starting level, with fades, ducking under prominent source audio,
   and peak limiting. Audition the result in the editor before publishing.

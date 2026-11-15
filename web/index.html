@@ -1913,7 +1913,7 @@ function clipHtml(j, c) {
     <button class="shot" data-act="openclip" ${a} aria-label="Open clip: ${esc(c.title || c.hook)}">${body}
       <span class="badge l ${scoreCls(c.score)}" title="${c.auto_gameplay ? "Gameplay pick" : "Clip score"}">${c.score || (c.auto_gameplay ? "Play" : "Hand")}</span><span class="badge r">${fmt(c.duration ?? (c.end - c.start))}</span></button>
     <div class="clip-body">
-      <div class="hook">${esc(c.hook || "Untitled clip")}</div>
+      ${c.hook ? `<div class="hook">${esc(c.hook)}</div>` : ""}
       <div class="ttl">${esc(c.title)}</div>
       ${postPills(c) ? `<div class="row" style="gap:4px">${postPills(c)}</div>` : ""}
       <div class="clip-foot">
@@ -2443,8 +2443,8 @@ function drawClipDlg(full) {
           <button class="btn sm" data-act="metagenerate">Generate title ideas</button></div>
         <p class="hint">Uses the selected LLM and transcript. If YouTube is connected, current popular gaming video titles can guide phrasing. Long-form ideas are based on the full source transcript when available; this clip uploader still posts the clip as a Short.</p>
         <div id="metaideas">${metadataIdeasHtml()}</div>
-        <label class="f">Title<input data-f="title" value="${esc(c.title)}"></label>
-        <label class="f">Description<textarea data-f="description" rows="2">${esc(c.description)}</textarea></label>
+        <label class="f">Title<input data-f="title" value="${esc(c.title || "Gameplay clip")}"></label>
+        <label class="f">Description<textarea data-f="description" rows="2">${esc(c.description || "")}</textarea></label>
         <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).map(h => "#" + h).join(" "))}"></label>
         <button class="btn sm" data-act="savemeta">Save post text</button>
         ${j.source_deleted ? '<p class="hint">The original video was deleted. Download it again before editing or re-rendering this clip.</p>' : ""}
@@ -2917,8 +2917,14 @@ document.addEventListener("click", async e => {
       const needsPermission = !!jobOf(D.jid)?.automation;
       if (needsPermission && !await ask("Confirm publishing permission", "Confirm you own this clip or have permission to publish it to the selected accounts.", a === "postnow" ? "Confirm and post now" : "Confirm and queue")) return;
       if (!needsPermission && a === "postnow" && !await ask("Post now?", `This clip goes to ${accs.length} account${accs.length > 1 ? "s" : ""} straight away.`, "Post now")) return;
-      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow", publish_authorized:needsPermission});
-      toast(a === "postnow" ? "Posting now" : "Added to the queue", "ok"); return tick();
+      const metadata = {};
+      $$("#clipdlg [data-f]").filter(i => ["title", "description", "hashtags"].includes(i.dataset.f))
+        .forEach(i => metadata[i.dataset.f] = i.value);
+      const result = await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, metadata,
+        now:a === "postnow", publish_authorized:needsPermission});
+      const count = result.queued || 0;
+      toast(a === "postnow" ? `Uploading to ${count} account${count === 1 ? "" : "s"}. Track the result here.`
+        : `Added to the queue for ${count} account${count === 1 ? "" : "s"}.`, "ok"); return tick();
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }
 });

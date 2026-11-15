@@ -100,6 +100,7 @@ def enqueue(job, clip, account_ids, now=False, automatic=False) -> list:
     if job.get("rights_cleared") is not True:
         raise ValueError("Confirm that you own or have permission to publish this source before posting.")
     c = creators.get(job["creator"]) or creators.DEFAULTS
+    metadata = jobs.post_metadata(job, clip)
     made = []
     with _lock:
         for aid in account_ids:
@@ -114,7 +115,8 @@ def enqueue(job, clip, account_ids, now=False, automatic=False) -> list:
             due = max(due, blocked_until(acc["platform"], aid))
             p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
                  "account": aid, "account_name": acc["name"], "platform": acc["platform"], "status": "scheduled",
-                 "due_at": due, "created": time.time(), "title": clip.get("title") or clip.get("hook") or "Clip",
+                 "due_at": due, "created": time.time(), "title": metadata["title"],
+                 "description": metadata["description"], "hashtags": metadata["hashtags"],
                  "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None, "views": None, "automatic": automatic}
             _posts.append(p)
             made.append(p)
@@ -206,10 +208,12 @@ def _post(p):
             raise RuntimeError("That account was disconnected.")
         path = Path(job["dir"]) / "clips" / clip["file"]
         creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name="clips")
-        title, cap = clip.get("title") or clip.get("hook") or "Clip", _caption(clip, creator)
+        metadata = jobs.post_metadata(job, clip, p)
+        p.update(metadata)
+        title, cap = metadata["title"], _caption(metadata, creator)
         if acc["platform"] == "youtube":
             privacy = (job.get("automation", {}).get("visibility", "private") if p.get("automatic") else creator["privacy"])
-            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), privacy)
+            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", metadata["hashtags"], privacy)
         elif acc["platform"] == "instagram":
             rid, url = accounts.instagram_upload(acc, path, f"{title}\n\n{cap}", job["id"])
         elif acc["platform"] == "tiktok":

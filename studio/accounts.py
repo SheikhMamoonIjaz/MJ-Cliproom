@@ -386,9 +386,14 @@ def _yt_token(acc) -> str:
 
 
 def youtube_upload(acc, path: Path, title: str, description: str, tags: list, privacy: str):
+    clean_title = re.sub(r"[<>]", "", str(title or "")).strip()[:100]
+    if not clean_title or clean_title.lower() in ("clip", "untitled clip", "manual clip"):
+        raise ValueError("Add a specific clip title before uploading to YouTube.")
     token = _yt_token(acc)
-    meta = {"snippet": {"title": re.sub(r"[<>]", "", title)[:100] or "Clip", "description": re.sub(r"[<>]", "", description)[:4900],
-                        "tags": tags[:15], "categoryId": "20"},
+    clean_tags = list(dict.fromkeys(re.sub(r"[^\w]", "", str(tag).lstrip("#"))[:30]
+                                    for tag in tags if str(tag).strip()))[:15]
+    meta = {"snippet": {"title": clean_title, "description": re.sub(r"[<>]", "", str(description or ""))[:4900],
+                        "tags": clean_tags, "categoryId": "20"},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
     size = path.stat().st_size
     start = _check(httpx.post("https://www.googleapis.com/upload/youtube/v3/videos",

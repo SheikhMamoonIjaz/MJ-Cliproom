@@ -1862,13 +1862,25 @@ def add_posts(body: dict = Body(...)):
     _require_source_rights(job)
     if job.get("automation") and body.get("publish_authorized") is not True:
         raise HTTPException(400, "Confirm that you have permission to publish this clip to the selected accounts.")
+    metadata = body.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, dict):
+            raise HTTPException(400, "Post text must include a title, description and hashtags.")
+        try:
+            jobs.update_metadata(job, clip["id"], metadata)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     try:
         made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not made:
         raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
-    return {"queued": len(made)}
+    return {"queued": len(made), "posts": [{"id": post["id"], "platform": post["platform"],
+                                             "account_name": post["account_name"], "status": post["status"],
+                                             "due_at": post["due_at"]} for post in made]}
 
 
 @app.post("/api/posts/{pid}/{action}")
