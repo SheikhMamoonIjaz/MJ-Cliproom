@@ -19,3 +19,5 @@ User-facing changes to MJ Cliproom are listed here.
   has not restarted onto the matching code.
 - Kept the posting controls for direct publishing and configurable 15–20 minute scheduling. YouTube posting still
   requires a connected channel and content rights confirmation.
+- Raised the default daily post cap for new creator workspaces to 10, matching the requested 10-clip batch while
+  preserving existing creator settings.

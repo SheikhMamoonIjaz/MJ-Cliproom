@@ -44,8 +44,9 @@ In the creator workspace's **Setup → Posting**:
    automatic queue for human review.
 3. Set **Minimum minutes between posts** and **Maximum minutes between posts**. For one Short every 15–20 minutes,
    enter `15` and `20`.
-4. Set **Most posts per account per day** to at least the number of clips you intend to publish that day. The
-   account-level daily limit and YouTube's own limits still apply.
+4. The default **Most posts per account per day** is `10`, so a 10-clip batch can fit across the day. Existing
+   creator workspaces keep their saved cap; increase it to at least the number you plan to publish. YouTube's own
+   limits still apply.
 5. Choose the YouTube visibility setting. Check the queue and history in the app; cancel a queued post or retry a
    failed one from there.
 
