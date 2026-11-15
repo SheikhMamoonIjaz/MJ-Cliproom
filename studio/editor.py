@@ -74,10 +74,11 @@ def gameplay(source, start, end, count, minimum, maximum, has_audio=False):
         if any(a < c["end"] and b > c["start"] for c in picks):
             continue
         picks.append({"start": round(a, 3), "end": round(b, 3), "title": "Gameplay highlight",
-                      "hook": "", "description": "", "hashtags": [], "highlight_words": [], "score": 0,
+                      "hook": "", "description": "", "hashtags": [], "highlight_words": [],
+                      "score": round(100 * (1 - math.exp(-max(0.0, float(signal[i])) / 1.4))),
                       "strength": float(signal[i]),
                       "category": "other", "reason": "Suggested from changes in the picture and audio." if has_audio
-                      else "Suggested from changes in the picture."})
+                      else "Suggested from changes in the picture.", "score_source": "signals"})
         if len(picks) == count:
             break
     return sorted(picks, key=lambda c: c["start"])

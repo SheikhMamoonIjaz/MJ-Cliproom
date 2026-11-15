@@ -83,6 +83,8 @@ def on_clip_ready(job, clip):
     c = creators.get(job["creator"])
     if not c or not c["autopost"] or not c["accounts"]:
         return
+    if clip.get("auto_gameplay") and clip.get("score_source") != "ai_and_signals":
+        return  # picture/audio-only candidates need a human review before automatic posting
     if clip.get("score", 0) < c["post_min_score"]:
         return  # includes hand-made clips (score 0): those wait for you to press Post
     made = enqueue(job, clip, c["accounts"])

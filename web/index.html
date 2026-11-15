@@ -1096,7 +1096,7 @@ function startTour() {
 /* ============================================================ state */
 const S = {status:{styles:{}, layouts:{}}, jobs:[], creators:[], accounts:[], overview:null, settings:null,
            view:"library", ctab:"clips"};
-const D = {jid:null, cid:null, sig:""};
+const D = {jid:null, cid:null, sig:"", metaIdeas:[], metaFormat:"short"};
 const creatorId = () => S.view.startsWith("c:") ? S.view.slice(2) : null;
 const creator = () => S.creators.find(c => c.id === creatorId());
 const jobOf = id => S.jobs.find(j => j.id === id);
@@ -2191,7 +2191,7 @@ async function drawSettings() {
         youtube: ["https://console.cloud.google.com/apis/credentials", "Google Cloud",
           ["Create a project and turn on <b>YouTube Data API v3</b>.", "Create an <b>OAuth client ID</b> of type <b>Web application</b>.",
            "Add the address below under <b>Authorised redirect URIs</b>.", "Paste its Client ID and Client secret here."],
-          "Until Google verifies your app, people see a warning when they connect, and uploads stay private."],
+          "Users choose a Google account and grant YouTube upload access. Google may require OAuth app verification before other people can connect."],
         instagram: ["https://developers.facebook.com/apps", "Meta for Developers",
           ["Create a <b>Business</b> app and add <b>Instagram</b> (API setup with Instagram login).",
            "Under <b>Business login settings</b>, add the address below as a redirect URL.", "Paste the <b>Instagram app ID</b> and <b>Instagram app secret</b> here."],
@@ -2202,7 +2202,8 @@ async function drawSettings() {
           "Until TikTok reviews your app, clips are posted as private: only the account owner sees them."]};
       const card = (pf, name, logo, bg, desc) => {
         const accs = mine(pf), st = setup?.[pf], open = S.setupOpen === pf, g = GUIDE[pf];
-        const act = (ok[pf] ? `<a class="btn sm primary" href="/oauth/${pf}/start">${ic("plus")}${accs.length ? "Add another" : "Connect"}</a>`
+        const actionLabel = accs.length ? "Add another" : pf === "youtube" ? "Continue with Google" : "Connect";
+        const act = (ok[pf] ? `<a class="btn sm primary" href="/oauth/${pf}/start">${ic("plus")}${actionLabel}</a>`
             : admin ? `<button class="btn sm primary" data-act="appsetup" data-p="${pf}">${ic("cog")}Set up</button>` : `<span class="pill">Not set up on this server</span>`)
           + (ok[pf] && admin ? `<button class="btn sm ghost" data-act="appsetup" data-p="${pf}" title="Change this server's ${name} app">${ic("cog")}</button>` : "");
         const panel = open && st ? `<div class="appsetup">
@@ -2217,7 +2218,7 @@ async function drawSettings() {
         return `<div class="appcard"><span class="applogo" style="background:${bg}">${logo}</span>
           <div class="apptx"><b>${name}</b><span>${desc}</span>${listOf(accs)}</div><div class="appact">${act}</div>${panel}</div>`;
       };
-      body.innerHTML = `<section class="set-sec"><h2>Connected apps</h2><p class="help">Connect the accounts MJ Cliproom posts clips to: press Connect, sign in on the platform's own page, and you're back here. MJ Cliproom never sees your passwords. Then pick which accounts each creator posts to, in that creator's Setup.</p>
+      body.innerHTML = `<section class="set-sec"><h2>Connected apps</h2><p class="help">Connect the accounts MJ Cliproom posts clips to. For YouTube, choose <b>Continue with Google</b> and grant upload access to the channel you want to use. MJ Cliproom never sees your Google password. Then pick which accounts each creator posts to, in that creator's Setup.</p>
         <div class="apps">
           ${card("youtube", "YouTube", yt, "#FF0000", "Post clips to your channel as Shorts.")}
           ${card("instagram", "Instagram", ig, "linear-gradient(45deg,#F58529,#DD2A7B,#8134AF)", "Post clips as Reels. Needs a Creator or Business account.")}
@@ -2228,12 +2229,23 @@ async function drawSettings() {
 }
 async function saveSettings() { const d = {}; $$("#sform [data-s]").forEach(i => d[i.dataset.s] = i.value); await send("/api/settings", d, "PUT"); }
 
+function metadataIdeasHtml() {
+  if (!D.metaIdeas?.length) return "";
+  const long = D.metaFormat === "long";
+  return `<div class="metasuggestions"><p class="hint">${D.metaTrendCount ? `Referenced ${D.metaTrendCount} currently popular gaming video titles.` : "No connected channel trend references were available; these ideas use your video text."} ${long ? "These drafts are for the full source video. Copy them for a long-form upload." : "Ideas are editable and are not a view guarantee."}</p>
+    ${D.metaIdeas.map((idea, i) => `<div class="card" style="padding:12px;margin:8px 0"><b>${esc(idea.title)}</b><p class="sub">${esc(idea.description)}</p>
+      <p class="hint">${esc((idea.hashtags || []).map(h => "#" + h).join(" "))}${idea.angle ? ` · ${esc(idea.angle)}` : ""}${idea.evidence ? `<br>Based on: ${esc(idea.evidence)}` : ""}</p>
+      <div class="row">${long ? "" : `<button class="btn sm primary" data-act="metaapply" data-i="${i}">Use on this clip</button>`}<button class="btn sm" data-act="metacopy" data-i="${i}">Copy</button></div></div>`).join("")}</div>`;
+}
+
 /* ============================================================ clip editor */
-function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; drawClipDlg(true); $("#clipdlg").showModal(); }
+function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; D.metaIdeas = []; D.metaTrendCount = 0; D.metaFormat = "short"; drawClipDlg(true); $("#clipdlg").showModal(); }
 function drawClipDlg(full) {
   const j = jobOf(D.jid), c = j?.clips.find(x => x.id === D.cid), dlg = $("#clipdlg");
   if (!c) { if (dlg.open) dlg.close(); return; }
   const m = `/media/${j.id}/`, sig = c.status + c.version;
+  const tracks = S.status.music || [];
+  const musicOptions = `<option value="">Original audio only</option>` + tracks.map(t => `<option value="${esc(t.id)}"${t.id === c.music_id ? " selected" : ""}>${esc(t.name)} · ${fmt(t.duration)}</option>`).join("");
   const stage = c.status === "done" ? `<video src="${m}${esc(c.file)}?v=${c.version}" poster="${m}${esc(c.cover)}?v=${c.version}" controls autoplay playsinline></video>`
     : c.status === "error" ? `<div class="err" style="padding:20px;text-align:center">${esc(c.error || "Could not make this clip.")}</div>`
     : `<span class="making">${c.status === "rendering" ? `Making this clip…<br><small>${remainingLabel(c.render_eta_seconds, "estimating render time")}</small>` : "Waiting its turn…"}</span>`;
@@ -2261,10 +2273,24 @@ function drawClipDlg(full) {
         </details>
         <label class="f">Motion graphics<select data-f="motion">${opts({none:"None", highlight:"MJ title tag"}, c.motion || "none")}</select></label>
         <label class="ck"><input type="checkbox" data-f="watermark" ${c.watermark ? "checked" : ""}> MJ video watermark</label>
+        <h3>Instrumental background music</h3>
+        <label class="f">Track<select data-f="music_id">${musicOptions}</select></label>
+        <label class="f">Music level · ${Math.round((c.music_volume ?? 0.12) * 100)}%<input data-f="music_volume" type="range" min="0" max="0.5" step="0.01" value="${c.music_volume ?? 0.12}"></label>
+        <label class="ck"><input type="checkbox" data-f="music_duck" ${c.music_duck !== false ? "checked" : ""}> Lower music under the original audio</label>
+        <label class="f">Choose an instrumental audio file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" style="max-width:100%"></label>
+        <div class="row"><button class="btn sm" data-act="musicupload">Upload instrumental</button>
+          ${c.music_id ? `<button class="btn sm ghost" data-act="musicdelete" data-id="${esc(c.music_id)}">Remove track</button>` : ""}</div>
+        <p class="hint">Upload a track you own or have a licence to use. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
         <h3>Post text</h3>
+        <div class="row"><select id="metaformat" aria-label="Metadata format"><option value="short">YouTube Shorts ideas</option><option value="long">Full video title and description</option></select>
+          <select id="metaregion" aria-label="Trend region"><option value="US">US gaming trends</option><option value="GB">UK gaming trends</option><option value="PK">Pakistan gaming trends</option><option value="IN">India gaming trends</option><option value="CA">Canada gaming trends</option><option value="AU">Australia gaming trends</option></select>
+          <button class="btn sm" data-act="metagenerate">Generate title ideas</button></div>
+        <p class="hint">Uses the selected LLM and transcript. If YouTube is connected, current popular gaming video titles can guide phrasing. Long-form ideas are based on the full source transcript when available; this clip uploader still posts the clip as a Short.</p>
+        <div id="metaideas">${metadataIdeasHtml()}</div>
         <label class="f">Title<input data-f="title" value="${esc(c.title)}"></label>
         <label class="f">Description<textarea data-f="description" rows="2">${esc(c.description)}</textarea></label>
         <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).map(h => "#" + h).join(" "))}"></label>
+        <button class="btn sm" data-act="savemeta">Save post text</button>
         ${j.source_deleted ? '<p class="hint">The original video was deleted. Download it again before editing or re-rendering this clip.</p>' : ""}
         <button class="btn" data-act="remake" ${j.source_deleted ? "disabled" : ""}>${ic("scissors")}Save and re-make clip</button>
         <h3>Post it</h3>
@@ -2612,6 +2638,58 @@ document.addEventListener("click", async e => {
     if (a === "retryvideo") { await send(`/api/jobs/${d.j}/retry`, {}); toast("Video queued for retry", "ok"); return tick(); }
     if (a === "resetcaptions") { const input = $("#captiondraft"); input.dataset.dirty = "reset"; input.value = ""; input.readOnly = false; return; }
     if (a === "saveglossary") { await saveCaptionGlossary($("#glossarydraft")); return toast("Caption glossary saved", "ok"); }
+    if (a === "metagenerate") {
+      const format = $("#metaformat").value, region = $("#metaregion").value;
+      b.disabled = true; const label = b.textContent; b.textContent = "Writing ideas…";
+      try {
+        const result = await send(`/api/jobs/${D.jid}/clips/${D.cid}/metadata`, {format, region});
+        D.metaIdeas = result.ideas || []; D.metaFormat = result.format || format;
+        D.metaTrendCount = result.trend_reference_count || 0;
+        $("#metaideas").innerHTML = metadataIdeasHtml();
+        toast(`Metadata ideas ready${result.model ? ` · ${result.model}` : ""}`, "ok");
+      } finally { b.disabled = false; b.textContent = label; }
+      return;
+    }
+    if (a === "metacopy" || a === "metaapply") {
+      const idea = D.metaIdeas[Number(d.i)]; if (!idea) return;
+      if (a === "metacopy" || D.metaFormat === "long") {
+        await navigator.clipboard.writeText(`${idea.title}\n\n${idea.description}\n\n${(idea.hashtags || []).map(h => "#" + h).join(" ")}`);
+        return toast("Metadata copied", "ok");
+      }
+      const patch = {title:idea.title, description:idea.description, hashtags:(idea.hashtags || []).map(h => "#" + h).join(" ")};
+      await send(`/api/jobs/${D.jid}/clips/${D.cid}/metadata`, patch, "PUT");
+      $("#clipdlg [data-f=title]").value = patch.title;
+      $("#clipdlg [data-f=description]").value = patch.description;
+      $("#clipdlg [data-f=hashtags]").value = patch.hashtags;
+      await tick(); return toast("Idea applied and saved to this clip", "ok");
+    }
+    if (a === "savemeta") {
+      const patch = {};
+      $$("#clipdlg [data-f]").filter(i => ["title", "description", "hashtags"].includes(i.dataset.f))
+        .forEach(i => patch[i.dataset.f] = i.value);
+      await send(`/api/jobs/${D.jid}/clips/${D.cid}/metadata`, patch, "PUT");
+      await tick(); return toast("Post text saved", "ok");
+    }
+    if (a === "musicupload") {
+      const file = $("#musicfile").files?.[0]; if (!file) return toast("Choose an instrumental audio file first.", "bad");
+      b.disabled = true; const old = b.textContent; b.textContent = "Uploading…";
+      try {
+        const form = new FormData(); form.append("file", file);
+        const made = await api("/api/music", {method:"POST", body:form});
+        S.status.music = await api("/api/music");
+        const select = $("#clipdlg [data-f=music_id]");
+        select.add(new Option(`${made.name} · ${fmt(made.duration)}`, made.id)); select.value = made.id;
+        toast("Track added. Save and re-make the clip to mix it in.", "ok");
+      } finally { b.disabled = false; b.textContent = old; }
+      return;
+    }
+    if (a === "musicdelete") {
+      if (!await ask("Remove this background track?", "This deletes the uploaded audio file from your account. Clips using it must be unlinked first.", "Remove track", true)) return;
+      const result = await api(`/api/music/${d.id}`, {method:"DELETE"});
+      S.status.music = result.music || []; const select = $("#clipdlg [data-f=music_id]");
+      select.querySelector(`option[value="${CSS.escape(d.id)}"]`)?.remove(); select.value = "";
+      toast("Track removed", "ok"); return;
+    }
     if (a === "remake") {
       const body = {}; $$("#clipdlg [data-f]").forEach(i => body[i.dataset.f] = i.type === "checkbox" ? i.checked : i.type === "number" ? Number(i.value) : i.value);
       const captions = readCaptionEditor($("#captiondraft"), body.start);

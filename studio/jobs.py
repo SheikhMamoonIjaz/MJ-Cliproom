@@ -460,6 +460,22 @@ def clip_changes(job, clip, changes):
         if not isinstance(changes["watermark"], bool):
             raise ValueError("Choose whether to add the MJ watermark.")
         new["watermark"] = changes["watermark"]
+    if "music_id" in changes:
+        track_id = str(changes["music_id"] or "").strip()
+        if track_id:
+            from . import music
+            if not music.get(track_id):
+                raise ValueError("That background track is no longer in your library.")
+        new["music_id"] = track_id
+    if "music_volume" in changes:
+        volume = float(changes["music_volume"])
+        if not math.isfinite(volume) or not 0 <= volume <= 0.5:
+            raise ValueError("Set background music volume between 0 and 50%.")
+        new["music_volume"] = round(volume, 2)
+    if "music_duck" in changes:
+        if not isinstance(changes["music_duck"], bool):
+            raise ValueError("Choose whether music should lower under the original audio.")
+        new["music_duck"] = changes["music_duck"]
     if "crop_keyframes" in changes:
         new["crop_keyframes"] = editor.validate_keyframes(changes["crop_keyframes"], duration)
     elif new.get("crop_keyframes"):
@@ -490,6 +506,29 @@ def request_render(jid, cid, changes: dict):
         clip.update(clip_changes(job, clip, changes), status="queued")
         save(job)
     _q.put(("clip", jid, cid))
+
+
+def update_metadata(job, cid: str, changes: dict):
+    """Save post text without forcing an expensive video re-render."""
+    allowed = {key: value for key, value in changes.items() if key in ("title", "description", "hashtags")}
+    if not allowed:
+        raise ValueError("Choose a title, description or hashtags to save.")
+    with _lock:
+        if job["status"] in ("queued", "running"):
+            raise RuntimeError("Wait for this video to finish before saving its post text.")
+        clip = next((item for item in job["clips"] if item["id"] == cid), None)
+        if not clip:
+            raise ValueError("No such clip.")
+        if clip.get("status") in ("queued", "rendering"):
+            raise RuntimeError("Wait for this clip to finish before saving its post text.")
+        clip.update(clip_changes(job, clip, allowed))
+        sidecar = Path(job["dir"]) / "clips" / f"{cid}.json"
+        if sidecar.parent.is_dir():
+            sidecar.write_text(json.dumps({key: clip.get(key) for key in
+                                           ("title", "description", "hashtags", "hook", "start", "end", "score")},
+                                          indent=1), encoding="utf-8")
+        save(job)
+        return clip
 
 
 def source_file(job):
@@ -610,13 +649,18 @@ def render_one(job, clip, words):
         src = Path(clip["src"]) if clip.get("src") else Path(job["source_path"])
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
-        local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        local = dict(clip, start=clip["start"] - off, end=clip["end"] - off,
+                     hook=roman.to_roman(clip.get("hook") or ""), has_audio=job.get("has_audio"))
+        if clip.get("music_id"):
+            from . import music
+            track = music.get(clip["music_id"])
+            if not track:
+                raise RuntimeError("The chosen background track is missing. Choose another track and re-make the clip.")
+            local["music_path"] = str(track["path"])
         if clip.get("caption_cues") is not None:
             local["caption_cues"] = [dict(c, start=c["start"] - off, end=c["end"] - off)
                                     for c in clip["caption_cues"]]
         segments = clip.get("segments") or []
-        if segments:
-            local["has_audio"] = job.get("has_audio")
         span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English
         if segments:
             span.append(segments)
@@ -650,10 +694,11 @@ def render_one(job, clip, words):
         corrected = editor.apply_glossary(raw, editor.read_glossary()) if raw else raw
         if clip.get("auto_gameplay") and not clip.get("post_drafted"):
             if job["options"].get("ai_post_text"):
-                transcript = " ".join(w["w"] for w in corrected if clip["start"] <= w["s"] < clip["end"])
-                usage.set_context(job.get("creator"), job.get("title") or "")
-                clip.update(brain.gameplay_post(Path(job["title"]).stem if job["source"]["type"] == "file" else job["title"],
-                                                clip["start"], clip["end"], transcript, config.ai_ready()))
+                if not clip.get("metadata_ai"):
+                    transcript = " ".join(w["w"] for w in corrected if clip["start"] <= w["s"] < clip["end"])
+                    usage.set_context(job.get("creator"), job.get("title") or "")
+                    clip.update(brain.gameplay_post(Path(job["title"]).stem if job["source"]["type"] == "file" else job["title"],
+                                                    clip["start"], clip["end"], transcript, config.ai_ready()))
             clip["post_drafted"] = True
         near = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(corrected)]
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
@@ -666,7 +711,7 @@ def render_one(job, clip, words):
             clip.setdefault("made_at", time.time())
             creators.log(job["creator"], f"Clip ready (score {clip['score']}): {clip['title'] or clip['hook']}")
             save(job)
-            for fn in (() if clip.get("manual") or clip.get("auto_gameplay") else on_clip_ready):
+            for fn in (() if clip.get("manual") else on_clip_ready):
                 try:
                     fn(job, clip)
                 except Exception:  # noqa: BLE001
@@ -1007,8 +1052,11 @@ def _announce_job_result(job):
 def _scan_gameplay(job, path, start, end, has_audio):
     options = job["options"]
     count = options["max_clips"]
-    signature = [path.stat().st_mtime_ns, path.stat().st_size, start, end, count,
-                 options["min_len"], options["max_len"]]
+    # Evaluate more than the requested output count and distribute those candidates across the full
+    # source duration. A global loudness-only top-N shortlist tends to over-sample one busy section.
+    candidate_limit = max(12, min(18, count * 3))
+    signature = [path.stat().st_mtime_ns, path.stat().st_size, start, end, count, candidate_limit,
+                 options["min_len"], options["max_len"], "time-spread-v2"]
     checkpoint = job.get("gameplay_scan") or {}
     if checkpoint.get("signature") != signature:
         checkpoint = {"signature": signature, "cursor": start, "picks": []}
@@ -1016,18 +1064,36 @@ def _scan_gameplay(job, path, start, end, has_audio):
     while cursor < end:
         edge = min(end, cursor + 600)
         a = max(start, cursor - min(45, options["max_len"]))
-        picks = editor.gameplay(path, a, edge, count, options["min_len"], options["max_len"], has_audio=has_audio)
+        picks = editor.gameplay(path, a, edge, min(12, max(4, candidate_limit)),
+                                options["min_len"], options["max_len"], has_audio=has_audio)
         checkpoint["picks"].extend(picks)
         checkpoint["cursor"] = cursor = edge
         _set(job, gameplay_scan=checkpoint, stage="Scanning gameplay for action",
              progress=0.25 + 0.35 * (cursor - start) / (end - start))
+    candidates = sorted(checkpoint["picks"], key=lambda c: -c.get("strength", 0))
     ranked = []
-    for item in sorted(checkpoint["picks"], key=lambda c: -c.get("strength", 0)):
+
+    def add_non_overlapping(item):
         if any(item["start"] < clip["end"] and item["end"] > clip["start"] for clip in ranked):
-            continue
+            return False
         ranked.append({k: v for k, v in item.items() if k != "strength"})
-        if len(ranked) >= count:
+        return True
+
+    # Reserve a slot for each equal-duration slice, then fill any empty slices by overall activity.
+    # The LLM can then compare moments from the beginning, middle and end of long streams.
+    bucket_width = max(1.0, (end - start) / candidate_limit)
+    for index in range(candidate_limit):
+        lo = start + index * bucket_width
+        hi = end if index == candidate_limit - 1 else start + (index + 1) * bucket_width
+        bucket = [item for item in candidates
+                  if lo <= (item["start"] + item["end"]) / 2 < hi]
+        for item in bucket:
+            if add_non_overlapping(item):
+                break
+    for item in candidates:
+        if len(ranked) >= candidate_limit:
             break
+        add_non_overlapping(item)
     return sorted(ranked, key=lambda c: c["start"])
 
 
@@ -1081,11 +1147,25 @@ def _run_source_job(job, began):
     if not job.get("gameplay_scanned"):
         found = _scan_gameplay(job, path, start, end, info["has_audio"])
         title = Path(job["title"]).stem if source["type"] == "file" else job["title"]
+        if found and info["has_audio"] and (transcribe.model_ready() or transcribe.REMOTE):
+            for index, candidate in enumerate(found, 1):
+                _set(job, stage=f"Checking candidate {index} of {len(found)}", progress=max(job["progress"], 0.61))
+                try:
+                    audio = editor.pcm(path, candidate["start"], candidate["end"] - candidate["start"], 16000)
+                    spoken = transcribe.transcribe(audio)
+                    candidate["transcript"] = " ".join(w.get("w", "") for w in spoken)[:1200]
+                except (OSError, RuntimeError, ValueError):
+                    candidate["transcript"] = ""
+        usage.set_context(job.get("creator"), title)
+        found, _model = brain.rank_gameplay_candidates(title, found, options["max_clips"])
         for clip in found:
+            clip.pop("strength", None)
+            clip.pop("transcript", None)
             clip.update(id="clip-" + uuid.uuid4().hex[:10], style=options["style"], layout=options["layout"],
                         motion=options.get("motion", "none"), watermark=options.get("watermark", False),
                         auto_gameplay=True, status="queued", version=0)
-            clip.update(brain.gameplay_post(title, clip["start"], clip["end"]))
+            if not clip.get("metadata_ai"):
+                clip.update(brain.gameplay_post(title, clip["start"], clip["end"]))
         job["clips"].extend(found)
         job.pop("gameplay_scan", None)
         _set(job, gameplay_scanned=True)

@@ -26,13 +26,16 @@ MJ Cliproom runs as three containers on one Linux server: the app, PostgreSQL, a
 
 ## Connecting YouTube, Instagram and TikTok
 
-People connect their accounts with one click in **Settings, Connected apps**: they press Connect, sign in on the
-platform's own page, and come back. For that, the server needs one app registered with each platform. An admin can
+People connect their accounts in **Settings, Connected apps**. For YouTube, they choose **Continue with Google**,
+select the Google account, approve YouTube access, and return to MJ Cliproom. The server needs one app registered
+with each platform. An admin can
 do it right there: press **Set up** on a platform, follow the steps shown, and paste the app's id and secret (or put
 them in `.env`, see `.env.example`). The redirect address to register is shown in the panel, with a Copy button.
 
 - **YouTube** (Google Cloud): an OAuth client of type Web application, with YouTube Data API v3 turned on. Until
-  Google verifies the app, people see a warning screen and uploads stay private.
+  Google verifies the app, other users may see a warning or face consent limits. The owner must grant the YouTube
+  upload scope. MJ Cliproom uses resumable uploads and the connected channel's current gaming chart for optional
+  metadata context. YouTube API quota and verification requirements are controlled by Google.
 - **Instagram** (Meta for Developers): a Business app with Instagram (API setup with Instagram login). Works with
   Creator and Business accounts. Until Meta reviews the app, only accounts added as testers can connect. Instagram
   fetches each clip from a one-hour signed link on your site, so the site needs a public https address.
@@ -49,8 +52,12 @@ In Google Cloud, create an OAuth client of type **Web application** with these r
 - `https://your-domain/auth/google/callback`
 - `https://your-domain/oauth/youtube/callback`
 
-Enable **YouTube Data API v3** in the same project. Posting publicly to YouTube needs Google's API audit;
-until then uploads from the API stay private.
+Enable **YouTube Data API v3** in the same project. The app requests `youtube.upload` and `youtube.readonly` for
+channel lookup, posting and optional gaming-title trend context. The web-server OAuth flow requests offline access
+so the post queue can refresh the token after the user leaves. Google may require app verification, and API quota,
+consent-screen limits and upload restrictions depend on the project. Review the Google Cloud console before
+launching to other users. No separate Google Python package is needed; the backend calls the OAuth and YouTube
+Data API endpoints over HTTPS.
 
 ## Email
 

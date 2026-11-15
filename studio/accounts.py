@@ -179,7 +179,8 @@ def connect_url(platform: str) -> str:
     if platform == "youtube":
         return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
             "client_id": cid, "redirect_uri": redirect, "response_type": "code", "scope": YT_SCOPES,
-            "access_type": "offline", "prompt": "consent", "state": state})
+            "access_type": "offline", "include_granted_scopes": "true", "prompt": "consent select_account",
+            "state": state})
     if platform == "instagram":
         return "https://www.instagram.com/oauth/authorize?" + urlencode({
             "client_id": cid, "redirect_uri": redirect, "response_type": "code", "scope": IG_SCOPES, "state": state})
@@ -311,15 +312,18 @@ def _youtube_finish(code: str) -> dict:
     tok = _check(httpx.post("https://oauth2.googleapis.com/token", data={
         "code": code, "client_id": cid, "client_secret": secret,
         "redirect_uri": redirect_for("youtube"), "grant_type": "authorization_code"}, timeout=30), "Google sign-in").json()
-    if "refresh_token" not in tok:
-        raise ValueError("Google did not return a long-lived sign-in. Remove PeakCut's access in your Google account and connect again.")
     ch = _check(httpx.get("https://www.googleapis.com/youtube/v3/channels", params={"part": "snippet", "mine": "true"},
                           headers={"Authorization": f"Bearer {tok['access_token']}"}, timeout=30), "Reading the channel").json()
     if not ch.get("items"):
         raise ValueError("That Google account has no YouTube channel. Create one on YouTube, then connect again.")
     item = ch["items"][0]
+    aid = f"yt_{item['id']}"
+    old = get(aid) or {}
+    refresh = tok.get("refresh_token") or old.get("refresh_token")
+    if not refresh:
+        raise ValueError("Google did not return a refresh token. Reconnect and approve the YouTube access request.")
     acc = {"id": f"yt_{item['id']}", "platform": "youtube", "name": item["snippet"]["title"], "added": time.time(),
-           "refresh_token": tok["refresh_token"], "access_token": tok["access_token"],
+           "refresh_token": refresh, "access_token": tok["access_token"],
            "expires": time.time() + tok.get("expires_in", 3600) - 60}
     _put(acc)
     return acc
@@ -348,10 +352,77 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
                               params={"uploadType": "resumable", "part": "snippet,status"}, json=meta,
                               headers={"Authorization": f"Bearer {token}", "X-Upload-Content-Type": "video/mp4",
                                        "X-Upload-Content-Length": str(size)}, timeout=60), "Starting the YouTube upload")
+    location = start.headers.get("Location", "")
+    if not location.startswith("https://www.googleapis.com/upload/youtube/"):
+        raise RuntimeError("YouTube did not return a valid resumable upload address.")
+    offset, done = 0, None
+    chunk_size = 8 * 1024 * 1024  # multiple of Google's 256 KB chunk requirement
+
+    def received(response):
+        match = re.search(r"bytes=0-(\d+)", response.headers.get("Range", ""))
+        return int(match.group(1)) + 1 if match else 0
+
     with path.open("rb") as f:
-        done = _check(httpx.put(start.headers["Location"], content=f.read(),
-                                headers={"Authorization": f"Bearer {token}", "Content-Type": "video/mp4"}, timeout=900),
-                      "Uploading to YouTube").json()
+        while offset < size:
+            f.seek(offset)
+            chunk = f.read(min(chunk_size, size - offset))
+            if not chunk:
+                raise RuntimeError("The clip file ended before YouTube received it.")
+            last = offset + len(chunk) - 1
+            advanced = False
+            for attempt in range(4):
+                try:
+                    response = httpx.put(location, content=chunk, headers={
+                        "Authorization": f"Bearer {token}", "Content-Type": "video/mp4",
+                        "Content-Length": str(len(chunk)), "Content-Range": f"bytes {offset}-{last}/{size}"},
+                        timeout=240)
+                except httpx.RequestError:
+                    response = None
+                if response is not None and response.status_code in (200, 201):
+                    done = response.json()
+                    break
+                if response is not None and response.status_code == 308:
+                    next_offset = received(response)
+                    if next_offset > offset:
+                        offset, advanced = next_offset, True
+                        break
+                if response is not None and response.status_code < 500:
+                    if response.status_code != 308:
+                        _check(response, "Uploading to YouTube")
+                # A timeout or server error is ambiguous: ask Google what it kept before sending more bytes.
+                try:
+                    status = httpx.put(location, content=b"", headers={
+                        "Authorization": f"Bearer {token}", "Content-Length": "0",
+                        "Content-Range": f"bytes */{size}"}, timeout=60)
+                except httpx.RequestError:
+                    if attempt == 3:
+                        raise RuntimeError("The YouTube upload connection timed out. Queue the post again to retry.")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                if status.status_code in (200, 201):
+                    done = status.json()
+                    break
+                if status.status_code == 308:
+                    next_offset = received(status)
+                    if next_offset > offset:
+                        offset, advanced = next_offset, True
+                        break
+                if status.status_code < 500:
+                    if status.status_code != 308:
+                        _check(status, "Checking the YouTube upload")
+                if attempt == 3:
+                    if status.status_code >= 500:
+                        _check(status, "Resuming the YouTube upload")
+                    raise RuntimeError("YouTube has not confirmed this upload chunk. Queue the post again to retry.")
+                time.sleep(2 * (attempt + 1))
+            if done:
+                break
+            if not advanced:
+                raise RuntimeError("YouTube did not accept this upload chunk. Queue the post again to retry.")
+            if offset > size:
+                raise RuntimeError("YouTube reported an invalid upload position.")
+    if not done or not done.get("id"):
+        raise RuntimeError("YouTube did not confirm that the clip upload finished.")
     return done["id"], f"https://www.youtube.com/shorts/{done['id']}"
 
 
@@ -364,6 +435,20 @@ def youtube_views(acc, ids: list) -> dict:
         for it in r.get("items", []):
             out[it["id"]] = int(it["statistics"].get("viewCount", 0))
     return out
+
+
+def youtube_gaming_trends(acc, region="US") -> list:
+    """Read the public most-popular gaming chart for one metadata prompt; do not persist YouTube API data."""
+    region = str(region or "US").upper()
+    if not re.fullmatch(r"[A-Z]{2}", region):
+        region = "US"
+    data = _check(httpx.get("https://www.googleapis.com/youtube/v3/videos",
+                            params={"part": "snippet", "chart": "mostPopular", "regionCode": region,
+                                    "videoCategoryId": "20", "maxResults": 30},
+                            headers={"Authorization": f"Bearer {_yt_token(acc)}"}, timeout=30),
+                  "Reading the gaming trend chart").json()
+    return [{"title": str(item.get("snippet", {}).get("title", ""))[:180]}
+            for item in data.get("items", []) if item.get("snippet", {}).get("title")]
 
 
 # ------------------------------------------------------------------ Instagram (Instagram Login, professional accounts)

@@ -281,6 +281,9 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
     cues = clip.get("caption_cues")
     segments = clip.get("segments") or []
+    has_audio = clip.get("has_audio")
+    if clip.get("music_path") and has_audio is None:
+        has_audio = probe(src, require_audio=False)["has_audio"]
     if segments:
         words = editor.stitch_words(words, segments)
         if cues is not None:
@@ -300,7 +303,8 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     try:
         return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, sidecar,
                           clip.get("crop_x", 0.5), clip.get("crop_y", 0.5), clean,
-                          segments, clip.get("has_audio"), clip.get("crop_keyframes") or [])
+                          segments, has_audio, clip.get("crop_keyframes") or [], clip.get("music_path"),
+                          clip.get("music_volume", 0.12), clip.get("music_duck", True))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -327,7 +331,8 @@ def _cut_inputs(src, start, end, segments, has_audio):
 
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
-               sidecar, crop_x, crop_y, clean, segments, has_audio, keyframes) -> dict:
+               sidecar, crop_x, crop_y, clean, segments, has_audio, keyframes,
+               music_path=None, music_volume=0.12, music_duck=True) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
@@ -342,6 +347,31 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
     audio = ["-map", audio_map] if audio_map else []
     if audio and not cut:
         audio.extend(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"])
+    if music_path:
+        music_file = Path(music_path)
+        if not music_file.is_file():
+            raise RuntimeError("The selected background music file is missing.")
+        audio_duration = max(0.1, end - start)
+        music_index = inputs.count("-i")
+        inputs.extend(["-stream_loop", "-1", "-i", str(music_file)])
+        fade = min(1.2, audio_duration / 2)
+        fade_out_at = max(0.0, audio_duration - fade)
+        fc += (f";[{music_index}:a:0]volume={max(0.0, min(0.5, float(music_volume))):.3f},"
+               f"atrim=duration={audio_duration:.3f},asetpts=PTS-STARTPTS,"
+               f"afade=t=in:st=0:d={fade:.3f},afade=t=out:st={fade_out_at:.3f}:d={fade:.3f}[musicbed]")
+        if audio_map:
+            if not cut:
+                fc += ";[0:a:0]loudnorm=I=-14:TP=-1.5:LRA=11[sourceaudio]"
+            source_label = "edited_audio" if cut else "sourceaudio"
+            if music_duck:
+                fc += (f";[{source_label}]asplit=2[mainaudio][sidemeter]"
+                       ";[musicbed][sidemeter]sidechaincompress=threshold=0.025:ratio=8:attack=20:release=350[duckedbed]"
+                       ";[mainaudio][duckedbed]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixout]")
+            else:
+                fc += f";[{source_label}][musicbed]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixout]"
+        else:
+            fc += ";[musicbed]anull[mixout]"
+        audio = ["-map", "[mixout]"]
     base = ["ffmpeg", "-y", "-v", "error", *inputs,
             "-filter_complex", fc, "-map", "[v0]" if clean else "[v]", *audio,
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]

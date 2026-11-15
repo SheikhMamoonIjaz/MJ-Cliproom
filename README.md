@@ -14,6 +14,11 @@ license and credits; see [CREDITS.md](CREDITS.md).
 - Trim one or more ranges, reorder cuts, and animate the vertical crop between keyframes.
 - Export vertical clips with timed captions, hook text, a motion title tag and an optional MJ watermark.
 - Review titles, descriptions and hashtags; edit captions and save recurring spelling fixes in a glossary.
+- Generate three grounded Shorts or full-video title/description drafts with the selected LLM. When YouTube is
+  connected, current popular gaming-video titles can inform phrasing without copying them.
+- Rank Gameplay candidates with picture/audio activity and, when speech recognition and an LLM are available,
+  transcript context. Signal-only picks are kept out of automatic posting until a person reviews them.
+- Add your own licensed instrumental background tracks, set their mix level, and duck them under the video's audio.
 - Group selected clips into Clip Sets and export them together with subtitle files.
 - Connect supported social accounts for scheduled or automatic posting. Platform app setup and review can be required;
   see [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok).
@@ -133,7 +138,18 @@ Git and FFmpeg packages.
 5. Follow the download and render progress. If a job fails, the failure card explains the stage and provides a
    **Retry download** or **Retry video** button. Retries reuse the saved partial download whenever possible.
 6. Open a finished clip to edit its title, description, hashtags, crop, caption timing and export options. Download
-   the MP4 or SRT, or add the clip to a Clip Set for a batch export.
+   the MP4 or SRT, or add the clip to a Clip Set for a batch export. Use **Generate title ideas** for Shorts copy or
+   full-source video copy. Shorts ideas can be applied to the clip; full-video ideas can be copied for the original.
+   Add licensed instrumental audio in the clip editor to mix it under the source audio.
+
+For YouTube posting, open **Settings → Connected apps → YouTube → Continue with Google**. Approve the requested
+YouTube access, then select the connected channel in a creator's **Setup**. The existing posting queue can schedule
+or automatically publish reviewed clips. Google OAuth credentials and YouTube Data API v3 must be configured by
+the server administrator first; see [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok).
+
+The music picker accepts user-supplied audio only. Use tracks you own or have permission to use. YouTube's Shorts
+licensed music catalog has to be added in YouTube's own creation tools; Cliproom does not fetch trending songs.
+The app can improve candidate ranking and metadata, but no AI can promise a clip will go viral.
 
 For a live stream, add its channel under **Creators → Setup**, then choose **Record live stream** when it is on air.
 Use the live workspace to monitor the stream and clip the recent buffer. Availability depends on the platform,

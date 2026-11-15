@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import account, load
-from . import (accounts, ai, alerts, auth, config, creators, ctx, db, editor, jobs, live, media, posting,
+from . import (accounts, ai, alerts, auth, config, creators, ctx, db, editor, jobs, live, media, music, posting,
                profiles, render, safe, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
@@ -102,8 +102,9 @@ class Gate:
             # Only the upload may be big. Everything else is a small form, and is cut off at 256 KB whatever its
             # headers claim, so nobody can fill the server's memory by posting junk (signed in or not).
             piece = method == "PUT" and path.startswith("/api/upload/")
+            music_upload = method == "POST" and path == "/api/music"
             cap = ((min(config.MAX_UPLOAD_MB, config.UPLOAD_PART_MB) if piece else config.MAX_UPLOAD_MB) + 8) * 1024 * 1024 \
-                if path == "/api/upload" or piece else 256 * 1024
+                if path == "/api/upload" or piece else (32 * 1024 * 1024 if music_upload else 256 * 1024)
             try:
                 if int(req.headers.get("content-length") or 0) > cap:
                     return await deny(413, f"That file is too big. The limit is {config.MAX_UPLOAD_MB} MB." if path == "/api/upload" else "That request is too large.")
@@ -561,7 +562,8 @@ def status(request: Request):
     return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
-            "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS}
+            "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS,
+            "music": music.list_tracks()}
 
 
 # ================================================================ videos
@@ -976,6 +978,104 @@ def clip_captions(jid: str, cid: str):
     if not clip:
         raise HTTPException(404, "No such clip")
     return {"cues": jobs.editable_captions(job, clip), "edited": clip.get("caption_cues") is not None}
+
+
+@app.post("/api/jobs/{jid}/clips/{cid}/metadata")
+def clip_metadata(jid: str, cid: str, body: dict = Body(...)):
+    job = _job_or_404(jid)
+    clip = next((item for item in job["clips"] if item["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    video_format = str(body.get("format") or "short")
+    if video_format not in ("short", "long"):
+        raise HTTPException(400, "Choose Shorts or long-form metadata.")
+    _throttle("metadata:" + ctx.uid(), 12, 600, "Wait a few minutes before requesting more metadata drafts.")
+    cues = jobs.editable_captions(job, clip)
+    transcript = " ".join(cue.get("text", "") for cue in cues)
+    full_words = jobs.read_words(job) if video_format == "long" else []
+    full_transcript = " ".join(str(word.get("w", "")) for word in full_words)
+    if len(full_transcript) > 9000 and full_words:
+        # Sample across the complete VOD instead of letting the opening minutes fill the prompt.
+        sections, count = [], 24
+        budget = 350
+        for index in range(count):
+            lo = round(index * len(full_words) / count)
+            hi = round((index + 1) * len(full_words) / count)
+            words = [str(word.get("w", "")).strip() for word in full_words[lo:hi]
+                     if str(word.get("w", "")).strip()]
+            excerpt = " ".join(words)
+            if len(excerpt) > budget:
+                excerpt = excerpt[:budget].rsplit(" ", 1)[0]
+            if excerpt:
+                sections.append(f"[video section {index + 1}] {excerpt}")
+        full_transcript = " ".join(sections)[:9000]
+    trend_titles = []
+    yt_account = next((item for item in accounts._all() if item.get("platform") == "youtube"), None)
+    if yt_account:
+        try:
+            trend_titles = [item["title"] for item in accounts.youtube_gaming_trends(
+                yt_account, body.get("region", "US"))]
+        except Exception:  # noqa: BLE001 - title ideas can still use clip and transcript context
+            pass
+    usage.set_context(job.get("creator"), job.get("title") or "")
+    try:
+        return brain.generate_metadata(video_format, job.get("title") or clip.get("title", ""),
+                                       job.get("uploader") or "", transcript, full_transcript, trend_titles)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, _ai_error(e) or "The AI could not write metadata. Try another model or try again.")
+
+
+@app.put("/api/jobs/{jid}/clips/{cid}/metadata")
+def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
+    job = _job_or_404(jid)
+    try:
+        clip = jobs.update_metadata(job, cid, body)
+        return {"clip": {key: clip.get(key) for key in ("id", "title", "description", "hashtags")},
+                "job": jobs.public(job)}
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/music")
+def list_music():
+    return music.list_tracks()
+
+
+@app.post("/api/music")
+def upload_music(file: UploadFile = File(...)):
+    _throttle("music:" + ctx.uid(), 20, 600, "Wait a few minutes before uploading more tracks.")
+    temp_dir = config.TMP_DIR / "music-uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(file.filename or "track.mp3").suffix.lower()
+    temp = temp_dir / (os.urandom(12).hex() + ext)
+    size = 0
+    try:
+        with temp.open("wb") as out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > music.MAX_TRACK_BYTES:
+                    raise HTTPException(413, "Instrumental tracks must be 30 MB or smaller.")
+                out.write(chunk)
+        try:
+            return music.add(temp, file.filename or "Instrumental track")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+@app.delete("/api/music/{track_id}")
+def delete_music(track_id: str):
+    try:
+        if not music.delete(track_id):
+            raise HTTPException(404, "No such background track.")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True, "music": music.list_tracks()}
 
 
 @app.get("/api/caption-glossary")
