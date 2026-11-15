@@ -24,12 +24,21 @@ PROVIDERS = {
     "xai": ("Grok", "https://api.x.ai/v1", "openai", "https://console.x.ai", "grok-4"),
     "groq": ("Groq", "https://api.groq.com/openai/v1", "openai", "https://console.groq.com/keys", "llama-3.3-70b-versatile"),
     "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1", "openai", "https://openrouter.ai/keys", "google/gemini-2.5-flash"),
+    "openrouter-free": ("OpenRouter Free", "https://openrouter.ai/api/v1", "openai", "https://openrouter.ai/keys", "openrouter/free"),
+    "zai": ("Z.AI (GLM)", "https://api.z.ai/api/paas/v4", "openai", "https://z.ai/manage-apikey/apikey-list", "glm-4.7-flash"),
+    "qwen": ("Alibaba Model Studio (Qwen)", "", "openai", "", ""),
+    "deepseek": ("DeepSeek", "https://api.deepseek.com", "openai", "https://platform.deepseek.com/api_keys", ""),
     "anthropic": ("Claude", "https://api.anthropic.com/v1", "anthropic", "https://console.anthropic.com", ""),
     "ollama": ("Ollama (on this machine)", "http://127.0.0.1:11434/v1", "openai", "https://ollama.com", "llama3.1"),
     "custom": ("Custom (OpenAI-compatible)", "", "openai", "", ""),
 }
 ALIASES = {"google": "gemini", "grok": "xai", "claude": "anthropic", "local": "ollama"}
 NO_KEY = {"ollama", "custom"}       # a model running on your own machine needs no key
+FIXED_ADDRESS = {"openrouter-free"}
+
+
+def _free_model(model):
+    return model == "openrouter/free" or model.endswith(":free")
 
 # ---------------------------------------------------------------- the settings in use
 _lock = threading.Lock()
@@ -84,12 +93,14 @@ def label() -> str:
 
 def base_url() -> str:
     c = current()
-    return c["base_url"] or PROVIDERS.get(c["provider"], ("", ""))[1]
+    default = PROVIDERS.get(c["provider"], ("", ""))[1]
+    return default if c["provider"] in FIXED_ADDRESS else c["base_url"] or default
 
 
 def ready() -> bool:
     c = current()
-    return bool(c["provider"] in PROVIDERS and c["models"] and base_url() and (c["key"] or c["provider"] in NO_KEY))
+    return bool(c["provider"] in PROVIDERS and c["models"] and base_url() and (c["key"] or c["provider"] in NO_KEY)
+                and (c["provider"] != "openrouter-free" or all(_free_model(m) for m in c["models"])))
 
 
 def public() -> dict:
@@ -119,8 +130,13 @@ def save(provider_id: str, model_ids, address: str = "", new_key=None) -> dict:
     address = str(address or "").strip().rstrip("/")[:300]
     if address and not re.fullmatch(r"https?://[^\s]+", address):
         raise ValueError("The address has to start with http:// or https://")
-    if p == "custom" and not address:
-        raise ValueError("A custom service needs its address, for example http://127.0.0.1:1234/v1")
+    if p == "openrouter-free":
+        if not all(_free_model(model) for model in ms):
+            raise ValueError("Use openrouter/free or a model whose ID ends in :free.")
+        address = ""
+    if p in ("custom", "qwen") and not address:
+        raise ValueError("Enter your workspace's OpenAI-compatible address." if p == "qwen"
+                         else "A custom service needs its address, for example http://127.0.0.1:1234/v1")
     old = current()
     k = old["key"] if new_key is None and old["provider"] == p else str(new_key or "").strip()[:400]
     if not k and p not in NO_KEY:
@@ -146,6 +162,10 @@ def list_models(provider_id=None, address=None, with_key=None) -> list:
         raise ValueError("Choose one of the AI services in the list.")
     k = str(with_key or "").strip() or (c["key"] if c["provider"] == p else "")
     base = str(address or "").strip().rstrip("/") or (c["base_url"] if c["provider"] == p else "") or PROVIDERS[p][1]
+    if p in FIXED_ADDRESS:
+        base = PROVIDERS[p][1]
+    if p == "zai" and base == PROVIDERS[p][1]:
+        return ["glm-4.7-flash", "glm-4.5-flash"]
     if not base:
         raise ValueError("Enter the service's address first.")
     how = PROVIDERS[p][2]
@@ -163,6 +183,8 @@ def list_models(provider_id=None, address=None, with_key=None) -> list:
                  if "generateContent" in (m.get("supportedGenerationMethods") or [])]
     else:
         found = [m.get("id", "") for m in data.get("data", []) if isinstance(m, dict)]
+    if p == "openrouter-free":
+        return ["openrouter/free", *sorted({m for m in found if m.endswith(":free")})[:399]]
     return sorted({m for m in found if m})[:400]
 
 
@@ -267,6 +289,10 @@ def _gemini(model, prompt, schema):
 def _openai(model, prompt, schema):
     headers = {"Authorization": f"Bearer {key()}"} if key() else {}
     body = {"model": model, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}]}
+    if provider() == "openrouter-free":
+        if not _free_model(model):
+            raise AIError("This model is outside the OpenRouter Free selection.")
+        body["provider"] = {"max_price": {"prompt": 0, "completion": 0, "request": 0}}
     # Most services accept these two extras; a few models refuse one of them, so they are dropped on a refusal.
     extras = [{"temperature": 0.4, "response_format": {"type": "json_object"}}, {"response_format": {"type": "json_object"}}, {}]
     r = None

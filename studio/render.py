@@ -5,8 +5,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import config, roman
-from .media import NO_WINDOW, run
+from . import config, editor, roman
+from .media import NO_WINDOW, probe, run
 
 W, H = config.OUT_W, config.OUT_H
 
@@ -155,7 +155,8 @@ def _hook_events(hook, dur, y):
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y) -> str:
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, cues=None, motion="none",
+              watermark=False) -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
@@ -176,7 +177,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
     ev = _hook_events(_clean(hook), dur, hook_y)
+    if motion == "highlight":
+        until = _ts(min(dur, 2.2))
+        ev.append(f"Dialogue: 3,0:00:00.00,{until},Cap,,0,0,0,,"
+                  r"{\an7\move(56,265,76,265,0,200)\fad(140,250)\fs50\b1\bord3"
+                  r"\c&HD7F1FF&\3c&H3A3312&}MJ PLAYS GTA")
+    if watermark:
+        ev.append(f"Dialogue: 5,0:00:00.00,{_ts(dur)},Cap,,0,0,0,,"
+                  r"{\an7\pos(76,174)\fs62\b1\bord4\c&HD7F1FF&\3c&H3A3312&\alpha&H20&}MJ")
     f = _Font.get(st["font"])
+    if cues is not None:
+        for cue in cues:
+            a, b = max(start, cue["start"]) - start, min(end, cue["end"]) - start
+            if b - a >= 0.02:
+                label = _clean(cue["text"])
+                # Let libass wrap long lines and use system font fallback for other scripts.
+                size = min(st["size"], 100 if len(label) <= 65 else 72)
+                ev.append(f"Dialogue: 0,{_ts(a)},{_ts(b)},Cap,,60,60,0,,"
+                          f"{{\\an5\\pos({W // 2},{cap_y})\\q0\\fs{size}}}{label}")
+        return head + "\n".join(ev) + "\n"
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
     for i, w in enumerate(inside[:-1]):
@@ -227,13 +246,27 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return head + "\n".join(ev) + "\n"
 
 
-def _filter(layout, fg_h):
+def _crop_expression(keyframes, axis, initial):
+    samples = [(point["time"], point[axis]) for point in keyframes]
+    if not samples:
+        return f"{initial:.4f}"
+    if samples[0][0] > 0:
+        samples.insert(0, (0, initial))
+    value = f"{samples[-1][1]:.4f}"
+    for (a, x), (b, y) in reversed(list(zip(samples, samples[1:]))):
+        value = f"if(lt(t,{b:.3f}),{x:.4f}+({y-x:.4f})*max(0,t-{a:.3f})/{b-a:.3f},{value})"
+    return value
+
+
+def _filter(layout, fg_h, crop_x=0.5, crop_y=0.5, keyframes=()):
+    x = f"x='(iw-ow)*({_crop_expression(keyframes, 'x', crop_x)})'"
+    y = f"y='(ih-oh)*({_crop_expression(keyframes, 'y', crop_y)})'"
     if layout == "crop":
-        return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v0];"
+        return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}:{x}:{y},setsar=1[v0];"
     return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
             f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
-            f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
+            f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}:{x}:{y}[fg];"
             f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v0];")
 
 
@@ -242,32 +275,75 @@ RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a fro
 
 
 def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, src_w: int, src_h: int) -> dict:
-    """Writes <name>.mp4, <name>.jpg and <name>.ass into out_dir. Returns file names."""
+    """Render a vertical MP4 and write its cover, ASS track, and optional SRT."""
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
-    ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                    clip.get("highlight_words", []), hook_y, cap_y)
+    cues = clip.get("caption_cues")
+    segments = clip.get("segments") or []
+    if segments:
+        words = editor.stitch_words(words, segments)
+        if cues is not None:
+            cues = [dict(c, start=c["start"] - start, end=c["end"] - start) for c in cues]
+        start, end = 0, editor.cut_length(segments)
+    sidecar = editor.srt(cues if cues is not None else editor.caption_cues(words, start, end), start, end)
+    clean = clip.get("captions") == "clean"
+    ass = build_ass([] if clean else words, start, end, "" if clean else clip.get("hook", ""),
+                    clip.get("style", "bounce"), clip.get("highlight_words", []), hook_y, cap_y,
+                    [] if clean else cues, "none" if clean else clip.get("motion", "none"),
+                    watermark=not clean and clip.get("watermark", False))
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass)
+        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, sidecar,
+                          clip.get("crop_x", 0.5), clip.get("crop_y", 0.5), clean,
+                          segments, clip.get("has_audio"), clip.get("crop_keyframes") or [])
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str) -> dict:
+def _cut_inputs(src, start, end, segments, has_audio):
+    if not segments:
+        return ["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(src)], "", "0:a:0?"
+    if has_audio is None:
+        has_audio = probe(src, require_audio=False)["has_audio"]
+    inputs, filters, parts = [], [], []
+    for i, part in enumerate(segments):
+        inputs.extend(["-ss", f"{part['start']:.3f}", "-t", f"{part['end'] - part['start']:.3f}",
+                       "-i", str(src)])
+        filters.append(f"[{i}:v]setpts=PTS-STARTPTS[partv{i}]")
+        parts.append(f"[partv{i}]")
+        if has_audio:
+            filters.append(f"[{i}:a:0]asetpts=PTS-STARTPTS[parta{i}]")
+            parts.append(f"[parta{i}]")
+    filters.append("".join(parts) + f"concat=n={len(segments)}:v=1:a={int(has_audio)}[edited]"
+                   + ("[joined_audio]" if has_audio else ""))
+    if has_audio:
+        filters.append("[joined_audio]loudnorm=I=-14:TP=-1.5:LRA=11[edited_audio]")
+    return inputs, ";".join(filters) + ";", "[edited_audio]" if has_audio else None
+
+
+def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
+               sidecar, crop_x, crop_y, clean, segments, has_audio, keyframes) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    fc = _filter(layout, fg_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
-            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+    inputs, cut, audio_map = _cut_inputs(src, start, end, segments, has_audio)
+    fc = _filter(layout, fg_h, crop_x, crop_y, keyframes).rstrip(";")
+    if cut:
+        fc = cut + fc.replace("[0:v]", "[edited]")
+    if not clean:
+        fc += f";[v0]ass={name}.ass:fontsdir=f[v]"
+    audio = ["-map", audio_map] if audio_map else []
+    if audio and not cut:
+        audio.extend(["-af", "loudnorm=I=-14:TP=-1.5:LRA=11"])
+    base = ["ffmpeg", "-y", "-v", "error", *inputs,
+            "-filter_complex", fc, "-map", "[v0]" if clean else "[v]", *audio,
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
     encoders = []
     if _qsv_ok is not False:
@@ -291,4 +367,10 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
          "-q:v", "3", f"{name}.jpg"], cwd=work)
     for ext in ("mp4", "jpg", "ass"):
         shutil.move(str(work / f"{name}.{ext}"), str(out_dir / f"{name}.{ext}"))
-    return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout}
+    srt_path = out_dir / f"{name}.srt"
+    if sidecar:
+        srt_path.write_text(sidecar, encoding="utf-8")
+    else:
+        srt_path.unlink(missing_ok=True)
+    return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout, "duration": round(end - start, 3),
+            "subtitle": srt_path.name if sidecar else None}

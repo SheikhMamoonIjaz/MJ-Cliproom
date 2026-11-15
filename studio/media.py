@@ -107,6 +107,11 @@ def _video_format(height):
     return f"bv*[height<={height}][vcodec^=avc1]+ba[ext=m4a]/bv*[height<={height}]+ba/b[height<={height}]/b"
 
 
+def _retry_backoff(attempt: int) -> float:
+    """Space transient network retries without making recovery take several minutes."""
+    return min(30.0, 2.0 ** max(0, attempt - 1))
+
+
 def _biggest(job_dir: Path, stem: str) -> Path:
     files = sorted((p for p in job_dir.glob(stem + ".*") if p.suffix not in (".part", ".ytdl")),
                    key=lambda p: p.stat().st_size, reverse=True)
@@ -122,6 +127,44 @@ def info(url: str) -> dict:
     return {"title": i.get("title") or "", "uploader": i.get("uploader") or i.get("channel") or "",
             "duration": float(i.get("duration") or 0), "is_live": bool(i.get("is_live")),
             "thumbnail": i.get("thumbnail") or "", "kind": i.get("_type") or "video"}
+
+
+def replays(channel_url):
+    """Read a bounded list of replay metadata from a supported channel page."""
+    from urllib.parse import urlsplit
+    u = urlsplit(channel_url.strip())
+    host = (u.hostname or "").lower().removeprefix("www.")
+    path = u.path.rstrip("/")
+    if u.scheme != "https" or not site_allowed(channel_url):
+        raise ValueError("Use a full HTTPS channel link.")
+    if host == "youtube.com":
+        match = re.fullmatch(r"(/@[^/?#]+|/channel/[A-Za-z0-9_-]+)(?:/streams|/videos|/live)?", path)
+        if not match:
+            raise ValueError("Use the channel's YouTube handle or channel ID link.")
+        page = "https://www.youtube.com" + match[1] + "/streams"
+    elif host == "twitch.tv" and re.fullmatch(r"/[A-Za-z0-9_]+(?:/videos)?", path):
+        page = "https://www.twitch.tv/" + path.split("/")[1] + "/videos?filter=archives&sort=time"
+    else:
+        raise ValueError("The picker supports YouTube and Twitch. A direct Kick replay link can still be imported.")
+    with _youtube_guard(page), _ydl({"noplaylist": False, "playlistend": 16}) as ydl:
+        result = ydl.extract_info(page, download=False)
+    found = []
+    for item in (result or {}).get("entries") or ():
+        if not item or item.get("is_live") or item.get("live_status") in ("is_live", "is_upcoming", "post_live"):
+            continue
+        video_id = str(item.get("id") or "")
+        duration = float(item.get("duration") or 0)
+        if host == "youtube.com" and re.fullmatch(r"[\w-]{11}", video_id):
+            url = "https://www.youtube.com/watch?v=" + video_id
+        elif host == "twitch.tv" and re.fullmatch(r"v?\d+", video_id):
+            url = "https://www.twitch.tv/videos/" + video_id.removeprefix("v")
+        else:
+            continue
+        if item.get("title") and (host == "twitch.tv" or duration > 0):
+            found.append({"url": url, "title": item["title"][:200], "duration": duration})
+        if len(found) == 12:
+            break
+    return found
 
 
 def youtube_words(url: str):
@@ -255,11 +298,47 @@ def download_audio(url: str, job_dir: Path, on_progress=None) -> Path:
     return _biggest(job_dir, "audio_src")
 
 
-def download(url: str, job_dir: Path, height=720) -> Path:
+def download(url: str, job_dir: Path, height=720, on_progress=None, cancel_event=None) -> Path:
     """The whole video. Used for shorter videos, where this is quicker than fetching pieces."""
-    with _youtube_guard(url), _ydl({"format": _video_format(height), "merge_output_format": "mp4",
-                                    "outtmpl": str(job_dir / "source.%(ext)s")}) as ydl:
-        ydl.download([url])
+    last_report = float("-inf")
+
+    def report(data):
+        nonlocal last_report
+        if cancel_event and cancel_event.is_set():
+            from yt_dlp.utils import DownloadError
+            raise DownloadError("Download cancelled by the user.")
+        if data.get("status") != "downloading" or not on_progress:
+            return
+        now = time.monotonic()
+        if now - last_report < 1:
+            return
+        last_report = now
+        info = data.get("info_dict") or {}
+        on_progress({"track": "audio" if info.get("vcodec") == "none" else "video",
+                     "bytes": data.get("downloaded_bytes") or 0,
+                     "total": data.get("total_bytes") or data.get("total_bytes_estimate")})
+
+    def postprocess(data):
+        if on_progress and data.get("status") == "started" and data.get("postprocessor") == "Merger":
+            on_progress(None)
+
+    try:
+        with _youtube_guard(url), _ydl({"format": _video_format(height), "merge_output_format": "mp4",
+                                        "continuedl": True, "socket_timeout": 60,
+                                        "retries": 10, "fragment_retries": 10, "extractor_retries": 5,
+                                        "retry_sleep_functions": {"http": _retry_backoff,
+                                                                   "fragment": _retry_backoff,
+                                                                   "extractor": _retry_backoff},
+                                        "skip_unavailable_fragments": False,
+                                        "progress_hooks": [report] if on_progress or cancel_event else [],
+                                        "postprocessor_hooks": [postprocess] if on_progress else [],
+                                        "outtmpl": str(job_dir / "source.%(ext)s")}) as ydl:
+            ydl.download([url])
+    except Exception:
+        if cancel_event and cancel_event.is_set():
+            for partial in list(job_dir.glob("source.*.part")) + list(job_dir.glob("source.*.ytdl")):
+                partial.unlink(missing_ok=True)
+        raise
     return _biggest(job_dir, "source")
 
 
@@ -287,13 +366,14 @@ def find_offset(full: np.ndarray, part: np.ndarray, expected: float, search=20.0
     return (a0 + int(np.argmax(corr))) / 16000
 
 
-def probe(path: Path) -> dict:
+def probe(path: Path, require_audio=True) -> dict:
     out = run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)])
     data = json.loads(out)
     v = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
     if not v:
         raise RuntimeError("This file has no video track.")
-    if not any(s["codec_type"] == "audio" for s in data["streams"]):
+    has_audio = any(s["codec_type"] == "audio" for s in data["streams"])
+    if require_audio and not has_audio:
         raise RuntimeError("This file has no audio track, so there is nothing to transcribe.")
     w, h = int(v["width"]), int(v["height"])
     if w * h > 3840 * 2160 or w < 16 or h < 16:
@@ -301,7 +381,10 @@ def probe(path: Path) -> dict:
     rot = str((v.get("side_data_list") or [{}])[0].get("rotation", "0"))
     if rot.lstrip("-") in ("90", "270"):
         w, h = h, w
-    return {"width": w, "height": h, "duration": float(data["format"]["duration"])}
+    rate = v.get("avg_frame_rate", "0/1").split("/")
+    fps = float(rate[0]) / float(rate[1]) if len(rate) == 2 and float(rate[1]) else 0
+    return {"width": w, "height": h, "duration": float(data["format"]["duration"]),
+            "has_audio": has_audio, "fps": fps}
 
 
 def extract_audio(src: Path, wav: Path):

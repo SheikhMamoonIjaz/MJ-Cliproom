@@ -4,7 +4,8 @@ import os, re, sys, tempfile, threading, time
 os.environ["PEAKCUT_DATA"] = tempfile.mkdtemp(prefix="pc-stuck-"); os.environ["DATABASE_URL"] = ""; os.environ["PEAKCUT_CLIP_MINUTES"] = "0.03"
 sys.path.insert(0, ".")
 from concurrent.futures import ThreadPoolExecutor
-from studio import brain, jobs, render, roman
+from unittest.mock import patch
+from studio import brain, jobs, notices, render, roman
 fails = []
 def check(n, got, want=True):
     ok = want(got) if callable(want) else got == want
@@ -112,6 +113,35 @@ brain.ask_ai = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("The AI is not
 clips, info = brain.find_clips(w, db, 30.0, max_clips=1, min_len=8, max_len=14, log=lambda m: None)
 ends = brain.sentence_ends(w)
 check("with no AI, a clip picked by loudness still ends on a sentence end", len(clips) == 1 and any(0 <= clips[0]["end"] - x <= 0.4 for x in ends))
+
+def select_from(reply):
+    brain.ask_ai = lambda *a, **k: (reply, "test-model", 9)
+    return brain.find_clips(w, db, 30.0, max_clips=1, min_len=8, max_len=14, log=lambda m: None)
+
+bad_pick = {"start": "unknown", "end": 12}
+valid_pick = {"start": 0, "end": 11, "title": "The door opened"}
+clips, info = select_from([bad_pick, valid_pick])
+check("a bad AI timestamp does not lose valid clips in the same response",
+      (len(clips), clips[0]["title"] if clips else "", info["model"]), (1, "The door opened", "test-model"))
+clips, info = select_from([bad_pick])
+check("an unusable AI reply falls back to loudness and still counts the tokens",
+      (len(clips), info["model"], info["tokens"], "loudness" in info["note"]), (1, None, 9, True))
+clips, info = select_from({"error": "unexpected response"})
+check("a response in the wrong shape falls back to loudness", (len(clips), info["model"]), (1, None))
+clips, info = select_from([])
+check("a valid empty AI response is respected", (len(clips), info["model"]), (0, "test-model"))
+
+job.update(title="Example video", took=12)
+with patch.object(notices, "add") as notice, patch.object(jobs.creators, "log"):
+    for statuses, expected in [
+        (["error", "error"], "All clips failed to render"),
+        (["done", "error"], "1 clip ready, 1 failed to render"),
+        (["done", "done"], "2 clips ready"),
+        ([], "Nothing clip-worthy found"),
+    ]:
+        job["clips"] = [{"status": status} for status in statuses]
+        jobs._announce_job_result(job)
+        check(f"the completion notice matches the render outcomes {statuses}", notice.call_args.args[2], expected)
 
 print("ALL PASSED" if not fails else f"{len(fails)} failed")
 import shutil; shutil.rmtree(os.environ["PEAKCUT_DATA"], ignore_errors=True)

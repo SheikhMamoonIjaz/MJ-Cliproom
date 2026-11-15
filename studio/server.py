@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import account, load
-from . import (accounts, ai, alerts, auth, config, creators, ctx, db, jobs, live, media, posting,
+from . import (accounts, ai, alerts, auth, config, creators, ctx, db, editor, jobs, live, media, posting,
                profiles, render, safe, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
@@ -34,7 +34,7 @@ def _quiet(fn):
         print(f"  {e}", flush=True)
 
 
-app = FastAPI(title="PeakCut", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="MJ Cliproom", docs_url=None, redoc_url=None, openapi_url=None)
 WEB = config.ROOT / "web"
 OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
 PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
@@ -669,6 +669,19 @@ def get_job(jid: str):
     return jobs.public(_job_or_404(jid))
 
 
+@app.get("/api/replays")
+def list_replays(url: str = ""):
+    _throttle("replays:" + ctx.uid(), 8, 120)
+    try:
+        return {"replays": _lookup(media.replays, url[:500])}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # extractors raise site-specific errors
+        raise HTTPException(503, safe.friendly(e))
+
+
 @app.get("/api/preview")
 def link_preview(request: Request, url: str = ""):
     url = url.strip()[:500]
@@ -922,15 +935,95 @@ def rerender(jid: str, cid: str, body: dict = Body(...)):
     _throttle("render:" + ctx.uid(), 20, 600, "That's a lot of re-makes in a short time. Wait a few minutes.")
     try:
         jobs.request_render(jid, cid, body)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
     return jobs.public(job)
 
 
+@app.post("/api/jobs/{jid}/clips")
+def manual_clip(jid: str, body: dict = Body(...)):
+    job = _job_or_404(jid)
+    _need_verified()
+    _throttle("render:" + ctx.uid(), 20, 600, "Wait a few minutes before rendering more clips.")
+    try:
+        clip = jobs.create_manual(job, body)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    return {"clip_id": clip["id"], "job": jobs.public(job)}
+
+
+@app.post("/api/jobs/{jid}/retry")
+def retry_video(jid: str):
+    job = _job_or_404(jid)
+    _need_verified()
+    _throttle("retry:" + ctx.uid(), 10, 600)
+    _job_slots()
+    try:
+        jobs.retry(job)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return jobs.public(job)
+
+
+@app.get("/api/jobs/{jid}/clips/{cid}/captions")
+def clip_captions(jid: str, cid: str):
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    return {"cues": jobs.editable_captions(job, clip), "edited": clip.get("caption_cues") is not None}
+
+
+@app.get("/api/caption-glossary")
+def caption_glossary():
+    return {"rules": editor.read_glossary()}
+
+
+@app.put("/api/caption-glossary")
+def save_caption_glossary(body: dict = Body(...)):
+    _throttle("caption-glossary:" + ctx.uid(), 20, 600)
+    try:
+        rules = editor.save_glossary(body.get("rules"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"rules": rules}
+
+
+@app.get("/api/jobs/{jid}/waveform")
+def source_waveform(jid: str):
+    job = _job_or_404(jid)
+    path = jobs.source_file(job)
+    if not path or not job.get("duration"):
+        raise HTTPException(404, "The full source video is unavailable.")
+    if job.get("has_audio") is False:
+        return {"peaks": []}
+    cache = Path(job["dir"]) / "waveform.json"
+    try:
+        return {"peaks": json.loads(cache.read_text(encoding="utf-8"))}
+    except (OSError, ValueError):
+        pass
+    _throttle("waveform:" + ctx.uid(), 10, 600)
+    try:
+        peaks = editor.waveform(path, job["duration"])
+    except (OSError, RuntimeError, ValueError):
+        return {"peaks": []}
+    temp = cache.with_name("waveform-" + os.urandom(6).hex() + ".tmp")
+    try:
+        temp.write_text(json.dumps(peaks), encoding="utf-8")
+        temp.replace(cache)
+    finally:
+        temp.unlink(missing_ok=True)
+    return {"peaks": peaks}
+
+
 @app.delete("/api/jobs/{jid}")
 def delete_job(jid: str):
     job = _job_or_404(jid)
-    if job["status"] in ("queued", "running", "live") or jid in live.SESSIONS:
+    if account._busy(job):
         raise HTTPException(409, "This is still being worked on. Stop it or wait for it to finish first.")
     jobs.delete(jid)
     return {"ok": True}
@@ -965,12 +1058,12 @@ def bulk_delete(body: dict = Body(...)):
 
 
 @app.get("/api/clips.zip")
-def clips_zip(ids: str = ""):
+def clips_zip(ids: str = "", subtitles: bool = False):
     """Many clips as one download. `ids` is video.clip pairs separated by commas."""
     _throttle("zip:" + ctx.uid(), 12, 600, "Give it a moment: you just downloaded several groups of clips.")
     pairs = _pairs([p.split(".", 1) for p in ids.split(",") if "." in p][:300])
     try:
-        f = account.zip_clips(pairs)
+        f = account.zip_clips(pairs, subtitles=subtitles)
     except ValueError as e:
         raise HTTPException(400, str(e))
     from starlette.background import BackgroundTask
@@ -1008,12 +1101,52 @@ def delete_my_account(request: Request, body: dict = Body(...)):
 
 @app.get("/media/{jid}/{name}")
 def media_file(jid: str, name: str, download: int = 0):
-    if not re.fullmatch(r"[\w\-]+\.(mp4|jpg)", name):
+    if not re.fullmatch(r"[\w\-]+\.(mp4|jpg|srt)", name):
         raise HTTPException(404)
     f = Path(_job_or_404(jid)["dir"]) / "clips" / name
     if not f.is_file():
         raise HTTPException(404)
     return FileResponse(f, filename=name if download else None, headers={"Cache-Control": "private, max-age=300"})
+
+
+@app.get("/api/jobs/{jid}/source")
+def source_video(jid: str):
+    path = jobs.source_file(_job_or_404(jid))
+    if path is None:
+        raise HTTPException(404, "The full source video is unavailable.")
+    return FileResponse(path, headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/jobs/{jid}/cancel")
+def cancel_download(jid: str):
+    job = _job_or_404(jid)
+    try:
+        jobs.cancel_download(job)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return jobs.public(job)
+
+
+@app.post("/api/jobs/{jid}/source-cleanup")
+def source_cleanup(jid: str, body: dict = Body(...)):
+    job = _job_or_404(jid)
+    try:
+        jobs.set_source_deletion(job, body.get("enabled"))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return jobs.public(job)
+
+
+@app.delete("/api/jobs/{jid}/source")
+def delete_job_source(jid: str):
+    job = _job_or_404(jid)
+    try:
+        jobs.delete_source(job)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except OSError as e:
+        raise HTTPException(500, "The downloaded source could not be removed. Close anything using it and try again.") from e
+    return {"ok": True}
 
 
 # ================================================================ creators and live recording

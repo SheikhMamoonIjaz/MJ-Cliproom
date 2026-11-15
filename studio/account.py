@@ -15,7 +15,8 @@ class Busy(Exception):
 
 
 def _busy(job) -> bool:
-    return job["status"] in ("queued", "running", "live") or job["id"] in live.SESSIONS
+    return (job["status"] in ("queued", "running", "live") or job["id"] in live.SESSIONS
+            or any(clip["status"] in ("queued", "rendering") for clip in job["clips"]))
 
 
 # ---------------------------------------------------------------- clips and videos
@@ -32,7 +33,7 @@ def delete_clip(jid: str, cid: str) -> bool:
     job["clips"] = [c for c in job["clips"] if c["id"] != cid]
     jobs.save(job)
     d = Path(job["dir"])
-    for name in (clip.get("file"), clip.get("cover")):
+    for name in (clip.get("file"), clip.get("cover"), clip.get("subtitle"), f"{cid}.ass", f"{cid}.json"):
         if name:
             (d / "clips" / Path(str(name)).name).unlink(missing_ok=True)
     src = clip.get("src")
@@ -66,7 +67,7 @@ def delete_many(job_ids: list, clip_ids: list) -> dict:
     return out
 
 
-def zip_clips(clip_ids: list, limit_gb: float = 4.0) -> Path:
+def zip_clips(clip_ids: list, limit_gb: float = 4.0, subtitles: bool = False) -> Path:
     """One .zip of finished clips, for downloading many at once. Clips are already compressed, so they are only
     stored, not squeezed again: making the file is as fast as copying."""
     files, total, seen = [], 0, set()
@@ -79,14 +80,19 @@ def zip_clips(clip_ids: list, limit_gb: float = 4.0) -> Path:
         if not f.is_file():
             continue
         total += f.stat().st_size
-        if total > limit_gb * 1e9:
-            raise ValueError(f"That is more than {limit_gb:g} GB of clips. Download them in smaller groups.")
         base = "".join(ch if ch.isalnum() or ch in " -_" else "" for ch in (clip.get("title") or clip.get("hook") or cid))[:60].strip() or cid
         name, n = f"{base}.mp4", 2
         while name.lower() in seen:
             name, n = f"{base} ({n}).mp4", n + 1
         seen.add(name.lower())
         files.append((f, name))
+        if subtitles and clip.get("subtitle"):
+            srt = f.parent / Path(clip["subtitle"]).name
+            if srt.is_file():
+                total += srt.stat().st_size
+                files.append((srt, Path(name).with_suffix(".srt").name))
+        if total > limit_gb * 1e9:
+            raise ValueError(f"That is more than {limit_gb:g} GB of clips. Download them in smaller groups.")
     if not files:
         raise ValueError("None of those clips are ready to download.")
     tmp = config.user_dir(ctx.uid()) / "tmp"
@@ -94,7 +100,7 @@ def zip_clips(clip_ids: list, limit_gb: float = 4.0) -> Path:
     for old in tmp.glob("clips-*.zip"):                       # leftovers from downloads that were abandoned
         if time.time() - old.stat().st_mtime > 3600:
             old.unlink(missing_ok=True)
-    out = tmp / f"clips-{int(time.time() * 1000)}.zip"
+    out = tmp / f"clips-{time.time_ns()}.zip"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
         for f, name in files:
             z.write(f, name)

@@ -5,13 +5,14 @@ import os
 import math
 import queue
 import shutil
+import statistics
 import threading
 import time
 import traceback
 import uuid
 from pathlib import Path
 
-from . import brain, config, creators, ctx, load, media, render, roman, safe, transcribe, usage
+from . import brain, config, creators, ctx, editor, load, media, render, roman, safe, transcribe, usage
 
 class _FairQueue:
     """Whose video is next. Each person has their own line and the lines take turns, so someone who adds ten
@@ -104,11 +105,13 @@ _q = _FairQueue()
 _live_q: "queue.Queue" = queue.Queue()   # live clips never wait behind a long video
 _jobs: dict = {}
 _by_user: dict = {}                       # user -> {job id: job}: listing one person's videos never scans everyone's
+_cancel_events: dict = {}
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
 DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
-            "range_start": None, "range_end": None}
+            "range_start": None, "range_end": None, "mode": "news", "motion": "none", "watermark": False,
+            "ai_post_text": False}
 
 
 LIMITS = {"max_clips": (1, 20), "min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
@@ -127,6 +130,15 @@ def clean_options(options) -> dict:
             v = v if v in render.STYLES else DEFAULTS["style"]
         elif k == "layout":
             v = v if v in render.LAYOUTS else DEFAULTS["layout"]
+        elif k == "mode":
+            if v not in ("news", "gameplay", "manual"):
+                raise ValueError("Choose News, Gameplay, or Manual.")
+        elif k == "motion":
+            if v not in ("none", "highlight"):
+                raise ValueError("Choose a motion graphics preset.")
+        elif k in ("ai_post_text", "watermark"):
+            if not isinstance(v, bool):
+                raise ValueError("Clip export switches must be on or off.")
         else:                                    # range_start, range_end: seconds into the video
             v = float(v)
             if not math.isfinite(v) or v < 0:
@@ -141,14 +153,76 @@ def job_dir(jid) -> Path:
     return Path(_jobs[jid]["dir"])
 
 
-HIDDEN = ("dir", "user", "source_path", "recover")
+def _render_estimate(job):
+    clips = job.get("clips", [])
+    pending = [clip for clip in clips if clip.get("status") in ("queued", "rendering")]
+    samples = [float(clip["render_seconds"]) for clip in clips
+               if clip.get("status") == "done" and clip.get("render_seconds", 0) > 0][-7:]
+    if not pending or not samples:
+        return None, len(pending), None
+
+    average = statistics.median(samples)
+    active = [clip for clip in pending if clip["status"] == "rendering"]
+    if not active:
+        return None, len(pending), average
+    now = time.time()
+    active_remaining = max(
+        max(0, average - (now - clip.get("render_started_at", now)))
+        for clip in active
+    )
+    queued = len(pending) - len(active)
+    eta = active_remaining + math.ceil(queued / len(active)) * average
+    return max(0, round(eta)), len(pending), average
+
+
+HIDDEN = ("dir", "user", "source_path", "recover", "gameplay_scan")
 
 
 def public(job) -> dict:
     """What the browser may see: no server paths, no owner id."""
     out = {k: v for k, v in job.items() if k not in HIDDEN}
     out["source"] = {k: v for k, v in job["source"].items() if k != "path"}
-    out["clips"] = [{k: v for k, v in c.items() if k not in ("src", "fixed_words", "fixed_for")} for c in job["clips"]]
+    now = time.time()
+    out["clips"] = [
+        {**{k: v for k, v in clip.items()
+            if k not in ("src", "fixed_words", "fixed_for", "caption_cues", "render_started_at")},
+         **({"render_elapsed_seconds": round(now - clip["render_started_at"])}
+            if clip.get("status") == "rendering" and clip.get("render_started_at") else {})}
+        for clip in job["clips"]
+    ]
+    render_eta, render_pending, average_render_seconds = _render_estimate(job)
+    out["render_eta_seconds"] = render_eta
+    out["render_pending_clips"] = render_pending
+    if average_render_seconds is not None:
+        for clip in out["clips"]:
+            if clip.get("status") == "rendering":
+                clip["render_eta_seconds"] = max(
+                    0, round(average_render_seconds - clip.get("render_elapsed_seconds", 0))
+                )
+    out["can_edit_source"] = job.get("kind") == "video" and bool(job.get("source_path")) and bool(job.get("duration"))
+    out["can_cancel_download"] = (job.get("status") == "queued" or
+                                  job.get("status") == "running" and job.get("stage") == "Downloading the source video")
+    out["can_schedule_source_deletion"] = (
+        job.get("kind") == "video" and job.get("source", {}).get("type") == "url"
+        and job.get("status") in ("queued", "running") and not job.get("source_deleted")
+    )
+    out["can_cancel_source_deletion"] = (
+        bool(job.get("delete_source_when_done")) and job.get("status") in ("queued", "running", "error")
+    )
+    source_path = job.get("source_path")
+    source = Path(source_path) if source_path else None
+    out["can_delete_source"] = (
+        job.get("kind") == "video" and job.get("source", {}).get("type") == "url"
+        and job.get("status") == "done" and source is not None and source.is_file()
+        and source.resolve().parent == Path(job["dir"]).resolve()
+        and not any(c.get("status") in ("queued", "rendering") for c in job["clips"])
+    )
+    out["source_size_bytes"] = 0
+    if out["can_delete_source"]:
+        try:
+            out["source_size_bytes"] = source.stat().st_size
+        except OSError:
+            out["can_delete_source"] = False
     ai = job.get("ai") or {}
     out["ai"] = {"tokens": ai.get("tokens", 0), "note": ai.get("note", ""), "used": bool(ai.get("model"))}   # never the model, never raw errors
     if job.get("status") == "queued":
@@ -220,13 +294,14 @@ def _load_file(f: Path, uid: str):
                 job["recover"] = True
             elif job.get("resume"):
                 c["status"] = "queued"  # the video is being picked up again: this clip is made then
-            elif job.get("kind") != "live" and (f.parent / "words.json").is_file():
+            elif job.get("kind") != "live" and (job.get("source_path") or (f.parent / "words.json").is_file()):
                 c["status"] = "queued"  # a single clip being re-made: jobs.start() makes it again
                 job.setdefault("remake", []).append(c["id"])
             else:
                 c.update(status="error", error="Interrupted by a restart. Open it and press Save and re-make.")
     _jobs[job["id"]] = job
     _by_user.setdefault(uid, {})[job["id"]] = job
+    _cancel_events[job["id"]] = threading.Event()
 
 
 def load_user(uid: str):
@@ -294,6 +369,7 @@ def create(source: dict, options: dict, enqueue=True, creator=None, kind="video"
     with _lock:
         _jobs[jid] = job
         _by_user.setdefault(job["user"], {})[jid] = job
+        _cancel_events[jid] = threading.Event()
     save(job)
     if enqueue:
         _q.put(("job", jid, None), user=job["user"])
@@ -327,6 +403,7 @@ def _live_worker():
 def delete(jid):
     with _lock:
         job = _jobs.pop(jid, None)
+        _cancel_events.pop(jid, None)
         if job:
             _by_user.get(job["user"], {}).pop(jid, None)
     if job:
@@ -335,19 +412,28 @@ def delete(jid):
     return bool(job)
 
 
-def request_render(jid, cid, changes: dict):
-    job = _jobs[jid]
-    clip = next(c for c in job["clips"] if c["id"] == cid)
+def clip_changes(job, clip, changes):
     new = dict(clip)
     for k in ("start", "end"):
         if k in changes:
-            new[k] = round(float(changes[k]), 2)
+            new[k] = round(float(changes[k]), 3)
     if "src_offset" in clip:  # live clip: can only move inside the saved piece of stream
         new["start"] = max(new["start"], clip["src_offset"])
         new["end"] = min(new["end"], clip["src_end"])
     if not (math.isfinite(new["start"]) and math.isfinite(new["end"])) or new["start"] < 0:
         raise ValueError("Those times aren't valid.")
-    if not 3 <= new["end"] - new["start"] <= 180:
+    if job.get("duration") and job.get("kind") == "video":
+        new["end"] = min(new["end"], job["duration"])
+    if "segments" in changes:
+        if changes["segments"] and (clip.get("src") or not source_file(job)):
+            raise ValueError("Multiple cuts need the full source video.")
+        new["segments"] = editor.validate_segments(changes["segments"], job.get("duration") or 0)
+    segments = new.get("segments") or []
+    if segments:
+        new["start"] = min(span["start"] for span in segments)
+        new["end"] = max(span["end"] for span in segments)
+    duration = editor.cut_length(segments) if segments else new["end"] - new["start"]
+    if not 3 <= duration <= 180:
         raise ValueError("A clip can be 3 to 180 seconds long.")
     for k in ("hook", "title", "description", "style", "layout"):
         if k in changes:
@@ -356,14 +442,168 @@ def request_render(jid, cid, changes: dict):
         new["style"] = DEFAULTS["style"]
     if new.get("layout") not in render.LAYOUTS:
         new["layout"] = DEFAULTS["layout"]
-    clip.update(new, status="queued")
-    save(job)
+    for k in ("crop_x", "crop_y"):
+        if k in changes:
+            value = float(changes[k])
+            if not 0 <= value <= 1:
+                raise ValueError("Crop position must be between 0 and 1.")
+            new[k] = value
+    if "captions" in changes:
+        if changes["captions"] not in ("burn", "clean"):
+            raise ValueError("Choose captions on video or clean video.")
+        new["captions"] = changes["captions"]
+    if "motion" in changes:
+        if changes["motion"] not in ("none", "highlight"):
+            raise ValueError("Choose a motion graphics preset.")
+        new["motion"] = changes["motion"]
+    if "watermark" in changes:
+        if not isinstance(changes["watermark"], bool):
+            raise ValueError("Choose whether to add the MJ watermark.")
+        new["watermark"] = changes["watermark"]
+    if "crop_keyframes" in changes:
+        new["crop_keyframes"] = editor.validate_keyframes(changes["crop_keyframes"], duration)
+    elif new.get("crop_keyframes"):
+        new["crop_keyframes"] = [point for point in new["crop_keyframes"] if point["time"] < duration]
+    if "hashtags" in changes:
+        if not isinstance(changes["hashtags"], str):
+            raise ValueError("Enter hashtags as text.")
+        tags = ["".join(x for x in tag if x.isalnum() or x == "_")[:30]
+                for tag in changes["hashtags"][:500].replace(",", " ").split()]
+        new["hashtags"] = list(dict.fromkeys(t for t in tags if t))[:8]
+    if "caption_cues" in changes:
+        new["caption_cues"] = editor.validate_cues(changes["caption_cues"], new["start"], new["start"] + duration)
+    elif new.get("segments") != clip.get("segments") and clip.get("caption_cues") is not None:
+        shift = new["start"] - clip["start"]
+        new["caption_cues"] = [dict(c, start=c["start"] + shift, end=c["end"] + shift)
+                               for c in clip["caption_cues"]]
+    return new
+
+
+def request_render(jid, cid, changes: dict):
+    with _lock:
+        job = _jobs[jid]
+        clip = next(c for c in job["clips"] if c["id"] == cid)
+        if job["status"] in ("queued", "running") or clip["status"] in ("queued", "rendering"):
+            raise RuntimeError("This clip is still being made.")
+        if job.get("source_deleted") and not clip.get("src"):
+            raise RuntimeError("The original download was removed. Download the source again to re-make this clip.")
+        clip.update(clip_changes(job, clip, changes), status="queued")
+        save(job)
     _q.put(("clip", jid, cid))
+
+
+def source_file(job):
+    path = job.get("source_path")
+    if job.get("kind") == "video" and path and Path(path).is_file():
+        return Path(path)
+    return None
+
+
+def delete_source(job):
+    with _lock:
+        path = source_file(job)
+        if (job.get("kind") != "video" or job.get("source", {}).get("type") != "url"
+                or job.get("status") != "done" or path is None
+                or path.resolve().parent != Path(job["dir"]).resolve()
+                or any(c.get("status") in ("queued", "rendering") for c in job["clips"])):
+            raise ValueError("The downloaded source can be removed after all clips finish.")
+        path.unlink()
+        job["source_path"] = None
+        job["source_deleted"] = True
+        job["delete_source_when_done"] = False
+        save(job)
+
+
+def set_source_deletion(job, enabled):
+    if not isinstance(enabled, bool):
+        raise ValueError("Choose whether to remove the source after clipping.")
+    with _lock:
+        if enabled:
+            if (job.get("kind") != "video" or job.get("source", {}).get("type") != "url"
+                    or job.get("status") not in ("queued", "running") or job.get("source_deleted")):
+                raise ValueError("Automatic cleanup can be scheduled while a downloaded video is being processed.")
+            job["delete_source_when_done"] = True
+        else:
+            job["delete_source_when_done"] = False
+        save(job)
+
+
+def cancel_download(job):
+    with _lock:
+        event = _cancel_events.setdefault(job["id"], threading.Event())
+        if job.get("status") == "queued":
+            event.set()
+            job.update(status="cancelled", stage="Download cancelled", error=None, transfer=None)
+            save(job)
+            return
+        if job.get("status") == "running" and job.get("stage") == "Downloading the source video":
+            event.set()
+            return
+        raise ValueError("This download can no longer be cancelled.")
+
+
+def finish_video(job, stage, took):
+    _set(job, status="done", stage=stage, progress=1.0, took=took)
+    if job.get("delete_source_when_done"):
+        try:
+            delete_source(job)
+        except (OSError, ValueError):
+            _set(job, delete_source_when_done=False,
+                 source_cleanup_error="The clips are ready, but the downloaded source could not be removed.")
+
+
+def create_manual(job, changes):
+    with _lock:
+        if job["status"] in ("queued", "running"):
+            raise RuntimeError("Wait until the source is ready.")
+        if not source_file(job) or not job.get("duration"):
+            raise ValueError("The full source video is unavailable. Upload the file to trim it.")
+        if len(job["clips"]) >= 100:
+            raise ValueError("This video already has 100 clips.")
+        clip = {"id": "clip-" + uuid.uuid4().hex[:10], "manual": True, "start": 0,
+                "end": min(job["duration"], 30), "title": "Manual clip", "hook": "", "description": "",
+                "hashtags": [], "highlight_words": [], "score": 0, "category": "other", "version": 0,
+                "style": job["options"]["style"], "layout": job["options"]["layout"],
+                "motion": job["options"].get("motion", "none"),
+                "watermark": job["options"].get("watermark", False)}
+        clip.update(clip_changes(job, clip, changes), status="queued")
+        job["clips"].append(clip)
+        save(job)
+    _q.put(("clip", job["id"], clip["id"]))
+    return clip
+
+
+def retry(job):
+    with _lock:
+        if job["status"] != "error" or job.get("kind") != "video":
+            raise ValueError("Only a stopped video can be retried.")
+        if any(c["status"] in ("queued", "rendering") for c in job["clips"]):
+            raise ValueError("Wait for the current clip render to finish.")
+        job.update(status="queued", stage="Retrying video", error=None, failed_stage=None, resume=True)
+        enqueue(job)
+
+
+def read_words(job):
+    path = Path(job["dir"]) / "words.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+
+
+def editable_captions(job, clip):
+    segments = clip.get("segments") or []
+    end = clip["start"] + editor.cut_length(segments) if segments else clip["end"]
+    if clip.get("caption_cues") is not None:
+        return [dict(c, start=max(clip["start"], c["start"]), end=min(end, c["end"]))
+                for c in clip["caption_cues"] if min(end, c["end"]) > max(clip["start"], c["start"])]
+    words = editor.apply_glossary(clip.get("fixed_words") or read_words(job), editor.read_glossary())
+    if segments:
+        words = editor.stitch_words(words, segments, offset=clip["start"])
+    return editor.caption_cues(words, clip["start"], end)
 
 
 def render_one(job, clip, words):
     d = Path(job["dir"])
     clip["status"] = "rendering"
+    clip["render_started_at"] = time.time()
     save(job)
     try:
         off = clip.get("src_offset", 0.0)
@@ -371,36 +611,69 @@ def render_one(job, clip, words):
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        if clip.get("caption_cues") is not None:
+            local["caption_cues"] = [dict(c, start=c["start"] - off, end=c["end"] - off)
+                                    for c in clip["caption_cues"]]
+        segments = clip.get("segments") or []
+        if segments:
+            local["has_audio"] = job.get("has_audio")
         span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English
-        if clip.get("fixed_for") == span and clip.get("fixed_words") and not any(
+        if segments:
+            span.append(segments)
+        if clip.get("caption_cues") is not None:
+            raw = []
+        elif clip.get("fixed_for") == span and clip.get("fixed_words") and not any(
                 roman.needs_roman(w.get("w", "")) for w in clip["fixed_words"]):
             raw = clip["fixed_words"]          # already tidied for this exact span: no second AI call
         else:
-            raw = [w for w in words if clip["start"] - 1 <= w["s"] <= clip["end"] + 1]
+            raw = [w for w in words if clip["start"] - 1 <= w["s"] <= clip["end"] + 1
+                   and (not segments or any(s["start"] <= w["s"] < s["end"] for s in segments))]
+            if (not raw and job.get("options", {}).get("mode") in ("manual", "gameplay") and job.get("has_audio")
+                    and (transcribe.model_ready() or transcribe.REMOTE)):
+                try:
+                    ranges = segments or [{"start": clip["start"], "end": clip["end"]}]
+                    for part in sorted(ranges, key=lambda s: s["start"]):
+                        a, b = part["start"], part["end"]
+                        audio = editor.pcm(src, a - off, b - a, 16000)
+                        raw.extend(dict(w, s=w["s"] + a, e=w["e"] + a) for w in transcribe.transcribe(audio))
+                except (OSError, RuntimeError, ValueError):
+                    pass  # A missing transcript doesn't prevent a visual clip from rendering.
             try:
-                usage.set_context(job.get("creator"), job.get("title") or "")
-                raw = brain.english_captions(raw, job.get("lang") or "", job.get("title") or "",
-                                             youtube_english=lambda: _english_part(job, clip))
+                if job.get("options", {}).get("mode") not in ("manual", "gameplay"):
+                    usage.set_context(job.get("creator"), job.get("title") or "")
+                    raw = brain.english_captions(raw, job.get("lang") or "", job.get("title") or "",
+                                                 youtube_english=lambda: _english_part(job, clip))
                 clip.update(fixed_words=raw, fixed_for=span)
             except Exception:  # noqa: BLE001 - captions still render with the words as heard
                 pass
         # the last word on it: whatever was said, nothing is drawn in Hindi or Urdu script
-        near = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(raw)]
+        corrected = editor.apply_glossary(raw, editor.read_glossary()) if raw else raw
+        if clip.get("auto_gameplay") and not clip.get("post_drafted"):
+            if job["options"].get("ai_post_text"):
+                transcript = " ".join(w["w"] for w in corrected if clip["start"] <= w["s"] < clip["end"])
+                usage.set_context(job.get("creator"), job.get("title") or "")
+                clip.update(brain.gameplay_post(Path(job["title"]).stem if job["source"]["type"] == "file" else job["title"],
+                                                clip["start"], clip["end"], transcript, config.ai_ready()))
+            clip["post_drafted"] = True
+        near = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(corrected)]
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
+        clip["render_seconds"] = round(time.time() - clip["render_started_at"], 1)
+        clip.pop("render_started_at", None)
         post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
         (d / "clips" / f"{clip['id']}.json").write_text(json.dumps(post, indent=1), encoding="utf-8")
         if clip["version"] == 1:
             clip.setdefault("made_at", time.time())
             creators.log(job["creator"], f"Clip ready (score {clip['score']}): {clip['title'] or clip['hook']}")
             save(job)
-            for fn in on_clip_ready:
+            for fn in (() if clip.get("manual") or clip.get("auto_gameplay") else on_clip_ready):
                 try:
                     fn(job, clip)
                 except Exception:  # noqa: BLE001
                     traceback.print_exc()
     except Exception as e:  # noqa: BLE001
         clip.update(status="error", error=safe.friendly(e, 400))
+        clip.pop("render_started_at", None)
         creators.log(job["creator"], f"Clip failed: {safe.friendly(e, 200)}")
     save(job)
 
@@ -496,6 +769,11 @@ def _run_job(job):
     t0 = time.time()
     notes = []
     usage.set_context(job["creator"], job["title"] or src.get("name"))
+    if o.get("mode") in ("manual", "gameplay"):
+        job.pop("resume", None)
+        _set(job, status="running", stage="Preparing the source", progress=0.03, error=None, transfer=None)
+        _run_source_job(job, t0)
+        return
     resuming = bool(job.pop("resume", False)) and (d / "words.json").is_file()
     if resuming:   # after a restart: keep the transcript parts, clips and AI answers already made, and carry on
         _set(job, status="running", stage="Picking up where it stopped", error=None)
@@ -509,6 +787,7 @@ def _run_job(job):
     fetch = ThreadPoolExecutor(1)
     video = None
     if src["type"] == "url":
+        _set(job, stage="Reading video information")
         meta = media.info(src["url"])
         if meta["kind"] != "video":
             raise RuntimeError("That link is a channel or playlist, not a single video. Paste the link of one video.")
@@ -523,27 +802,33 @@ def _run_job(job):
         usage.set_context(job["creator"], meta["title"])
         span = (o["range_end"] or meta["duration"]) - (o["range_start"] or 0)
         pieces = span > LONG_VIDEO or meta["duration"] <= 0
+        existing = source_file(job)
         if not pieces:  # shorter video: fetch all of it in the background while the audio is worked on
-            video = fetch.submit(media.download, src["url"], d, int(o["quality"]))
-        audio_file = media.download_audio(src["url"], d, lambda p: _set(job, progress=0.03 + 0.1 * p))
+            video = fetch.submit(lambda: existing or media.download(src["url"], d, int(o["quality"])))
+        _set(job, stage="Getting the source audio")
+        audio_file = existing or media.download_audio(src["url"], d, lambda p: _set(job, progress=0.03 + 0.1 * p))
     else:
         pieces, audio_file = False, Path(src["path"])
         info = media.probe(audio_file)
         if info["duration"] > config.MAX_VIDEO_HOURS * 3600:
             raise RuntimeError(f"That video is longer than {config.MAX_VIDEO_HOURS:g} hours, which is the limit.")
-        _set(job, source_path=str(audio_file), width=info["width"], height=info["height"], duration=info["duration"])
+        _set(job, source_path=str(audio_file), width=info["width"], height=info["height"], duration=info["duration"],
+             fps=info["fps"], has_audio=info["has_audio"])
         if not job.get("thumb") and media.save_thumb(d, video=audio_file):
             _set(job, thumb=True)
     wav = d / "audio.wav"
+    _set(job, stage="Preparing audio for transcription")
     media.extract_audio(audio_file, wav)
     audio = media.load_audio(wav)
     wav.unlink(missing_ok=True)
-    if src["type"] == "url":
+    if src["type"] == "url" and audio_file != existing:
         audio_file.unlink(missing_ok=True)
     if not job["duration"]:
         job["duration"] = len(audio) / 16000
     lo = int((o["range_start"] or 0) * 16000)
     hi = min(len(audio), int(o["range_end"] * 16000)) if o["range_end"] else len(audio)
+    if hi <= lo:
+        raise ValueError("The selected range is outside the video. Choose an earlier start time.")
     span = (hi - lo) / 16000
     db = media.loudness_per_second(audio[lo:hi])
 
@@ -564,7 +849,8 @@ def _run_job(job):
                         notes.append(f"Whole-video download failed ({str(e2)[-80:]}), fetching clip parts instead")
                 if path:
                     info = media.probe(path)
-                    job.update(source_path=str(path), width=info["width"], height=info["height"])
+                    job.update(source_path=str(path), width=info["width"], height=info["height"],
+                               fps=info["fps"], has_audio=info["has_audio"])
                 vstate["path"] = path
             return vstate["path"]
 
@@ -691,17 +977,132 @@ def _run_job(job):
     del audio
     clips = job["clips"]
     job["ai"] = {"model": model, "tokens": tokens, "log": notes[-5:],
-                 "note": "The AI was unavailable, so clips were picked by loudness only." if clips and not model else ""}
+                 "note": "The AI returned no usable result, so clips were picked by loudness only." if clips and not model else ""}
     stage = "Done" if clips else "Done, but nothing clip-worthy was found"
-    _set(job, status="done", stage=stage, progress=1.0, took=round(time.time() - t0))
+    finish_video(job, stage, round(time.time() - t0))
+    _announce_job_result(job)
+
+
+def _announce_job_result(job):
+    ready = sum(clip["status"] == "done" for clip in job["clips"])
+    failed = sum(clip["status"] == "error" for clip in job["clips"])
+    if ready:
+        message = f"{ready} clip{'s' if ready != 1 else ''} ready"
+        if failed:
+            message += f", {failed} failed to render"
+    elif failed:
+        message = "All clips failed to render"
+    else:
+        message = "Nothing clip-worthy found"
     try:
         from . import notices
         name = job.get("title") or job["source"].get("name") or "your video"
-        notices.add(job.get("user"), "clips", f"{len(clips)} clip{'s' if len(clips) != 1 else ''} ready" if clips else "Nothing clip-worthy found",
+        notices.add(job.get("user"), "clips", message,
                     name, f"/app/creators/{job['creator']}" if job.get("creator") else "/app/videos")
     except Exception:  # noqa: BLE001
         pass
-    creators.log(job["creator"], f"Video finished with {len(clips)} clips in {round(time.time() - t0)}s: {job['title']}")
+    creators.log(job["creator"], f"{message} after {job['took']}s: {job['title']}")
+
+
+def _scan_gameplay(job, path, start, end, has_audio):
+    options = job["options"]
+    count = options["max_clips"]
+    signature = [path.stat().st_mtime_ns, path.stat().st_size, start, end, count,
+                 options["min_len"], options["max_len"]]
+    checkpoint = job.get("gameplay_scan") or {}
+    if checkpoint.get("signature") != signature:
+        checkpoint = {"signature": signature, "cursor": start, "picks": []}
+    cursor = checkpoint["cursor"]
+    while cursor < end:
+        edge = min(end, cursor + 600)
+        a = max(start, cursor - min(45, options["max_len"]))
+        picks = editor.gameplay(path, a, edge, count, options["min_len"], options["max_len"], has_audio=has_audio)
+        checkpoint["picks"].extend(picks)
+        checkpoint["cursor"] = cursor = edge
+        _set(job, gameplay_scan=checkpoint, stage="Scanning gameplay for action",
+             progress=0.25 + 0.35 * (cursor - start) / (end - start))
+    ranked = []
+    for item in sorted(checkpoint["picks"], key=lambda c: -c.get("strength", 0)):
+        if any(item["start"] < clip["end"] and item["end"] > clip["start"] for clip in ranked):
+            continue
+        ranked.append({k: v for k, v in item.items() if k != "strength"})
+        if len(ranked) >= count:
+            break
+    return sorted(ranked, key=lambda c: c["start"])
+
+
+def _run_source_job(job, began):
+    """Prepare a complete source for manual editing, or find visual gameplay highlights."""
+    directory = Path(job["dir"])
+    options = job["options"]
+    source = job["source"]
+    path = source_file(job)
+    if path is None:
+        if source["type"] == "file":
+            path = Path(source["path"])
+        else:
+            _set(job, stage="Reading video information")
+            meta = media.info(source["url"])
+            if meta["kind"] != "video" or meta["is_live"]:
+                raise ValueError("Choose a finished video or upload a file.")
+            if not 0 < meta["duration"] <= config.MAX_VIDEO_HOURS * 3600:
+                raise ValueError("Upload a video file within the source duration limit.")
+            _set(job, title=meta["title"], uploader=meta["uploader"], stage="Downloading the source video")
+
+            def transfer(data):
+                if data is None:
+                    _set(job, transfer=None, stage="Combining source video and audio", progress=0.23)
+                    return
+                total = data["total"]
+                fraction = min(1, data["bytes"] / total) if total else 0
+                base, weight = (0.20, 0.03) if data["track"] == "audio" else (0.03, 0.17)
+                _set(job, transfer=data, progress=max(job["progress"], base + weight * fraction))
+
+            try:
+                path = media.download(source["url"], directory, int(options["quality"]), on_progress=transfer,
+                                      cancel_event=_cancel_events.get(job["id"]))
+            finally:
+                _set(job, transfer=None)
+            _set(job, stage="Checking the downloaded video", progress=0.24)
+    info = media.probe(path, require_audio=False)
+    if not 0 < info["duration"] <= config.MAX_VIDEO_HOURS * 3600:
+        raise ValueError("The source video is empty or exceeds the duration limit.")
+    _set(job, source_path=str(path), **info)
+    if not job.get("thumb") and media.save_thumb(directory, video=path):
+        _set(job, thumb=True)
+    if options["mode"] == "manual":
+        finish_video(job, "Source ready to edit", round(time.time() - began))
+        return
+    start = options.get("range_start") or 0
+    end = min(info["duration"], options.get("range_end") or info["duration"])
+    if end <= start:
+        raise ValueError("The selected range is outside the video.")
+    _set(job, stage="Scanning gameplay for action", progress=0.25)
+    if not job.get("gameplay_scanned"):
+        found = _scan_gameplay(job, path, start, end, info["has_audio"])
+        title = Path(job["title"]).stem if source["type"] == "file" else job["title"]
+        for clip in found:
+            clip.update(id="clip-" + uuid.uuid4().hex[:10], style=options["style"], layout=options["layout"],
+                        motion=options.get("motion", "none"), watermark=options.get("watermark", False),
+                        auto_gameplay=True, status="queued", version=0)
+            clip.update(brain.gameplay_post(title, clip["start"], clip["end"]))
+        job["clips"].extend(found)
+        job.pop("gameplay_scan", None)
+        _set(job, gameplay_scanned=True)
+    found = [clip for clip in job["clips"] if not clip.get("manual")]
+    renderable = [clip for clip in found if clip["status"] != "done"]
+    total = len(renderable)
+    completed = 0
+    for index, clip in enumerate(renderable, 1):
+        if clip["status"] != "done":
+            _set(job, stage=f"Rendering clip {index} of {total}",
+                 progress=0.65 + 0.35 * completed / max(1, total))
+            render_one(job, clip, [])
+            completed += 1
+            _set(job, progress=0.65 + 0.35 * completed / max(1, total))
+    finish_video(job, "Done" if found else "No gameplay highlights found. You can make a clip by hand.",
+                 round(time.time() - began))
+    _announce_job_result(job)
 
 
 def _worker(quick_only=False):
@@ -721,19 +1122,32 @@ def _worker(quick_only=False):
         token = ctx._uid.set(job["user"])  # everything this job does runs as its owner
         try:
             if kind == "job":
-                _run_job(job)
+                if not _cancel_events.get(job["id"], threading.Event()).is_set():
+                    _run_job(job)
             else:
-                words = json.loads((Path(job["dir"]) / "words.json").read_text(encoding="utf-8"))
+                words = read_words(job)
                 clip = next(c for c in job["clips"] if c["id"] == cid)
                 render_one(job, clip, words)
         except Exception as e:  # noqa: BLE001
+            if kind == "job" and _cancel_events.get(job["id"], threading.Event()).is_set():
+                for clip in job["clips"]:
+                    if clip.get("status") in ("queued", "rendering"):
+                        clip.update(status="error", error="The download was cancelled.")
+                _set(job, status="cancelled", stage="Download cancelled", progress=0.03,
+                     error=None, transfer=None, failed_stage=None)
+                continue
             (Path(job["dir"]) / "error.log").write_text(traceback.format_exc(), encoding="utf-8")
             if kind == "job":
                 for c in job["clips"]:
                     if c.get("status") in ("queued", "rendering"):
                         c.update(status="error", error="The video stopped before this clip was made.")
-                _set(job, status="error", error=safe.friendly(e), stage="Stopped")
+                _set(job, status="error", error=safe.friendly(e), failed_stage=job["stage"], stage="Stopped")
                 creators.log(job["creator"], f"Video failed: {safe.friendly(e)[:200]}")
+            else:
+                clip = next((c for c in job["clips"] if c["id"] == cid), None)
+                if clip:
+                    clip.update(status="error", error=safe.friendly(e))
+                    save(job)
         finally:
             ctx._uid.reset(token)
             if kind == "job":
