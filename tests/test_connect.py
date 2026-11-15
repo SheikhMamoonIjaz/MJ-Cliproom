@@ -60,10 +60,14 @@ class R:
             raise ValueError
         return self._d
 calls, uploads, tt = [], [], {"audited": False, "status": 0}
+yt_proto = {"chunks": [], "probes": 0, "timeout": True, "meta": None}
 def post(url, data=None, json=None, headers=None, params=None, timeout=None, content=None):
     calls.append(("POST", url, data or json, headers or {}))
     if url == "https://oauth2.googleapis.com/token":
         return R(200, {"access_token": "yt-access", "refresh_token": "yt-refresh", "expires_in": 3600})
+    if url == "https://www.googleapis.com/upload/youtube/v3/videos":
+        yt_proto["meta"] = json
+        return R(200, {}, {"Location": "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=resume-test"})
     if url == "https://api.instagram.com/oauth/access_token":
         if data["code"] != "igcode":
             return R(400, {"error_message": "bad code"})
@@ -105,6 +109,15 @@ def get(url, params=None, headers=None, timeout=None):
         return R(200, {"permalink": "https://www.instagram.com/reel/abc/"})
     return R(404, {})
 def put(url, content=None, headers=None, timeout=None):
+    if url.startswith("https://www.googleapis.com/upload/youtube/"):
+        if headers.get("Content-Range", "").startswith("bytes */"):
+            yt_proto["probes"] += 1
+            return R(308, {}, {"Range": f"bytes=0-{8 * 1024 * 1024 - 1}"})
+        yt_proto["chunks"].append((len(content), dict(headers)))
+        if yt_proto["timeout"]:
+            yt_proto["timeout"] = False
+            raise accounts.httpx.ReadTimeout("simulated ambiguous timeout")
+        return R(201, {"id": "yt-video-123"})
     uploads.append((url, len(content), headers))
     return R(201, None, text="")
 accounts.httpx.post, accounts.httpx.get, accounts.httpx.put = post, get, put
@@ -225,6 +238,38 @@ with ctx.as_user(user.id):
     acc = accounts.get(ttacc["id"]); acc["expires"] = 0; accounts._put(acc)
     accounts._tt_token(accounts.get(ttacc["id"]))
     check("TikTok: an old sign-in is renewed, and the new refresh token kept", accounts.get(ttacc["id"])["refresh_token"], "tt-refresh-2")
+
+    # A lost YouTube chunk response is reconciled against Google's resumable session before resending bytes.
+    yt_file = jd / "youtube-resume.mp4"
+    yt_file.write_bytes(b"x" * (8 * 1024 * 1024 + 7))
+    yt_id, yt_url = accounts.youtube_upload(accounts.get(accs["youtube"]["id"]), yt_file,
+                                             "Resume test", "Test description", ["gaming"], "unlisted")
+    check("YouTube: a timed-out resumable chunk continues from Google's acknowledged offset",
+          (yt_id, yt_url, yt_proto["probes"], [n for n, _ in yt_proto["chunks"]]),
+          ("yt-video-123", "https://www.youtube.com/shorts/yt-video-123", 1, [8 * 1024 * 1024, 7]))
+    check("YouTube: resumable upload includes Shorts metadata and selected privacy",
+          (yt_proto["meta"]["snippet"]["categoryId"], yt_proto["meta"]["status"]["privacyStatus"], yt_proto["meta"]["snippet"]["tags"]),
+          ("20", "unlisted", ["gaming"]))
+
+    # A terminal platform error is returned to the durable post queue for bounded retry and then recorded.
+    retry_clip = {"id": "clip04", "file": "clip01.mp4", "status": "done", "title": "Retry test", "score": 90}
+    post_job["clips"].append(retry_clip)
+    jobs.save(post_job)
+    retry_post = posting.enqueue(post_job, retry_clip, [accs["youtube"]["id"]], now=True)[0]
+    original_youtube_upload = accounts.youtube_upload
+    def temporary_youtube_error(*args, **kwargs):
+        raise RuntimeError("simulated temporary YouTube failure")
+    accounts.youtube_upload = temporary_youtube_error
+    posting._post(retry_post)
+    check("a transient YouTube post failure stays queued for bounded retry",
+          (retry_post["status"], retry_post["tries"], 599 <= retry_post["due_at"] - time.time() < 601),
+          ("scheduled", 1, True))
+    accounts.youtube_upload = lambda *args, **kwargs: ("yt-retry-456", "https://www.youtube.com/shorts/yt-retry-456")
+    posting._post(retry_post)
+    accounts.youtube_upload = original_youtube_upload
+    check("a retried YouTube post records success and its Shorts URL",
+          (retry_post["status"], retry_post["tries"], retry_post["url"]),
+          ("posted", 1, "https://www.youtube.com/shorts/yt-retry-456"))
 
 print("ALL PASSED" if not fails else f"{len(fails)} failed")
 import shutil; db.engine.dispose(); shutil.rmtree(os.environ["PEAKCUT_DATA"], ignore_errors=True)
