@@ -598,6 +598,8 @@ class Session:
 
 def recover(job):
     """After a restart: finish the clips of an interrupted recording from the stream pieces still on disk."""
+    if job.get("rights_cleared") is not True:
+        return
     c = creators.get(job["creator"]) or dict(creators.DEFAULTS)
     s = Session(job, c)
     s.ended, s.end_note = True, "Recording stopped when the studio closed"
@@ -636,6 +638,8 @@ def recover(job):
 
 
 def start_session(creator: dict, url=None) -> dict:
+    if creator.get("rights_cleared") is not True:
+        raise ValueError("Confirm that you own this channel's content or have permission to record and edit it in creator Setup first.")
     url = normalize(url or creator.get("channel") or "")
     if not re.match(r"^https?://[^/]+\.[^/]+/", url + "/"):
         raise ValueError("Add this creator's channel link first.")
@@ -655,7 +659,7 @@ def start_session(creator: dict, url=None) -> dict:
     if tools.missing():
         raise ValueError(tools.HELP)
     job = jobs.create({"type": "live", "url": url, "name": f"{creator['name']} live"}, {}, enqueue=False,
-                      creator=creator["id"], kind="live")
+                      creator=creator["id"], kind="live", rights_cleared=True)
     job.update(status="live", stage="Connecting to the stream")
     jobs.save(job)
     Session(job, creator).start()
@@ -667,7 +671,7 @@ def _watch_user(uid):
     from . import profiles
     with ctx.as_user(uid):
         try:
-            todo = [c for c in creators.all_creators() if c["auto_watch"] and c["channel"]]
+            todo = [c for c in creators.all_creators() if c["rights_cleared"] and c["auto_watch"] and c["channel"]]
             if not todo:
                 return
         except Exception:  # noqa: BLE001
@@ -684,7 +688,7 @@ def check_now(cid):
         from . import profiles
         with ctx.as_user(uid):
             c = creators.get(cid)
-            if not c or not c["auto_watch"] or not c["channel"]:
+            if not c or not c["rights_cleared"] or not c["auto_watch"] or not c["channel"]:
                 return
             for url in c.get("channels", {}).values():
                 profiles._live.pop(url.rstrip("/").lower(), None)     # a fresh answer, not one from two minutes ago
@@ -697,6 +701,8 @@ def _watch_one(c):
     """Start recording this auto-record creator if they are live on any of their channels."""
     from . import profiles
     try:
+        if not c.get("rights_cleared"):
+            return
         if active_for(c["id"]) or len(active_mine()) >= config.MAX_LIVE_PER_USER or len(active()) >= config.MAX_LIVE_TOTAL or (active() and load.busy()):
             return
         # the chosen channel first, then their other platforms

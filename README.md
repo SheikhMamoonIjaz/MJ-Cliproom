@@ -134,7 +134,8 @@ Git and FFmpeg packages.
 3. Choose **Gameplay** to scan for highlights, **Manual** to start with your own cuts, or **Replay Picker** to choose
    from supported past broadcasts.
 4. Set the clip count, length, layout, caption style and optional motion or watermark settings, then choose **Make
-   clips**.
+   clips**. Confirm that you own the source or have permission to download, edit and publish it. Creator live
+   recording has a separate confirmation under **Setup → Their stream**.
 5. Follow the download and render progress. If a job fails, the failure card explains the stage and provides a
    **Retry download** or **Retry video** button. Retries reuse the saved partial download whenever possible.
 6. Open a finished clip to edit its title, description, hashtags, crop, caption timing and export options. Download
@@ -237,4 +238,5 @@ PEAKCUT_DATA=/tmp/mj-cliproom-dev PEAKCUT_PORT=8766 python -m studio.server
 MJ Cliproom is maintained by [Sheikh Mamoon Ijaz](https://github.com/SheikhMamoonIjaz). It builds on the MIT-licensed
 [PeakCut project](https://github.com/haziqahmedqasmi/PeakCut); the original license and attribution are preserved.
 See [CREDITS.md](CREDITS.md) for provenance and font licenses. The project is released under the MIT License; see
-[LICENSE](LICENSE). Clip only videos you own or have permission to use, and follow the source platform's terms.
+[LICENSE](LICENSE). The in-app rights checkbox records your confirmation; it cannot verify permission for you. Clip
+only videos you own or have permission to use, and follow the source platform's terms.

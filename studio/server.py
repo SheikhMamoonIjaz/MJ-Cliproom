@@ -574,6 +574,23 @@ def _job_or_404(jid: str):
     return job
 
 
+def _require_source_rights(job):
+    if job.get("rights_cleared") is not True:
+        raise HTTPException(403, "Confirm that you own or have permission to use this source before clipping, editing, or posting it.")
+
+
+@app.put("/api/jobs/{jid}/rights")
+def set_job_rights(jid: str, body: dict = Body(...)):
+    job = _job_or_404(jid)
+    value = body.get("rights_cleared")
+    if value is not True:
+        raise HTTPException(400, "This action only records an affirmative ownership or permission confirmation.")
+    job["rights_cleared"] = True
+    job["rights_cleared_at"] = time.time()
+    jobs.save(job)
+    return jobs.public(job)
+
+
 def _job_slots():
     from . import tools
     if tools.missing():
@@ -708,6 +725,8 @@ def link_preview(request: Request, url: str = ""):
 @app.post("/api/jobs")
 def create_from_link(body: dict = Body(...)):
     _need_verified()
+    if body.get("rights_cleared") is not True:
+        raise HTTPException(400, "Confirm that you own or have permission to download and edit this source before clipping it.")
     _quota()
     _throttle("newjob:" + ctx.uid(), 30, 600)
     url = str(body.get("url", "")).strip()[:500]
@@ -723,7 +742,8 @@ def create_from_link(body: dict = Body(...)):
     try:
         with _create_lock:
             _job_slots()
-            job = jobs.create({"type": "url", "url": url, "name": url}, body.get("options") or {}, creator=creator)
+            job = jobs.create({"type": "url", "url": url, "name": url}, body.get("options") or {}, creator=creator,
+                              rights_cleared=True)
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e) if isinstance(e, ValueError) else "Those options aren't valid.")
     seen = media._PREVIEWS.get(url)  # already looked up while the user was typing: show it straight away
@@ -736,8 +756,11 @@ def create_from_link(body: dict = Body(...)):
 
 
 @app.post("/api/upload")
-def create_from_file(file: UploadFile = File(...), options: str = Form("{}"), creator: str = Form("")):
+def create_from_file(file: UploadFile = File(...), options: str = Form("{}"), creator: str = Form(""),
+                     rights_cleared: str = Form("false")):
     _need_verified()
+    if rights_cleared.lower() != "true":
+        raise HTTPException(400, "Confirm that you own or have permission to edit and publish this video before clipping it.")
     _job_slots()
     name = re.sub(r"[^\w.\- ]", "_", Path(file.filename or "video.mp4").name)[:120]
     ext = Path(name).suffix.lower()
@@ -764,7 +787,8 @@ def create_from_file(file: UploadFile = File(...), options: str = Form("{}"), cr
         try:
             with _create_lock:
                 _job_slots()
-                job = jobs.create({"type": "file", "path": str(tmp), "name": name}, opts, enqueue=False, creator=creator or None)
+                job = jobs.create({"type": "file", "path": str(tmp), "name": name}, opts, enqueue=False,
+                                  creator=creator or None, rights_cleared=True)
         except (ValueError, TypeError):
             raise HTTPException(400, "Those options aren't valid.")
         _disk.pop(ctx.uid(), None)
@@ -817,6 +841,8 @@ def _up_get(upid: str) -> dict:
 @app.post("/api/upload/start")
 def upload_start(body: dict = Body(...)):
     _need_verified()
+    if body.get("rights_cleared") is not True:
+        raise HTTPException(400, "Confirm that you own or have permission to edit and publish this video before clipping it.")
     _job_slots()
     _quota()
     _throttle("upstart:" + ctx.uid(), 30, 600)
@@ -853,7 +879,7 @@ def upload_start(body: dict = Body(...)):
     d = _up_root() / f"up-{upid}"
     d.mkdir()
     meta = {"user": ctx.uid(), "name": name, "ext": ext, "size": size, "part": part, "parts": -(-size // part),
-            "options": opts, "creator": creator, "t": time.time()}
+            "options": opts, "creator": creator, "rights_cleared": True, "t": time.time()}
     (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     return {"id": upid, "part": part, "parts": meta["parts"]}
 
@@ -900,7 +926,7 @@ def upload_finish(upid: str):
             with _create_lock:
                 _job_slots()
                 job = jobs.create({"type": "file", "path": "", "name": meta["name"]}, meta["options"], enqueue=False,
-                                  creator=meta["creator"] or None)
+                                  creator=meta["creator"] or None, rights_cleared=meta.get("rights_cleared") is True)
         except (ValueError, TypeError):
             raise HTTPException(400, "Those options aren't valid.")
         dest = jobs.job_dir(job["id"]) / ("source" + meta["ext"])
@@ -929,6 +955,7 @@ def upload_cancel(upid: str):
 @app.post("/api/jobs/{jid}/clips/{cid}/render")
 def rerender(jid: str, cid: str, body: dict = Body(...)):
     job = _job_or_404(jid)
+    _require_source_rights(job)
     clip = next((c for c in job["clips"] if c["id"] == cid), None)
     if not clip:
         raise HTTPException(404, "No such clip")
@@ -947,6 +974,7 @@ def rerender(jid: str, cid: str, body: dict = Body(...)):
 @app.post("/api/jobs/{jid}/clips")
 def manual_clip(jid: str, body: dict = Body(...)):
     job = _job_or_404(jid)
+    _require_source_rights(job)
     _need_verified()
     _throttle("render:" + ctx.uid(), 20, 600, "Wait a few minutes before rendering more clips.")
     try:
@@ -961,6 +989,7 @@ def manual_clip(jid: str, body: dict = Body(...)):
 @app.post("/api/jobs/{jid}/retry")
 def retry_video(jid: str):
     job = _job_or_404(jid)
+    _require_source_rights(job)
     _need_verified()
     _throttle("retry:" + ctx.uid(), 10, 600)
     _job_slots()
@@ -1401,6 +1430,14 @@ def new_creator(body: dict = Body(...)):
 def edit_creator(cid: str, body: dict = Body(...)):
     _throttle("cedit:" + ctx.uid(), 60, 600)
     _channel_ok(body)
+    current = creators.get(cid)
+    if not current:
+        raise HTTPException(404, "No such creator")
+    auto_watch = body.get("auto_watch", current.get("auto_watch"))
+    autopost = body.get("autopost", current.get("autopost"))
+    rights = body.get("rights_cleared", current.get("rights_cleared"))
+    if (auto_watch or autopost) and rights is not True:
+        raise HTTPException(400, "Confirm that you own this channel's content or have permission before enabling automatic recording or posting.")
     try:
         c = creators.update(cid, body)
     except KeyError:
@@ -1409,7 +1446,10 @@ def edit_creator(cid: str, body: dict = Body(...)):
         raise HTTPException(400, str(e))
     s = live.active_for(cid)
     if s:
-        s.settings = c  # new settings apply to the running recording straight away
+        if not c.get("rights_cleared"):
+            s.stop("Rights confirmation withdrawn")
+        else:
+            s.settings = c  # new settings apply to the running recording straight away
     if "channels" in body or "channel" in body:
         profiles.refresh(cid, force=True)
     if body.get("auto_watch") and c.get("auto_watch") and not s:
@@ -1670,7 +1710,11 @@ def add_posts(body: dict = Body(...)):
     clip = next((c for c in job["clips"] if c["id"] == body.get("clip")), None) if job else None
     if not clip or clip.get("status") != "done":
         raise HTTPException(404, "That clip is not ready")
-    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
+    _require_source_rights(job)
+    try:
+        made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not made:
         raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
     return {"queued": len(made)}

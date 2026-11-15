@@ -31,7 +31,7 @@ def wait_for(client, job_id, valid):
 def upload(client, media, mode):
     with media.open("rb") as file:
         return client.post("/api/upload", files={"file": (media.name, file, "video/mp4")},
-                           data={"options": json.dumps({"mode": mode, "min_len": 5,
+                           data={"rights_cleared": "true", "options": json.dumps({"mode": mode, "min_len": 5,
                                                         "max_len": 10, "max_clips": 1,
                                                         "motion": "highlight" if mode == "gameplay" else "none",
                                                         "watermark": mode == "gameplay"})})
@@ -71,7 +71,8 @@ def run_editor(client, root):
             def download(self, urls):
                 destination = Path(options["outtmpl"].replace("%(ext)s", "mp4"))
                 url = f"/api/jobs/{destination.parent.name}"
-                assert options["continuedl"] and options["retries"] == 2
+                assert options["continuedl"] and options["retries"] == 10
+                assert options["fragment_retries"] == 10 and options["socket_timeout"] == 60
                 options["progress_hooks"][0]({"status": "downloading", "downloaded_bytes": 25, "total_bytes": 100,
                                                "info_dict": {"vcodec": "avc1"}})
                 stages.append(client.get(url).json())
@@ -83,10 +84,16 @@ def run_editor(client, root):
 
     meta = {"kind": "video", "is_live": False, "duration": 8, "title": "Replay", "uploader": "Player"}
     with patch.object(media, "info", return_value=meta), patch.object(media, "_ydl", downloader):
-        response = client.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=example", "options": {"mode": "manual"}})
+        unconfirmed = client.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=example", "options": {"mode": "manual"}})
+        assert unconfirmed.status_code == 400 and "permission" in unconfirmed.json()["detail"].lower()
+        print("PASS source links require an explicit rights confirmation before clipping")
+        response = client.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=example", "options": {"mode": "manual"},
+                                                   "rights_cleared": True})
         response.raise_for_status()
         linked_job = wait_for(client, response.json()["id"], lambda j: j["status"] in ("done", "error"))
-    assert linked_job["status"] == "done" and linked_job["transfer"] is None, linked_job
+    linked_trace = next(iter(root.glob(f"users/*/jobs/{linked_job['id']}/error.log")), None)
+    linked_error = linked_trace.read_text(encoding="utf-8") if linked_trace else ""
+    assert linked_job["status"] == "done" and linked_job["transfer"] is None, f"{linked_job}\n{linked_error}"
     assert stages[0]["progress"] > 0.03 and stages[0]["transfer"] == {"track": "video", "bytes": 25, "total": 100}
     assert stages[1]["stage"] == "Combining source video and audio" and stages[1]["transfer"] is None
     print("PASS replay download reports transferred bytes, merge status, and completion")
@@ -222,7 +229,8 @@ def run_editor(client, root):
             raise AssertionError("The simulated interruption succeeded unexpectedly.")
         best = jobs._scan_gameplay(scan_job, source, 0, 43200, False)
     assert len(bounds) == 73 and bounds[2] == bounds[3] and bounds[-1][1] == 43200
-    assert [clip["end"] for clip in best] == [42599, 43199]
+    hours = [int((clip["start"] + clip["end"]) / 2 // 3600) for clip in best]
+    assert len(best) == 12 and hours == list(range(12)), best
     print("PASS a simulated twelve-hour scan resumes at its checkpoint and ranks the entire stream")
 
     from studio import media

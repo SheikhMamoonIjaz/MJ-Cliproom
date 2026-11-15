@@ -21,7 +21,9 @@ and [YouTube's video upload API](https://developers.google.com/youtube/data/guid
 
 ## 2. Make a batch of gameplay clips
 
-1. Open **All videos**, paste a finished stream link or choose the downloaded source.
+1. Open **All videos**, paste a finished stream link or choose a local recording. Tick the ownership or permission
+   confirmation shown under **Make clips** before processing. If this is an older job, confirm its rights from the
+   video card first.
 2. Choose **Gameplay** mode and set **How many** to `10`. Set the clip length range you want, then select **Make
    clips**.
 3. Let the source scan and render finish. Review the clip cards and open each clip to edit its title, description,
@@ -47,6 +49,10 @@ In the creator workspace's **Setup → Posting**:
 5. Choose the YouTube visibility setting. Check the queue and history in the app; cancel a queued post or retry a
    failed one from there.
 
+For creator live recording, first open **Setup → Their stream** and confirm that you own the channel's content or
+have permission to record and edit it. The server checks this before live recording, source processing, manual posting,
+and automatic posting. Older jobs without a saved confirmation pause and need an explicit confirmation before retry.
+
 The first eligible clip can be queued immediately. Later clips for the same account get a randomized gap in the
 configured range. The local queue worker checks for due posts about every 15 seconds. It runs only while MJ Cliproom's
 server process, computer, and internet connection are available; sleep, shutdown, or closing the server pauses the
@@ -60,8 +66,9 @@ revoked, reconnect the channel in **Settings → Connected apps** before retryin
 ## 4. Add background music carefully
 
 Open a clip and choose **Instrumental background music**. Upload an audio-only instrumental you own or are licensed
-to use. New music mixes start at 22%, duck more gently under prominent source audio, and use fades and a peak limiter
-so the streamer and gameplay remain clear. Adjust the track level and listen to the rendered clip before posting.
+to use. New music mixes start at 30%, duck beneath the streamer's speech and other prominent source audio, and use
+fades and a peak limiter so the streamer and gameplay remain clear. Adjust the track level and listen to the rendered
+clip before posting.
 
 The app does not fetch YouTube Shorts catalogue tracks or detect lyrics automatically. Add music from YouTube's
 Shorts catalogue inside YouTube's own creation tools, or use audio you have separately licensed. YouTube warns that
@@ -76,6 +83,9 @@ clip is short, that the streamer is credited, or that music/cropping was added d
 a Content ID claim. YouTube's reused-content monetization rules are separate from copyright and can apply even when
 you have permission. See [YouTube copyright tips](https://support.google.com/youtube/answer/12361994) and
 [channel monetization policies](https://support.google.com/youtube/answer/1311392).
+
+The rights checkbox records your own confirmation; PeakCut cannot verify ownership or grant permission on your
+behalf. If you are unsure whether a streamer's VOD, gameplay footage, or music is cleared, do not auto-post it.
 
 MJ Cliproom cannot promise that a video is copyright-safe, monetizable, or viral. Auto-post only content you have
 cleared for publication, and add your own commentary or other substantive creative contribution when appropriate.

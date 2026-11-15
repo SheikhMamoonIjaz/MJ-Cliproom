@@ -41,7 +41,10 @@ part_mb = st["upload_part_mb"]
 data = os.urandom(int(part_mb * 1024 * 1024 * 2.4))            # two full pieces and a shorter last one
 H = {"Content-Type": "application/octet-stream"}
 
-s = a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data), "options": {"max_clips": 2}, "creator": ""}).json()
+check("a source upload without rights confirmation is refused",
+      a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data)}).status_code == 400)
+rights = {"rights_cleared": True}
+s = a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data), "options": {"max_clips": 2}, "creator": "", **rights}).json()
 check("a big file is split into pieces", s.get("parts") == 3, str(s))
 part = s["part"]
 piece = lambda i: data[i * part:(i + 1) * part]                # noqa: E731
@@ -66,13 +69,13 @@ if data_dir and job.get("id"):
     check("no pieces are left behind", not list(Path(data_dir).glob("tmp/uploads/up-*")))
 check("someone else does not see my video", all(j["id"] != job.get("id") for j in b.get("/api/jobs").json()))
 limit = st["max_upload_mb"] * 1024 * 1024
-check("a file over the limit is refused before anything is sent", a.post("/api/upload/start", json={"name": "x.mp4", "size": limit + 1}).status_code == 413)
-check("a file that is not a video is refused", a.post("/api/upload/start", json={"name": "x.exe", "size": 5000}).status_code == 400)
-check("a made-up size is refused", a.post("/api/upload/start", json={"name": "x.mp4", "size": -4}).status_code == 400)
+check("a file over the limit is refused before anything is sent", a.post("/api/upload/start", json={"name": "x.mp4", "size": limit + 1, **rights}).status_code == 413)
+check("a file that is not a video is refused", a.post("/api/upload/start", json={"name": "x.exe", "size": 5000, **rights}).status_code == 400)
+check("a made-up size is refused", a.post("/api/upload/start", json={"name": "x.mp4", "size": -4, **rights}).status_code == 400)
 check("without signing in nothing can be started", httpx.post(B + "/api/upload/start", json={"name": "x.mp4", "size": 10}, headers={"Origin": B}).status_code == 401)
 big = a.put(f"/api/upload/{'0' * 24}/0", content=b"x" * ((part_mb + 9) * 1024 * 1024), headers=H)
 check("an oversized request to the pieces address is cut off", big.status_code == 413, str(big.status_code))
-c = a.post("/api/upload/start", json={"name": "y.mp4", "size": 1000}).json()
+c = a.post("/api/upload/start", json={"name": "y.mp4", "size": 1000, **rights}).json()
 check("an upload can be cancelled", a.delete(f"/api/upload/{c['id']}").status_code == 200 and a.put(f"/api/upload/{c['id']}/0", content=b"x" * 1000, headers=H).status_code == 404)
 
 print("\n%d failed" % len(fails) if fails else "\nALL PASSED")

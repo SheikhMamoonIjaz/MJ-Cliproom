@@ -304,7 +304,7 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
         return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, sidecar,
                           clip.get("crop_x", 0.5), clip.get("crop_y", 0.5), clean,
                           segments, has_audio, clip.get("crop_keyframes") or [], clip.get("music_path"),
-                          clip.get("music_volume", 0.22), clip.get("music_duck", True))
+                          clip.get("music_volume", 0.30), clip.get("music_duck", True))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -332,7 +332,7 @@ def _cut_inputs(src, start, end, segments, has_audio):
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
                sidecar, crop_x, crop_y, clean, segments, has_audio, keyframes,
-               music_path=None, music_volume=0.22, music_duck=True) -> dict:
+               music_path=None, music_volume=0.30, music_duck=True) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()

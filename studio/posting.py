@@ -57,6 +57,8 @@ def _next_slot(account_id, gap_min, gap_max, cap):
 
 
 def enqueue(job, clip, account_ids, now=False) -> list:
+    if job.get("rights_cleared") is not True:
+        raise ValueError("Confirm that you own or have permission to publish this source before posting.")
     c = creators.get(job["creator"]) or creators.DEFAULTS
     made = []
     with _lock:
@@ -83,6 +85,8 @@ def enqueue(job, clip, account_ids, now=False) -> list:
 
 def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
+    if job.get("rights_cleared") is not True:
+        return
     c = creators.get(job["creator"])
     if not c or not c["autopost"] or not c["accounts"]:
         return
@@ -105,6 +109,8 @@ def _post(p):
     clip = next((c for c in job["clips"] if c["id"] == p["clip"]), None) if job else None
     acc = accounts.get(p["account"])
     try:
+        if not job or job.get("rights_cleared") is not True:
+            raise RuntimeError("Source rights clearance is missing or was revoked. Review the source before retrying this post.")
         if not clip or clip.get("status") != "done":
             raise RuntimeError("The clip no longer exists or is not finished.")
         if not acc:
@@ -125,7 +131,10 @@ def _post(p):
     except Exception as e:  # noqa: BLE001
         p["tries"] += 1
         p["error"] = str(e)[-300:]
-        if p["tries"] < 3 and clip and acc:
+        if "Source rights clearance" in p["error"]:
+            p["status"] = "failed"
+            creators.log(p["creator"], f"Post stopped because source rights were not confirmed: {p['title']}")
+        elif p["tries"] < 3 and clip and acc:
             delay = min(3600, 600 * (2 ** max(0, p["tries"] - 1)))
             p.update(status="scheduled", due_at=time.time() + delay)
         else:
@@ -144,6 +153,16 @@ def _run():
             try:
                 with ctx.as_user(p["user"]):
                     if accounts.settings()["paused"]:
+                        continue
+                    job = jobs.get(p["job"])
+                    if not job or job.get("rights_cleared") is not True:
+                        with _lock:
+                            if p["status"] != "scheduled":
+                                continue
+                            p["status"] = "failed"
+                            p["error"] = "Source rights clearance is missing or was revoked. Review the source before retrying this post."
+                            _save()
+                        _mirror(p)
                         continue
                     with _lock:
                         if p["status"] != "scheduled":
@@ -197,6 +216,9 @@ def retry(pid):
         p = next((p for p in _mine() if p["id"] == pid), None)
         if not p or p["status"] not in ("failed", "cancelled"):
             raise ValueError("Only failed or cancelled posts can be retried.")
+        job = jobs.get(p["job"])
+        if not job or job.get("rights_cleared") is not True:
+            raise ValueError("Confirm that you own or have permission to publish this source before retrying the post.")
         p.update(status="scheduled", due_at=time.time(), tries=0, error=None)
         _save()
     _mirror(p)

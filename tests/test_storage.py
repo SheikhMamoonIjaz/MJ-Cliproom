@@ -35,7 +35,7 @@ check("a folder window is only offered on the computer PeakCut runs on", (s["loc
 # ---- a full drive is explained, not just refused
 load._state.update(disk_free=0.4, at=10 ** 12)
 load._started = True
-r = c.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}, headers=ORIGIN)
+r = c.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "rights_cleared": True}, headers=ORIGIN)
 check("a full drive says which drive, how much is left, and what to do", (r.status_code, all(x in r.json()["detail"] for x in ("almost full", "GB free", "Settings, Storage"))), (507, True))
 check("the dashboard is told too", c.get("/api/status").json()["disk_full"], True)
 load._state.update(disk_free=99.0)
