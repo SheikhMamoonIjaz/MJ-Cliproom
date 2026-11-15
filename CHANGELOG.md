@@ -2,11 +2,18 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
-## Unreleased
+## 0.10 beta (v0.10.0-beta) — 2026-11-16
 
-- Added an in-app updater for clean Git installs. It checks the configured GitHub repository, accepts fast-forward
-  updates only, installs changed Python requirements, and reports failures without showing credential-bearing
-  command output.
+- Added a first-run What’s New dialog and a [beta installation and update guide](docs/BETA_0_10.md).
+- Queue a finished gameplay video with a prompt. Review the clips or, with separate authorization, schedule
+  eligible clips for selected YouTube and Instagram accounts. Export clips to review and share manually on TikTok.
+- Added named AI profiles, active model selection, testing, and optional independent backups. A rate-limited
+  provider cools down without cycling its keys. Provider API access is separate from ChatGPT subscriptions.
+- New workspaces have no local daily post cap. Existing caps are preserved; set the local cap to 0 for unlimited
+  scheduling. Account limits and shared quotas pause affected queues.
+- Cancel, resubmit or retry posts from Home, or revoke automatic publishing from a video card.
+- The launcher verifies a fast-forward from the configured GitHub branch, with optional trusted signatures.
+  It stages dependency changes separately, applies the update after shutdown, and reopens the app in the same tab.
 - Kept uploaded videos, thumbnails, generated clips, creator settings, job history, speech data, and resumable
   download files in the selected storage folder. Updating the app does not clear or relocate that folder.
 - Added a visible link from the clipping page to the storage setting, where the active upload and media folder can be
@@ -19,5 +26,5 @@ User-facing changes to MJ Cliproom are listed here.
   has not restarted onto the matching code.
 - Kept the posting controls for direct publishing and configurable 15–20 minute scheduling. YouTube posting still
   requires a connected channel and content rights confirmation.
-- Raised the default daily post cap for new creator workspaces to 10, matching the requested 10-clip batch while
-  preserving existing creator settings.
+- Kept licensed instrumental music at a 30% starting level, with fades, ducking under prominent source audio,
+  and peak limiting. Audition the result in the editor before publishing.

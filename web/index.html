@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom</title>
+<title>MJ Cliproom · 0.10 beta</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -597,6 +597,12 @@ a.lnk{color:var(--brand-ink);text-decoration:none;font-weight:600}
 
 /* ---------- dialogs + toasts */
 dialog{border:1px solid var(--line);background:#fff;color:var(--text);border-radius:var(--r-lg);padding:0;max-width:calc(100vw - 32px)}
+dialog.release-dialog{width:min(540px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto}
+.release-dialog .dlg{width:100%;box-sizing:border-box}
+.release-dialog textarea{width:100%;min-height:6rem;resize:vertical}
+.release-dialog fieldset{border:1px solid var(--line);border-radius:var(--r-md);padding:10px;margin:8px 0 12px;min-width:0}
+.release-dialog .dlg-foot{flex-wrap:wrap}
+.release-dialog .err{overflow-wrap:anywhere}
 dialog::backdrop{background:rgba(14,12,11,.42);animation:fadein .16s ease}
 .dlg{padding:24px;width:450px;max-width:100%;display:flex;flex-direction:column;gap:14px}
 .dlg h2{font-size:18px;font-weight:600;color:var(--brand-ink)}
@@ -875,6 +881,7 @@ dialog[open]{animation:fadein .16s ease}
 </div>
 <dialog id="clipdlg"></dialog>
 <dialog id="formdlg"></dialog>
+<dialog id="releasedlg" class="release-dialog" aria-labelledby="releaseTitle"></dialog>
 <input type="file" id="file" accept="video/*" multiple hidden>
 <div id="toasts" role="status" aria-live="polite"></div>
 <div class="pop" id="bellpop" role="dialog" aria-label="Notifications" hidden></div>
@@ -1250,7 +1257,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.10 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1302,35 +1309,101 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
+const RELEASE = "0.10 beta";
+const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_10";
+function whatsNew(first = false) {
+  const d = $("#releasedlg");
+  if (d.open) return;
+  d.innerHTML = `<form method="dialog" class="dlg">
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.10 beta</h2>
+    <ul><li>Queue clips from a prompt. Review them yourself or authorize posting to selected YouTube or Instagram accounts.</li>
+    <li>Save AI profiles with their own models and choose which services may act as backups.</li>
+    <li>Queue without a local daily cap by default. Platform limits pause the affected queue.</li>
+    <li>Apply verified updates through the launcher and return to the app after restart.</li></ul>
+    <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
+      <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Install and update guide</a></p>
+    <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
+  d.onclose = () => {
+    try { localStorage.setItem(whatsNewKey(), "1"); } catch {}
+    if (first && S.status.tour && !$("#formdlg").open) startTour();
+  };
+  d.showModal();
+}
+function promptQueue(job) {
+  if (S.status.version !== RELEASE) return toast("Restart MJ Cliproom to use the prompt queue.", "bad");
+  if (!S.status.ai?.ready) return toast("Set up an AI profile in Settings before queuing a prompt.", "bad");
+  const d = $("#releasedlg");
+  if (d.open) return;
+  const destinations = S.accounts.filter(a => ["youtube", "instagram"].includes(a.platform)), c = job?.creator || creatorId() || "";
+  const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2, "0")).join("");
+  d.onclose = null;
+  d.innerHTML = `<form id="promptform" class="dlg" data-request="${requestId}">
+    <h2 id="releaseTitle">Queue clips with a prompt</h2>
+    <p class="help">Use one finished gameplay video. For TikTok, download and review the finished clip before sharing. Your prompt and relevant transcript excerpts go to the selected AI service or an enabled backup. The queue runs while the server is online.</p>
+    <label class="f">Source video URL<input name="url" type="url" maxlength="500" value="${esc(job?.source?.url || $("#url")?.value || "")}" required autofocus></label>
+    <label class="f">What should the clips highlight?<textarea name="prompt" maxlength="1200" required placeholder="Find funny reactions with enough setup to understand the joke.">${esc(job?.automation?.prompt || "")}</textarea></label>
+
+    <label class="f">Creator workspace<select name="creator"><option value="">All videos</option>${S.creators.map(row => `<option value="${esc(row.id)}" ${row.id === c ? "selected" : ""}>${esc(row.name)}</option>`).join("")}</select></label>
+    <label class="ck"><input type="checkbox" name="rights" required> I own this source or have permission to download and edit it.</label>
+    <fieldset><legend>Automatic posting (optional)</legend>
+      <p class="help">Leave channels unchecked to review every clip yourself. Eligible clips use the workspace’s score and spacing. Instagram uses the connected account’s audience settings.</p>
+      ${destinations.length ? destinations.map(a => `<label class="ck"><input type="checkbox" name="account" value="${esc(a.id)}"> ${esc(a.label)} · ${esc(a.name)}</label>`).join("") : '<p class="hint">Connect YouTube or Instagram under Settings → Connected apps. Download clips to share to TikTok after review.</p>'}
+      ${destinations.some(a => a.platform === "youtube") ? `<label class="f">YouTube visibility<select name="visibility"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label>` : ""}
+      ${destinations.length ? '<label class="ck"><input type="checkbox" name="publish"> I have permission to publish this source and authorize MJ Cliproom to post eligible clips to the selected channels.</label>' : ""}
+    </fieldset>
+    <p class="err" role="alert" hidden></p>
+    <div class="dlg-foot"><button type="button" class="btn" data-act="release-close">Close</button><button class="btn primary">Queue clips</button></div></form>`;
+  d.showModal();
+}
+async function submitPrompt(form) {
+  const values = new FormData(form), error = $(".err", form), submit = $('button:not([type="button"])', form);
+  error.hidden = true;
+  submit.disabled = true;
+  try {
+    await send("/api/automation", {request_id: form.dataset.request, url: values.get("url"), prompt: values.get("prompt"),
+      creator: values.get("creator"), options: {mode:"gameplay"}, rights_cleared: values.has("rights"),
+      accounts: values.getAll("account"), visibility: values.get("visibility") || "private", publish_authorized: values.has("publish")});
+    $("#releasedlg").close(); toast("Prompt added to the clipping queue.", "ok"); await tick();
+  } catch (e) { error.textContent = e.message; error.hidden = false; }
+  finally { submit.disabled = false; }
+}
 function updateHow() {
-  const up = S.status?.update, d = $("#formdlg"); if (!up || d.open) return;
-  const job = S.status?.update_job || {}, ready = job.state !== "error" && (up.restart || job.state === "done");
-  d.innerHTML = `<form method="dialog" class="dlg upd"><h2>${job.state === "error" ? "Update needs attention" : ready ? "The new version is ready" : "Update MJ Cliproom"}</h2>
-    <p class="help">${job.state === "error" ? "The update did not finish cleanly. Follow the message below before restarting." : ready ? "The new files are in place. Close MJ Cliproom and start it again to use them." : `You're on <b>${esc(up.current)}</b>. ${up.behind ? `${up.behind} update${up.behind === 1 ? " has" : "s have"} been added since.` : "A newer version is available."}`} Updating changes the app files only. Your settings, uploaded videos, thumbnails, clips, history, download cache and saved jobs stay in the selected storage folder. Incomplete work resumes after restart when its source allows it.</p>
-    ${job.state === "error" ? `<div class="note"><span>${esc(job.message || "The update failed. Your saved data was left in place.")}</span></div>` : ""}
+  const up = S.status?.update, d = $("#releasedlg"); if (!up || d.open) return;
+  const job = S.status?.update_job || {}, busy = ["running", "restarting"].includes(job.state);
+  d.innerHTML = `<form method="dialog" class="dlg"><h2 id="releaseTitle">Update MJ Cliproom</h2>
+    <p class="help">The launcher checks the configured GitHub branch and applies a fast-forward after a clean server stop. Saved media, cache and settings stay in the selected folder.</p>
+    ${job.message ? `<p role="status">${esc(job.message)}</p>` : ""}
     ${up.notes.length ? `<ul>${up.notes.map(n => `<li>${esc(n.title)} <small>${esc(n.date)}</small></li>`).join("")}</ul>` : ""}
-    ${ready ? "" : `<p class="sub">The app checks for a clean Git checkout and only applies a fast-forward from its configured GitHub repository. It installs changed Python requirements and leaves the storage folder untouched. <a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">Review every change on GitHub</a>.</p>`}
-    <div class="dlg-foot">${ready ? `<button class="btn" value="ok" autofocus>Got it</button>` : `<button class="btn" value="later">Later</button><button type="button" class="btn primary" data-act="update-now" ${job.state === "running" ? "disabled" : ""}>${job.state === "running" ? "Updating…" : job.state === "error" ? "Retry update" : "Download and install"}</button>`}</div></form>`;
-  d.onclose = () => { if (d.returnValue === "later") { try { localStorage.setItem("peakcut_update_seen", up.latest); } catch {} drawShell(); } };
-  d.returnValue = "ok"; d.showModal();
+    <p><a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">Review changes</a> · <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Manual update guide</a></p>
+    <div class="dlg-foot"><button class="btn" value="later">Later</button><button type="button" class="btn primary" data-act="update-now" ${busy || up.restart ? "disabled" : ""}>Install and restart</button></div></form>`;
+  d.onclose = null;
+  d.showModal();
 }
 let watchingUpdate = false;
-async function watchUpdate() {
+async function watchUpdate(before) {
   if (watchingUpdate) return;
   watchingUpdate = true;
+  let target = "";
   try {
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 540; i++) {
       await new Promise(resolve => setTimeout(resolve, 2000));
-      try { S.status.update_job = await api("/api/update"); } catch { continue; }
-      drawShell();
-      if (S.status.update_job.state !== "running") {
-        try { S.status = await api("/api/status"); } catch {}
+      try {
+        const health = await api("/healthz", {cache:"no-store"});
+        if (health.boot !== before.boot && health.app === "mj-cliproom") {
+          if (!health.update_install_failed && health.commit !== before.commit && (!target || health.commit === target)) {
+            location.reload(); return;
+          }
+          S.status = await api("/api/status"); drawShell();
+          toast("The launcher restarted the previous version because the update could not be installed. Check its console.", "bad"); return;
+        }
+        const job = S.status.update_job = await api("/api/update");
+        target = job.target || target;
         drawShell();
-        toast(S.status.update_job.state === "done" ? "Update downloaded. Restart MJ Cliproom when you're ready; saved data stays in place." : S.status.update_job.message || "The update needs attention.", S.status.update_job.state === "done" ? "ok" : "bad");
-        return;
-      }
+        if (job.state === "error") { toast(job.message, "bad"); return; }
+      } catch { continue; }  // the supervised server is briefly offline
     }
-    toast("The update is still running. Check the update message again shortly.");
+    toast("The restarted version has not responded. Check the launcher window.", "bad");
   } finally { watchingUpdate = false; }
 }
 function greeting() { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
@@ -1371,7 +1444,8 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   if (S.view === "usage") sub = "What the AI has been used for.";
   if (S.view === "overview") sub = `${greeting()}. ${S.creators.length} creator${S.creators.length === 1 ? "" : "s"}${recording ? `, ${recording} recording now` : ""}.`;
   if (S.view === "library") sub = "Every video and recording, across all creators.";
-  if (S.view === "settings") sub = (S.status.accounts === false ? "Your AI key and connected apps." : "Your profile, security and connected apps.");
+  if (S.view === "settings") sub = (S.status.accounts === false ? "Your AI profiles and connected apps." : "Your profile, security and connected apps.");
+  if (S.view === "settings" && st.version) act = `<button class="btn" data-act="whats-new">${esc(st.version)} · What’s new</button>`;
   let pic = "", subHtml = null, tabs = "";
   if (c) {
     title = c.name;
@@ -1394,14 +1468,14 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   let upSeen = "";
   try { upSeen = localStorage.getItem("peakcut_update_seen") || ""; } catch {}
   const uj = S.status.update_job || {};
-  const upBar = uj.state === "running" ? `<div class="vb" role="status">${ic("up")}<span><b>Updating MJ Cliproom.</b> ${esc(uj.message || "Your data and saved jobs are safe.")}</span></div>`
+  const upBar = ["running", "restarting"].includes(uj.state) ? `<div class="vb" role="status">${ic("up")}<span><b>Updating MJ Cliproom.</b> ${esc(uj.message || "Your data and saved jobs are safe.")}</span></div>`
     : up && (up.latest !== upSeen || up.restart) ? `<div class="vb" role="status">${ic("up")}<span>${uj.state === "error" ? `<b>Update needs attention.</b> ${esc(uj.message || "Retry the update.")}` : up.restart || uj.state === "done" ? "<b>The new version is downloaded.</b> Restart MJ Cliproom to use it; your data and saved jobs stay in place." : `A new version of MJ Cliproom is out${up.behind ? `: <b>${up.behind} update${up.behind === 1 ? "" : "s"}</b> since yours` : ""}.`}</span>
     <button class="btn sm primary" data-act="updhow">${uj.state === "error" ? "Retry update" : up.restart || uj.state === "done" ? "What's new" : "Update now"}</button>${up.restart || uj.state === "done" ? "" : `<button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button>`}</div>` : "";
   const toolBar = S.status.no_ffmpeg ? `<div class="vb" role="alert">${ic("warn")}<span><b>MJ Cliproom can't make clips yet: ffmpeg isn't installed on this computer.</b> Open a terminal, run <code>winget install Gyan.FFmpeg</code> (Mac: <code>brew install ffmpeg</code>, Linux: <code>sudo apt install ffmpeg</code>), then close MJ Cliproom and start it again.</span></div>` : "";
   const rightsBar = !rightsGateReady() ? `<div class="vb" role="alert">${ic("warn")}<span><b>Restart MJ Cliproom to enable clipping and posting.</b> This page is newer than the running app. Close MJ Cliproom completely, start it again, then reload this page.</span></div>` : "";
   const aiBar = !toolBar && S.status.ai?.problem && me?.is_admin && S.view !== "settings" ? `<div class="vb" role="status">${ic("warn")}<span><b>The AI isn't answering.</b> ${esc(S.status.ai.problem)} Until then, clips are picked by loudness.</span><button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">Open AI settings</button></div>` : "";
   const diskBar = !toolBar && S.status.disk_full && S.view !== "settings" ? `<div class="vb" role="alert">${ic("warn")}<span><b>The drive MJ Cliproom saves to is almost full, so it can't take new videos.</b> Free up space on it, or move MJ Cliproom's folder to a bigger drive.</span>${me?.is_admin ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="storage">Open Storage</button>` : ""}</div>` : "";
-  put($("#vbanner"), toolBar ? toolBar : diskBar ? diskBar : rightsBar ? rightsBar : aiBar ? aiBar : upBar ? upBar : me && me.verified === false ? `<div class="vb" role="status">${ic("warn")}<span>Confirm your email to start clipping. We sent a link to <b>${esc(me.email)}</b>.</span><button class="btn sm" data-act="resendverify">Send a new link</button></div>`
+  put($("#vbanner"), toolBar ? toolBar : diskBar ? diskBar : rightsBar ? rightsBar : upBar ? upBar : aiBar ? aiBar : me && me.verified === false ? `<div class="vb" role="status">${ic("warn")}<span>Confirm your email to start clipping. We sent a link to <b>${esc(me.email)}</b>.</span><button class="btn sm" data-act="resendverify">Send a new link</button></div>`
     : kk && kk.ready === false && S.view !== "usage" ? `<div class="vb" role="status">${ic("bolt")}<span>${me?.is_admin ? "Add your AI key to let the AI pick clips and write titles. Until then, clips are picked by loudness." : "The AI isn't set up on this server yet, so clips are picked by loudness."}</span>${me?.is_admin && S.view !== "settings" ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">${ic("plus")}Add AI key</button>` : ""}</div>` : "");
   put($("#tpic"), pic); $("#tpic").classList.toggle("live", !!(c && (c.live_job || liveOn(c).length)));
   put($("#utabs"), tabs); moveInd(); $(".topbar").classList.toggle("tabbed", !!tabs);
@@ -1470,6 +1544,7 @@ function drawAdd(variant) {
       <button type="button" class="chip" data-act="pickfile">${ic("up")}Upload video</button>
       <button type="button" class="chip" data-act="replays">Replay Picker</button>
       <button type="button" class="chip" data-act="clipsets">Clip Sets</button>
+      <button type="button" class="chip" data-act="prompt-queue">Queue with a prompt</button>
       ${c ? "" : picker("o_creator", "File under creator", [{v:"", label:"No creator", icon:"user"}, ...S.creators.map(x => ({v:x.id, label:x.name, img:x.profile?.pic && x.profile.channel === x.channel ? avatarUrl(x) : ""}))], "")}
       <label class="chip">Mode<select id="o_mode" aria-label="Clipping mode">
         <option value="gameplay">Gameplay</option>
@@ -1898,6 +1973,9 @@ function jobHtml(j) {
         <label class="selck" title="Select this video and its clips"><input type="checkbox" data-sel="j:${j.id}" ${sel().has("j:" + j.id) ? "checked" : ""} aria-label="Select this video"></label>`}</div></div>
     ${progress ? `<div class="bar${progress.percent === null ? " pending" : ""}" aria-hidden="true"><i ${progress.percent === null ? "" : 'style="width:' + progress.percent + '%"'}></i></div><p class="sub">${esc(progress.label)}</p>` : ""}
     ${j.rights_cleared ? `<p class="hint" style="margin:4px 0">Source rights confirmed for this job.</p>` : `<div class="card" style="padding:12px;margin:8px 0;border-color:var(--warn)"><label class="ck"><input type="checkbox" id="rights-${esc(j.id)}"> I own this source or have permission to download, edit and publish it.</label><p class="hint" style="margin:5px 0">Required before you can make, edit or post clips from this existing job.</p><button class="btn sm" style="margin-top:8px" data-act="confirmrights" data-j="${esc(j.id)}">Confirm rights for this source</button></div>`}
+    ${j.automation ? `<div class="row" style="margin:8px 0;flex-wrap:wrap"><span class="hint">Prompt: ${esc(j.automation.prompt)}</span>
+      ${j.automation.accounts?.length && !j.automation.revoked ? `<button type="button" class="btn sm" data-act="revoke-prompt" data-j="${esc(j.id)}">Stop auto-posting this source</button>` : ""}
+      ${!busy ? `<button type="button" class="btn sm" data-act="prompt-queue" data-j="${esc(j.id)}">Resubmit with a prompt</button>` : ""}</div>` : ""}
     ${j.can_schedule_source_deletion ? '<button class="btn sm" style="margin:4px 0" data-act="sourcecleanup" data-enabled="true" data-j="' + j.id + '">Delete source after clips finish</button>' : ""}
     ${j.can_cancel_source_deletion ? '<button class="btn sm" style="margin:4px 0" data-act="sourcecleanup" data-enabled="false" data-j="' + j.id + '">Cancel scheduled deletion</button>' : ""}
     ${j.status === "done" && !j.clips.length ? `<p class="sub">${esc(j.stage)}</p>` : ""}
@@ -2030,7 +2108,7 @@ function drawCreatorForm() {
         <label class="f">Only auto-post clips scoring at least<input data-k="post_min_score" type="number" min="0" max="100" value="${c.post_min_score}"></label>
         <label class="f">Minimum minutes between posts<input data-k="post_gap_min" type="number" min="5" max="1440" value="${c.post_gap_min}"></label>
         <label class="f">Maximum minutes between posts<input data-k="post_gap_max" type="number" min="5" max="1440" value="${c.post_gap_max ?? c.post_gap_min}"><small>Queued clips are spaced by a random interval in this range while the app is running.</small></label>
-        <label class="f">Most posts per account per day<input data-k="daily_cap" type="number" value="${c.daily_cap}"></label>
+        <label class="f">Local daily limit per account<input data-k="daily_cap" type="number" min="0" max="1000000" value="${c.daily_cap}"><small>0 means unlimited locally. Platform quotas still apply.</small></label>
         <label class="f">Who can see posts (YouTube, TikTok)<select data-k="privacy">${opts({public:"Public", unlisted:"Unlisted", private:"Private"}, c.privacy)}</select></label>
         <p class="hint span">Only automate posts for content and music you own or are authorized to use. Clipping, credit, cropping, or adding music does not by itself prevent copyright claims or reused-content restrictions.</p>
         <label class="f">Campaign pay per 1,000 views ($)<input data-k="rate_per_1k" type="number" step="0.1" min="0" value="${c.rate_per_1k}"></label>
@@ -2089,7 +2167,7 @@ function drawOverview() {
   const sum = k => o.creators.reduce((a, r) => a + r[k], 0);
   const d14 = k => (o.daily || []).reduce((a, d) => a + d[k], 0);
   const state = r => r.state === "recording" ? `<span class="pill live"><span class="dot"></span>Recording</span>` : r.state === "waiting" ? `<span class="pill warn">Waiting for live</span>` : `<span class="pill">Idle</span>`;
-  const pst = p => p.status === "posted" ? `<span class="pill ok">Posted</span>` : p.status === "failed" ? `<span class="pill bad">Failed</span>` : p.status === "posting" ? `<span class="pill warn">Posting now</span>` : `<span class="pill warn">${clock(p.due_at)}</span>`;
+  const pst = p => p.status === "posted" ? `<span class="pill ok">Posted</span>` : p.status === "failed" ? `<span class="pill bad">Failed</span>` : p.status === "posting" ? `<span class="pill warn">Posting now</span>` : p.status === "cancelled" ? `<span class="pill">Cancelled</span>` : `<span class="pill warn">${clock(Math.max(p.due_at, o.cooldowns?.find(c => c.account === p.account)?.until || 0))}</span>`;
   const steps = nextSteps(o);
   put(box, `<div class="tiles">
       <div class="tile"><i>${ic("radio")}</i><b>${o.recording}</b><span>Recording now</span></div>
@@ -2112,9 +2190,10 @@ function drawOverview() {
       : `<div class="empty"><img src="/brand/mj-mark.svg" alt=""><b>No creators yet</b>Add one to give each streamer their own workspace.</div>`}</div>
     <div class="card"><div class="card-head"><div><h2>Post queue</h2><p class="sub">${o.paused ? "Paused. Recording and clipping carry on; nothing is posted." : "Queued clips go out at their scheduled time."}</p></div>
         <button class="btn ${o.paused ? "primary" : ""}" data-act="pause">${ic(o.paused ? "play" : "pause")}${o.paused ? "Resume posting" : "Pause all posting"}</button></div>
+      ${(o.cooldowns || []).map(c => `<p class="note" role="status">${esc(c.name)}: The platform has paused posting until ${esc(when(c.until))}.</p>`).join("")}
       ${o.posts.length ? `<div class="scroll"><table class="stack"><tr><th>When</th><th>Clip</th><th>Creator</th><th>Account</th><th class="num">Views</th><th></th></tr>
       ${o.posts.map(p => `<tr><td data-l="Status">${pst(p)}</td><td data-l="Clip" class="c-main">${p.url ? `<a class="lnk" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>` : esc(p.title)}${p.error ? `<div class="err" style="margin:2px 0 0">${esc(p.error)}</div>` : ""}</td><td data-l="Creator">${esc(p.creator_name || "None")}</td><td data-l="Account">${esc(p.account_name)}</td><td data-l="Views" class="num">${p.views ?? "–"}</td>
-        <td class="c-act" style="text-align:right">${p.status === "scheduled" ? `<button class="btn sm" data-act="pcancel" data-id="${p.id}">Cancel</button>` : p.status === "failed" ? `<button class="btn sm" data-act="pretry" data-id="${p.id}">Retry</button>` : ""}</td></tr>`).join("")}</table></div>`
+        <td class="c-act" style="text-align:right">${p.status === "scheduled" ? `<button class="btn sm" data-act="pcancel" data-id="${p.id}">Cancel</button>` : ["failed", "cancelled"].includes(p.status) ? `<button class="btn sm" data-act="pretry" data-id="${p.id}">${p.status === "cancelled" ? "Resubmit" : "Retry"}</button>` : ""}</td></tr>`).join("")}</table></div>`
       : `<p class="help">Nothing queued or posted yet.</p>`}</div>`);
 }
 
@@ -2172,7 +2251,7 @@ const setTabs = () => [
   ["apps", "Connected apps", "plug", "Where your clips get posted"],
   ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos and clips are kept"]] : [])];
 function aiHints() {
-  const k = S.ai, sel = $("#ai_provider"); if (!k || !sel) return;
+  const k = S.aiEdit, sel = $("#ai_provider"); if (!k || !sel) return;
   const pv = k.providers.find(x => x.id === sel.value) || k.providers[0], same = pv.id === k.provider;
   $("#ai_key").placeholder = same && k.has_key ? `Saved${k.key_hint ? ", ends in " + k.key_hint : ""}. Paste a new key to replace it` : pv.needs_key ? "Paste your key" : "Not needed";
   $("#ai_keyhint").innerHTML = pv.key_url ? `${pv.needs_key ? "Get a key at" : "Set it up at"} <a href="${esc(pv.key_url)}" target="_blank" rel="noopener">${esc(pv.key_url.replace("https://", ""))}</a>. The key stays on this server and is never shown again.` : "The key stays on this server and is never shown again.";
@@ -2191,17 +2270,27 @@ async function drawSettings() {
   const body = $("#setbody");
   try {
     if (tab === "ai") {
-      const k = S.ai = await api("/api/ai");
+      const data = S.ai = await api("/api/ai");
+      const k = S.aiEdit = S.aiProfile === "new" ? {id:"new", name:"", provider:"gemini", models:[], base_url:"", fallback:false}
+        : data.profiles.find(p => p.id === S.aiProfile) || data;
+      k.providers = data.providers;
+      S.aiProfile = k.id;
       body.innerHTML = `<section class="set-sec"><h2>AI</h2><p class="help">MJ Cliproom uses an AI model to pick the moments worth clipping and to write hooks, titles and captions. Use your own key from any of these services. You pay that service directly. Without a key, clips are picked by loudness.</p>
+          <label class="f">Saved profile<select id="ai_profile">${data.profiles.map(p => `<option value="${esc(p.id)}" ${p.id === k.id ? "selected" : ""}>${esc(p.name)}${p.id === data.id ? " (active)" : ""}</option>`).join("")}<option value="new" ${k.id === "new" ? "selected" : ""}>Add a profile…</option></select></label>
           <div class="ai-state">${k.ready ? `<span class="pill ok">${ic("check")}Ready</span><span class="sub">${esc(k.label)} · ${esc(k.models[0] || "")}</span>` : `<span class="pill warn">Not set up</span><span class="sub">Choose a service, paste your key and pick a model.</span>`}</div>
           <div class="ai-form">
+            <label class="f">Profile name<input id="ai_name" maxlength="64" value="${esc(k.name)}"></label>
             <label class="f">AI service<select id="ai_provider">${k.providers.map(x => `<option value="${esc(x.id)}" ${x.id === k.provider ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select></label>
             <label class="f">Key<input id="ai_key" type="password" autocomplete="off" spellcheck="false"><span class="hint" id="ai_keyhint"></span></label>
             <label class="f" id="ai_basewrap">Address<input id="ai_base" value="${esc(k.base_url || "")}" spellcheck="false"><span class="hint">Use the OpenAI-compatible address supplied by your provider.</span></label>
             <label class="f">Model<span class="with"><input id="ai_model" list="ai_models" value="${esc(k.models.join(", "))}" spellcheck="false"><button class="btn" type="button" data-act="aimodels">Find models</button></span>
               <datalist id="ai_models"></datalist><span class="hint">A fast, inexpensive model is the right choice. Add a second one after a comma to fall back on.</span></label>
           </div>
-          <div class="row" style="margin-top:20px"><button class="btn primary" data-act="aisave">Save and test</button>${k.ready ? `<button class="btn" data-act="aitest">Test again</button>` : ""}</div></section>`;
+          <label class="ck"><input type="checkbox" id="ai_fallback" ${k.fallback ? "checked" : ""}> Allow this independent provider as a backup during throttling or outages</label>
+          <p class="hint">Backups can receive your transcript and incur API charges. MJ Cliproom pauses a throttled service and won’t switch keys within that service. ChatGPT subscriptions are separate.</p>
+          <div class="row" style="margin-top:20px;flex-wrap:wrap"><button class="btn primary" data-act="aisave">Save profile</button>${k.ready ? `<button class="btn" data-act="aitest">Test profile</button>` : ""}
+            ${k.id !== data.id && k.id !== "new" && k.ready ? '<button class="btn" data-act="ai-activate">Use as active</button>' : ""}
+            ${k.id !== "new" && data.profiles.length > 1 ? '<button class="btn danger" data-act="ai-delete">Delete profile</button>' : ""}</div></section>`;
       aiHints();
     }
     if (tab === "profile") {
@@ -2440,7 +2529,10 @@ function loop() {
 }
 
 /* ============================================================ actions */
-document.addEventListener("submit", e => { if (e.target.id === "addform") { e.preventDefault(); makeClips(); } });
+document.addEventListener("submit", e => {
+  if (e.target.id === "addform") { e.preventDefault(); makeClips(); }
+  if (e.target.id === "promptform") { e.preventDefault(); submitPrompt(e.target); }
+});
 $("#file").addEventListener("change", e => {
   const chosen = [...e.target.files], pendingId = S.resumeUploadId; S.resumeUploadId = null;
   attach(chosen);
@@ -2459,7 +2551,8 @@ document.addEventListener("drop", e => { const a = $(".composer"); if (a) { e.pr
 document.addEventListener("change", async e => {
   const t = e.target;
   if (t.id === "o_mode") return drawAtt();
-  if (t.id === "ai_provider") { $("#ai_models").innerHTML = ""; if (S.ai && t.value !== S.ai.provider) { $("#ai_model").value = ""; $("#ai_base").value = ""; } return aiHints(); }
+  if (t.id === "ai_profile") { S.aiProfile = t.value; return drawSettings(); }
+  if (t.id === "ai_provider") { $("#ai_models").innerHTML = ""; $("#ai_key").value = ""; if (S.aiEdit && t.value !== S.aiEdit.provider) { $("#ai_model").value = ""; $("#ai_base").value = ""; } return aiHints(); }
   if (t.dataset.sel) {
     const k = t.dataset.sel;
     if (t.checked) sel().add(k); else sel().delete(k);
@@ -2494,10 +2587,23 @@ document.addEventListener("click", async e => {
       await tick(); toast("Source rights confirmation saved", "ok"); return;
     }
     if (a === "go") { closePops(); return go(d.v, d.tab); }
+    if (a === "whats-new") { closePops(); return whatsNew(); }
+    if (a === "release-close") return $("#releasedlg").close();
+    if (a === "prompt-queue") return promptQueue(d.j ? jobOf(d.j) : null);
+    if (a === "revoke-prompt") {
+      if (!await ask("Stop automatic publishing?", "This cancels waiting automatic posts for this source. Published videos stay posted.", "Stop auto-posting")) return;
+      await send("/api/jobs/" + encodeURIComponent(d.j) + "/stop-auto-post", {});
+      toast("Automatic publishing stopped for this source.", "ok"); return tick();
+    }
+    if (a === "ai-activate" || a === "ai-delete") {
+      if (a === "ai-delete" && !await ask("Delete this AI profile?", "This removes its saved model choices and key.", "Delete profile", true)) return;
+      const ai = await send("/api/ai/profiles/" + encodeURIComponent(S.aiProfile) + "/" + (a === "ai-delete" ? "delete" : "activate"));
+      S.aiProfile = ai.id; S.status = await api("/api/status"); drawShell(); return drawSettings();
+    }
     if (a === "aimodels") {
       b.disabled = true;
       try {
-        const r = await send("/api/ai/models", {provider: $("#ai_provider").value, base_url: $("#ai_base").value, key: $("#ai_key").value});
+        const r = await send("/api/ai/models", {provider: $("#ai_provider").value, base_url: $("#ai_base").value, key: $("#ai_key").value, profile_id:S.aiProfile});
         $("#ai_models").innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join("");
         toast(r.models.length ? `${r.models.length} models found. Click the model box to pick one.` : "The service listed no models. Type the model yourself.", r.models.length ? "ok" : "");
         if (r.models.length) $("#ai_model").focus();
@@ -2507,12 +2613,16 @@ document.addEventListener("click", async e => {
     if (a === "aisave" || a === "aitest") {
       b.disabled = true;
       try {
-        if (a === "aisave") await send("/api/ai", {provider: $("#ai_provider").value, models: $("#ai_model").value, base_url: $("#ai_base").value, key: $("#ai_key").value}, "PUT");
-        let ok = null, why = "";
-        try { ok = await send("/api/ai/test"); } catch (err) { why = err.message; }
-        S.status = await api("/api/status"); drawShell(); await drawSettings();
-        if (ok) toast(`Saved. ${ok.model} answered, so the AI is ready.`, "ok");
-        else toast(`Saved, but the test failed. ${why}`, "bad");
+        if (a === "aisave") {
+          const saved = await send("/api/ai", {profile_id:S.aiProfile, name:$("#ai_name").value,
+            provider: $("#ai_provider").value, models: $("#ai_model").value, base_url: $("#ai_base").value,
+            key: $("#ai_key").value, fallback:$("#ai_fallback").checked}, "PUT");
+          if (S.aiProfile === "new") S.aiProfile = saved.profiles.at(-1).id;
+          S.status = await api("/api/status"); drawShell(); await drawSettings(); toast("AI profile saved.", "ok");
+        } else {
+          const ok = await send("/api/ai/test", {profile_id:S.aiProfile});
+          toast(`${ok.model} answered. The saved AI profile works.`, "ok");
+        }
       } finally { b.disabled = false; }
       return;
     }
@@ -2683,10 +2793,11 @@ document.addEventListener("click", async e => {
       if (!rightsGateReady()) return toast("Restart MJ Cliproom before updating this server.", "bad");
       b.disabled = true; b.textContent = "Starting…";
       try {
+        const previous = await api("/healthz", {cache:"no-store"});
         S.status.update_job = await send("/api/update", {});
-        $("#formdlg")?.close(); drawShell();
-        toast("Update started. This can take a few minutes; saved media and cache stay in place.");
-        watchUpdate();
+        $("#releasedlg")?.close(); drawShell();
+        toast("Update started. The page will reload after the launcher restarts the server.");
+        watchUpdate(previous);
       } catch (err) { b.disabled = false; b.textContent = "Retry update"; toast(err.message, "bad"); }
       return;
     }
@@ -2803,8 +2914,10 @@ document.addEventListener("click", async e => {
     if (a === "postnow" || a === "postqueue") {
       const accs = $$("#clipdlg [data-pacc]:checked").map(i => i.value);
       if (!accs.length) return toast("Tick at least one account first.", "bad");
-      if (a === "postnow" && !await ask("Post now?", `This clip goes to ${accs.length} account${accs.length > 1 ? "s" : ""} straight away.`, "Post now")) return;
-      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow"});
+      const needsPermission = !!jobOf(D.jid)?.automation;
+      if (needsPermission && !await ask("Confirm publishing permission", "Confirm you own this clip or have permission to publish it to the selected accounts.", a === "postnow" ? "Confirm and post now" : "Confirm and queue")) return;
+      if (!needsPermission && a === "postnow" && !await ask("Post now?", `This clip goes to ${accs.length} account${accs.length > 1 ? "s" : ""} straight away.`, "Post now")) return;
+      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow", publish_authorized:needsPermission});
       toast(a === "postnow" ? "Posting now" : "Added to the queue", "ok"); return tick();
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }
@@ -2832,7 +2945,10 @@ $("#main").addEventListener("scroll", () => $(".topbar").classList.toggle("stuck
     if (link) { sessionStorage.removeItem("peakcut_link"); go("overview"); $("#url").value = link; onLink($("#url")); $("#url").focus(); toast("Your link is ready. Press Make clips.", "ok"); }
   } catch {}
   loop();
-  if (S.status.tour && !$("#formdlg").open) setTimeout(startTour, 500);   // once, the first time someone signs in
+  let seenRelease = false;
+  try { seenRelease = !!localStorage.getItem(whatsNewKey()); } catch {}
+  if (S.status.version === RELEASE && !seenRelease) whatsNew(true);
+  else if (S.status.tour && !$("#formdlg").open) setTimeout(startTour, 500);
   checkNew(true);
   setInterval(async () => { try { S.status = await api("/api/status"); drawShell(); if (S.view === "overview") drawOverview(); checkNew(); } catch {} }, 15000);
 })();

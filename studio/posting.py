@@ -16,6 +16,44 @@ try:
 except ValueError:
     _posts = []
 
+_LIMIT_FILE = config.DATA_DIR / "post-cooldowns.json"
+try:
+    _limits = json.loads(_LIMIT_FILE.read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _limits = {}
+
+
+def blocked_until(platform, account=None):
+    with _lock:
+        return max(0, _limits.get(platform, 0) or 0, _limits.get(f"{platform}:{account}", 0) or 0)
+
+
+def _record_limit(platform, error, account=None):
+    # Shared project/API limits block all accounts; a documented account limit blocks that account
+    # across users. Neither case changes an account or credential on any queued post.
+    with _lock:
+        scope = f"{platform}:{account}" if error.account_only and account else platform
+        until = max(_limits.get(scope, 0), time.time() + error.delay)
+        _limits[scope] = until
+        tmp = _LIMIT_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_limits), encoding="utf-8")
+        tmp.replace(_LIMIT_FILE)
+        for user in {p["user"] for p in _posts if p["platform"] == platform}:
+            ctx.bump(user)
+        return until
+
+
+_restart_pending = False
+
+
+def prepare_restart():
+    global _restart_pending
+    with _lock:
+        if any(p["status"] == "posting" for p in _posts):
+            return False
+        _restart_pending = True
+        return True
+
 
 def _mine() -> list:
     u = ctx.uid()
@@ -48,6 +86,8 @@ def _next_slot(account_id, gap_min, gap_max, cap):
     mine = [p for p in _mine() if p["account"] == account_id and p["status"] in OPEN + ("posted",)]
     gap = random.randint(int(gap_min), max(int(gap_min), int(gap_max)))
     t = max(time.time(), max((p.get("posted_at") or p["due_at"] for p in mine), default=0) + gap * 60)
+    if not cap:
+        return t
     for _ in range(30):
         if sum(1 for p in mine if _day(p.get("posted_at") or p["due_at"]) == _day(t)) < cap:
             break
@@ -56,7 +96,7 @@ def _next_slot(account_id, gap_min, gap_max, cap):
     return t
 
 
-def enqueue(job, clip, account_ids, now=False) -> list:
+def enqueue(job, clip, account_ids, now=False, automatic=False) -> list:
     if job.get("rights_cleared") is not True:
         raise ValueError("Confirm that you own or have permission to publish this source before posting.")
     c = creators.get(job["creator"]) or creators.DEFAULTS
@@ -67,14 +107,15 @@ def enqueue(job, clip, account_ids, now=False) -> list:
             if not acc:
                 continue
             if any(p["job"] == job["id"] and p["clip"] == clip["id"] and p["account"] == aid
-                   and p["status"] in OPEN + ("posted",) for p in _mine()):
+                   and p["status"] in (OPEN + ("posted", "failed", "cancelled") if automatic else OPEN + ("posted",)) for p in _mine()):
                 continue  # never post the same clip to the same account twice
             due = time.time() if now else _next_slot(
                 aid, c["post_gap_min"], c.get("post_gap_max", c["post_gap_min"]), c["daily_cap"])
+            due = max(due, blocked_until(acc["platform"], aid))
             p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
                  "account": aid, "account_name": acc["name"], "platform": acc["platform"], "status": "scheduled",
                  "due_at": due, "created": time.time(), "title": clip.get("title") or clip.get("hook") or "Clip",
-                 "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None, "views": None}
+                 "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None, "views": None, "automatic": automatic}
             _posts.append(p)
             made.append(p)
         _save()
@@ -85,18 +126,61 @@ def enqueue(job, clip, account_ids, now=False) -> list:
 
 def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
-    if job.get("rights_cleared") is not True:
+    if job.get("rights_cleared") is not True or job.get("automation"):
         return
     c = creators.get(job["creator"])
-    if not c or not c["autopost"] or not c["accounts"]:
+    if not c or c.get("rights_cleared") is not True or not c["autopost"] or not c["accounts"]:
         return
     if clip.get("auto_gameplay") and clip.get("score_source") != "ai_and_signals":
         return  # picture/audio-only candidates need a human review before automatic posting
     if clip.get("score", 0) < c["post_min_score"]:
         return  # includes hand-made clips (score 0): those wait for you to press Post
-    made = enqueue(job, clip, c["accounts"])
+    allowed = [aid for aid in c["accounts"] if (accounts.get(aid) or {}).get("platform") in ("youtube", "instagram")]
+    made = enqueue(job, clip, allowed)
     if made:
         creators.log(c["id"], f"Queued for {len(made)} account(s): {clip.get('title') or clip.get('hook')}")
+
+
+def _queue_prompt_posts(job):
+    a = job.get("automation") or {}
+    if job.get("status") != "done" or job.get("rights_cleared") is not True or not a.get("accounts") or a.get("revoked"):
+        return
+    creator = creators.get(job["creator"]) or creators.DEFAULTS
+    allowed = [aid for aid in a["accounts"] if (accounts.get(aid) or {}).get("platform") in ("youtube", "instagram")]
+    for clip in job["clips"]:
+        if clip.get("status") == "done" and clip.get("score_source") in ("prompt_ai", "ai_and_signals") \
+                and clip.get("score", 0) >= creator["post_min_score"]:
+            enqueue(job, clip, allowed, automatic=True)
+
+
+def _reconcile_prompt_posts():
+    for job in jobs.all_jobs():
+        if job.get("automation", {}).get("accounts") and job.get("status") == "done" and not job["automation"].get("queued"):
+            with ctx.as_user(job["user"]):
+                try:
+                    with _lock:
+                        _queue_prompt_posts(job)
+                        job["automation"]["queued"] = True
+                        jobs.save(job)
+                except (ValueError, OSError):
+                    # Retry durable queue writes on the next worker tick.
+                    continue
+
+
+def revoke_prompt_posts(job):
+    with _lock:
+        if not job.get("automation", {}).get("accounts"):
+            raise ValueError("No automatic publishing was authorized for this video.")
+        if any(p["job"] == job["id"] and p.get("automatic") and p["status"] == "posting" for p in _mine()):
+            raise ValueError("An upload is in progress. Wait for it to finish before revoking authorization.")
+        job["automation"]["revoked"] = True
+        jobs.save(job)
+        rows = [p for p in _mine() if p["job"] == job["id"] and p.get("automatic") and p["status"] == "scheduled"]
+        for p in rows:
+            p.update(status="cancelled", error="Automatic publishing was revoked for this video.")
+        _save()
+    for p in rows:
+        _mirror(p)
 
 
 def _caption(clip, creator):
@@ -111,6 +195,11 @@ def _post(p):
     try:
         if not job or job.get("rights_cleared") is not True:
             raise RuntimeError("Source rights clearance is missing or was revoked. Review the source before retrying this post.")
+        if p.get("automatic") and job.get("automation", {}).get("revoked"):
+            p.update(status="cancelled", error="Automatic publishing was revoked for this video.")
+            _save()
+            _mirror(p)
+            return
         if not clip or clip.get("status") != "done":
             raise RuntimeError("The clip no longer exists or is not finished.")
         if not acc:
@@ -119,7 +208,8 @@ def _post(p):
         creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name="clips")
         title, cap = clip.get("title") or clip.get("hook") or "Clip", _caption(clip, creator)
         if acc["platform"] == "youtube":
-            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), creator["privacy"])
+            privacy = (job.get("automation", {}).get("visibility", "private") if p.get("automatic") else creator["privacy"])
+            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), privacy)
         elif acc["platform"] == "instagram":
             rid, url = accounts.instagram_upload(acc, path, f"{title}\n\n{cap}", job["id"])
         elif acc["platform"] == "tiktok":
@@ -127,7 +217,9 @@ def _post(p):
         else:
             raise RuntimeError("That kind of account is no longer supported.")
         p.update(status="posted", posted_at=time.time(), remote_id=rid, url=url, error=None)
-        creators.log(p["creator"], f"Posted to {acc['name']}: {title}")
+    except accounts.PlatformLimit as e:
+        until = _record_limit(p["platform"], e, p["account"])
+        p.update(status="scheduled", due_at=until, error=str(e))
     except Exception as e:  # noqa: BLE001
         p["tries"] += 1
         p["error"] = str(e)[-300:]
@@ -143,11 +235,14 @@ def _post(p):
             alerts.notify(f"post failed on {p['account_name']} ({p['title']}): {p['error'][:200]}", kind="post")
     _save()
     _mirror(p)
+    if p["status"] == "posted":
+        creators.log(p["creator"], f"Posted to {acc['name']}: {title}")
 
 
 def _run():
     while True:
         time.sleep(15)
+        _reconcile_prompt_posts()
         due = [p for p in list(_posts) if p["status"] == "scheduled" and p["due_at"] <= time.time() and p.get("user")]
         for p in due:
             try:
@@ -165,26 +260,57 @@ def _run():
                         _mirror(p)
                         continue
                     with _lock:
-                        if p["status"] != "scheduled":
+                        if p["status"] != "scheduled" or p["due_at"] > time.time():
+                            continue
+                        if _restart_pending or blocked_until(p["platform"], p["account"]) > time.time():
+                            continue
+                        if p.get("automatic") and job.get("automation", {}).get("revoked"):
+                            p.update(status="cancelled", error="Automatic publishing was revoked for this video.")
+                            _save()
+                            _mirror(p)
                             continue
                         p["status"] = "posting"
+                        _save()  # a restart must not resend an upload with an unknown outcome
+                    _mirror(p)
                     _post(p)
             except Exception:  # noqa: BLE001
                 pass
 
 
 def _stats_for(recent):
+    if blocked_until("youtube") <= time.time():
+        _youtube_stats(recent)
+    if blocked_until("instagram") <= time.time():
+        _instagram_stats(recent)
+
+
+def _youtube_stats(recent):
     for aid in {p["account"] for p in recent if p["platform"] == "youtube"}:
         acc = accounts.get(aid)
-        if acc:
-            views = accounts.youtube_views(acc, [p["remote_id"] for p in recent if p["account"] == aid])
+        if acc and blocked_until("youtube", aid) <= time.time():
+            try:
+                views = accounts.youtube_views(acc, [p["remote_id"] for p in recent if p["account"] == aid])
+            except accounts.PlatformLimit as e:
+                _record_limit("youtube", e, aid)
+                if not e.account_only:
+                    return
+                continue
             for p in recent:
                 if p["account"] == aid and p["remote_id"] in views:
                     p["views"] = views[p["remote_id"]]
+
+
+def _instagram_stats(recent):
     for p in recent:
         acc = accounts.get(p["account"]) if p["platform"] == "instagram" else None
-        if acc:
-            v = accounts.instagram_views(acc, p["remote_id"])
+        if acc and blocked_until("instagram", p["account"]) <= time.time():
+            try:
+                v = accounts.instagram_views(acc, p["remote_id"])
+            except accounts.PlatformLimit as e:
+                _record_limit("instagram", e, p["account"])
+                if not e.account_only:
+                    return
+                continue
             if v is not None:
                 p["views"] = v
 
@@ -219,7 +345,12 @@ def retry(pid):
         job = jobs.get(p["job"])
         if not job or job.get("rights_cleared") is not True:
             raise ValueError("Confirm that you own or have permission to publish this source before retrying the post.")
-        p.update(status="scheduled", due_at=time.time(), tries=0, error=None)
+        if p.get("automatic") and job.get("automation", {}).get("revoked"):
+            raise ValueError("Automatic publishing was revoked. Review the clip and queue a new post by hand.")
+        if any(q is not p and (q["job"], q["clip"], q["account"]) == (p["job"], p["clip"], p["account"])
+               and q["status"] in OPEN + ("posted",) for q in _mine()):
+            raise ValueError("A post for this clip and account already exists.")
+        p.update(status="scheduled", due_at=max(time.time(), blocked_until(p["platform"], p["account"])), tries=0, error=None)
         _save()
     _mirror(p)
 
@@ -245,7 +376,7 @@ def overview() -> dict:
             "views": views, "earnings": round(views / 1000 * c["rate_per_1k"], 2)})
     names = {c["id"]: c["name"] for c in all_cs}
     queue = sorted((p for p in _posts if p["status"] in OPEN), key=lambda p: p["due_at"])
-    done = sorted((p for p in _posts if p["status"] in ("posted", "failed")), key=lambda p: -(p.get("posted_at") or p["due_at"]))[:15]
+    done = sorted((p for p in _posts if p["status"] in ("posted", "failed", "cancelled")), key=lambda p: -(p.get("posted_at") or p["due_at"]))[:15]
     show = [{**{k: v for k, v in p.items() if k != "user"}, "creator_name": names.get(p["creator"], "")} for p in queue + done]
     # last 14 days, oldest first, for the home graph
     days = [_day(time.time() - 86400 * i) for i in range(13, -1, -1)]
@@ -261,6 +392,9 @@ def overview() -> dict:
             views[_day(p["posted_at"])] += p["views"] or 0
     daily = [{"day": d, "clips": made[d], "posted": posted[d], "views": views[d]} for d in days]
     return {"paused": accounts.settings()["paused"], "creators": rows, "posts": show, "daily": daily,
+            "cooldowns": [{"account": a["id"], "name": a["name"], "until": until}
+                          for a in accounts.list_accounts()
+                          if (until := blocked_until(a["platform"], a["id"])) > time.time()],
             "alerts": alerts.configured(), "recording": len(live.active_mine())}
 
 

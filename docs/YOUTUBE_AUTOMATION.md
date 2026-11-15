@@ -5,18 +5,27 @@ channel. Auto-posting is off until you turn it on for a creator workspace.
 
 ## 1. Set up Google and YouTube
 
-1. In Google Cloud, create a project, enable **YouTube Data API v3**, and create an OAuth client of type **Web
-   application**. Set the redirect URIs shown in **Settings → Connected apps → YouTube → Set up**.
+1. In Google Cloud, create a project and enable **YouTube Data API v3**. In **Google Auth Platform**,
+   configure Branding, Audience and Data Access. For an external app in Testing, add your account
+   as a test user. Create a **Web application** OAuth client. Copy the exact authorized redirect URI
+   shown in **Settings → Connected apps → YouTube → Set up**, including host, port and callback path.
+   For local port 8766 it is **http://127.0.0.1:8766/oauth/youtube/callback**. Open the app at that same
+   address. Use HTTPS for a deployed instance.
 2. Paste the OAuth client ID and secret into the server's YouTube setup panel. Do not put client secrets in this
    repository or in a video description. Google may require OAuth verification before other accounts can connect.
 3. Open **Settings → Connected apps → YouTube → Continue with Google**. Choose the Google account that owns or
    manages the channel, review the requested YouTube access, and approve it.
 4. Open the target creator workspace's **Setup** and tick the connected YouTube channel. A Google account can own
-   more than one channel; choose the exact channel you want to publish to.
+   more than one channel; choose the exact channel you want to publish to. For the first live check,
+   select **Private** and post one clip you are authorized to publish. Verify it in YouTube Studio
+   before turning on automatic posting.
 
 The first-party setup uses Google's OAuth web-server flow with offline access so the queue can refresh a token while
 the app runs. YouTube API quota, OAuth verification, account restrictions, and channel eligibility are controlled by
-Google. See [Google's OAuth web-server guide](https://developers.google.com/identity/protocols/oauth2/web-server)
+Google. YouTube refresh tokens for an external app in Testing can expire after seven days; reconnect
+or complete the applicable publishing and verification steps. See [Google's token expiration
+guidance](https://developers.google.com/identity/protocols/oauth2/#expiration) and
+[Google's OAuth web-server guide](https://developers.google.com/identity/protocols/oauth2/web-server)
 and [YouTube's video upload API](https://developers.google.com/youtube/data/guides/using_resumable_upload_protocol).
 
 ## 2. Make a batch of gameplay clips
@@ -44,9 +53,9 @@ In the creator workspace's **Setup → Posting**:
    automatic queue for human review.
 3. Set **Minimum minutes between posts** and **Maximum minutes between posts**. For one Short every 15–20 minutes,
    enter `15` and `20`.
-4. The default **Most posts per account per day** is `10`, so a 10-clip batch can fit across the day. Existing
-   creator workspaces keep their saved cap; increase it to at least the number you plan to publish. YouTube's own
-   limits still apply.
+4. **Local daily limit per account** defaults to `0` (unlimited) for new workspaces. Existing settings
+   are preserved. A channel upload limit pauses that channel, and a project API quota pauses all its
+   YouTube posts. The queue honors the cooldown and keeps the original account and credentials.
 5. Choose the YouTube visibility setting. Check the queue and history in the app; cancel a queued post or retry a
    failed one from there.
 
@@ -66,8 +75,8 @@ revoked, reconnect the channel in **Settings → Connected apps** before retryin
 
 You can publish immediately with **Post now**, or keep the app running and queue clips at the creator's configured
 interval (for example, 15–20 minutes). The queue and its history are saved in MJ Cliproom's data folder. Use **Update
-now** when an update is available; the updater preserves that folder and requests a restart after downloading code and
-any changed requirements. Partial source downloads and unfinished jobs resume after restart when their saved files and
+now** when an update is available; the launcher keeps that folder, applies the update while the server is stopped,
+and reloads the page after the new version starts. Partial source downloads and unfinished jobs resume when saved files and
 the source platform allow it. Check **Settings → Storage** to see or change the folder used for uploads and media.
 
 ## 4. Add background music carefully

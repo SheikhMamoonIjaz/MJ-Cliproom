@@ -191,9 +191,9 @@ r = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "account
 check("posting is refused without source-rights confirmation", r.status_code, 403)
 
 with ctx.as_user(user.id):
-    creator = creators.create({"name": "Queue test", "autopost": True, "accounts": [accs["youtube"]["id"]],
+    creator = creators.create({"name": "Queue test", "autopost": True, "rights_cleared": True, "accounts": [accs["youtube"]["id"]],
                                "post_gap_min": 15, "post_gap_max": 20, "post_min_score": 75})
-    check("new creators can queue the requested ten-clip batch per day", creator["daily_cap"], 10)
+    check("new creators have no local daily post cap", creator["daily_cap"], 0)
     post_job.update(creator=creator["id"], rights_cleared=True)
     jobs.save(post_job)
     start_count = len(posting._posts)

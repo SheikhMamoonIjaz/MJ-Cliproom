@@ -296,9 +296,52 @@ def remove(aid):
         _write("accounts.json", [a for a in _all() if a["id"] != aid])
 
 
+class PlatformLimit(RuntimeError):
+    def __init__(self, delay, account_only=False):
+        super().__init__("The platform is limiting API requests. Posting will resume after a cooldown.")
+        self.delay = delay
+        self.account_only = account_only
+
+
+def _check_limit(status, data, headers, platform=""):
+    from .ai import retry_delay
+    error = data.get("error", {}) if isinstance(data, dict) else {}
+    if not isinstance(error, dict):
+        error = {"code": error}
+    reasons = {str(error.get("code", "")).lower(), str(error.get("status", "")).lower()}
+    for row in error.get("errors") or []:
+        if isinstance(row, dict):
+            reasons.add(str(row.get("reason", "")).lower())
+    daily = {"quotaexceeded", "dailylimitexceeded", "uploadlimitexceeded", "spam_risk_too_many_posts",
+             "reached_active_user_cap", "2207042"}
+    short = {"ratelimitexceeded", "userratelimitexceeded", "rate_limit_exceeded", "resource_exhausted"}
+    meta = {"4", "17", "32", "341", "613", "80002"} if platform == "instagram" else set()
+    reasons.add(str(error.get("error_subcode") or ""))
+    account_reasons = {"uploadlimitexceeded", "userratelimitexceeded", "spam_risk_too_many_posts"}
+    if platform == "instagram":
+        account_reasons |= {"17", "80002", "2207042"}
+    if status == 429 or reasons & (daily | short | meta):
+        default = 86400 if reasons & daily else 3600 if platform == "instagram" else 900
+        delay = retry_delay(headers, default)
+        if platform == "instagram":
+            try:
+                usage = json.loads(headers.get("x-business-use-case-usage", "{}"))
+                delay = max([delay, *(60 * int(item.get("estimated_time_to_regain_access") or 0)
+                                      for rows in usage.values() for item in rows)])
+            except (AttributeError, TypeError, ValueError):
+                pass
+        raise PlatformLimit(delay, account_only=bool(reasons & account_reasons))
+
+
 def _check(r, what):
     if r.status_code >= 400:
-        raise RuntimeError(f"{what} failed ({r.status_code}): {r.text[:300]}")
+        try:
+            data = r.json()
+        except ValueError:
+            data = {}
+        platform = "instagram" if "Instagram" in what else "youtube" if "YouTube" in what else ""
+        _check_limit(r.status_code, data, getattr(r, "headers", {}), platform)
+        raise RuntimeError(f"{what} failed ({r.status_code}). Check the connection and app permissions.")
     return r
 
 
@@ -487,9 +530,11 @@ def _ig_token(acc) -> str:
     if time.time() - acc.get("token_time", 0) > 7 * 86400:  # tokens last 60 days; refresh weekly
         try:
             r = _check(httpx.get(f"{IG}/refresh_access_token", params={"grant_type": "ig_refresh_token"},
-                                 headers={"Authorization": f"Bearer {acc['token']}"}, timeout=30), "Refreshing").json()
+                                 headers={"Authorization": f"Bearer {acc['token']}"}, timeout=30), "Refreshing Instagram").json()
             acc.update(token=r["access_token"], token_time=time.time())
             _put(acc)
+        except PlatformLimit:
+            raise
         except Exception:  # noqa: BLE001 - keep using the current token until it truly expires
             pass
     return acc["token"]
@@ -538,7 +583,12 @@ def instagram_views(acc, media_id: str):
     r = httpx.get(f"{IG}/{media_id}/insights", params={"metric": "views"},
                   headers={"Authorization": f"Bearer {_ig_token(acc)}"}, timeout=30)
     if r.status_code != 200:
-        return None
+        try:
+            _check(r, "Reading Instagram views")
+        except PlatformLimit:
+            raise
+        except RuntimeError:
+            return None
     data = r.json().get("data", [])
     return int(data[0]["values"][0]["value"]) if data else None
 
@@ -550,6 +600,7 @@ def _tt(r, what):
         data = r.json()
     except ValueError:
         data = {}
+    _check_limit(r.status_code, data, getattr(r, "headers", {}), "tiktok")
     err = data.get("error") if isinstance(data.get("error"), dict) else {}
     if r.status_code >= 400 or (err and err.get("code") not in (None, "ok")) or (isinstance(data.get("error"), str)):
         code = err.get("code") or data.get("error") or r.status_code
@@ -645,12 +696,14 @@ def tiktok_upload(acc, path: Path, caption: str, privacy: str = "public"):
             r = httpx.put(box["upload_url"], content=part, timeout=900, headers={
                 "Content-Type": "video/mp4", "Content-Length": str(len(part)), "Content-Range": f"bytes {first}-{last}/{size}"})
             if r.status_code not in (200, 201, 206):
-                raise RuntimeError(f"Uploading to TikTok failed ({r.status_code}): {r.text[:200]}")
+                _check(r, "Uploading to TikTok")
+                raise RuntimeError("TikTok did not accept the video chunk.")
     for _ in range(120):
         st = _tt_post(acc, "/post/publish/status/fetch/", {"publish_id": box["publish_id"]}, "Checking the TikTok post")
         if st.get("status") == "PUBLISH_COMPLETE":
             break
         if st.get("status") == "FAILED":
+            _check_limit(200, {"error": {"code": st.get("fail_reason")}}, {}, "tiktok")
             raise RuntimeError(f"TikTok did not publish the video: {st.get('fail_reason') or 'no reason given'}")
         time.sleep(5)
     else:

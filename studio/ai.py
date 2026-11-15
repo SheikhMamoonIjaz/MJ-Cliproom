@@ -8,10 +8,17 @@
 
 Every service is asked for the same thing: JSON that follows a small schema. Gemini takes the schema directly.
 The others are told the schema in the prompt and asked for a JSON object, which works with any chat model."""
+from contextlib import contextmanager
+from contextvars import ContextVar
+from email.utils import parsedate_to_datetime
 import json
 import os
 import re
+import secrets
 import threading
+import time
+
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -41,7 +48,13 @@ def _free_model(model):
     return model == "openrouter/free" or model.endswith(":free")
 
 # ---------------------------------------------------------------- the settings in use
-_lock = threading.Lock()
+_lock = threading.RLock()
+_in_use = ContextVar('ai_profile', default=None)
+_cooldown_file = config.DATA_DIR / "ai-cooldowns.json"
+try:
+    _cooldowns = json.loads(_cooldown_file.read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _cooldowns = {}
 _saved = {"at": None, "data": {}}
 
 
@@ -65,14 +78,77 @@ def _from_dashboard() -> dict:
     return _saved["data"]
 
 
+def _profiles() -> list:
+    data = _from_dashboard()
+    if isinstance(data.get("profiles"), list) and data["profiles"]:
+        return data["profiles"]
+    p = str(data.get("provider") or config.AI_PROVIDER or "").strip().lower()
+    return [{"id": "primary", "name": "Primary", "provider": ALIASES.get(p, p),
+             "models": list(data.get("models") or []) if data.get("provider") else list(config.AI_MODELS),
+             "base_url": str(data.get("base_url") or "").rstrip("/") if data.get("provider") else config.AI_BASE_URL,
+             "key": str(data.get("key", config.ai_key())) if data.get("provider") else config.ai_key(),
+             "fallback": False}]
+
+
 def current() -> dict:
-    """Provider, models, address and key: what the dashboard saved, or else what .env says."""
-    d = _from_dashboard()
-    p = str(d.get("provider") or config.AI_PROVIDER or "").strip().lower()
-    return {"provider": ALIASES.get(p, p),
-            "models": list(d["models"]) if d.get("provider") else list(config.AI_MODELS),
-            "base_url": (str(d.get("base_url") or "") if d.get("provider") else config.AI_BASE_URL).rstrip("/"),
-            "key": str(d["key"]) if d.get("provider") and "key" in d else config.ai_key()}
+    active = _in_use.get()
+    if active is not None:
+        return active
+    rows = _profiles()
+    return next((p for p in rows if p["id"] == _from_dashboard().get("active")), rows[0])
+
+
+@contextmanager
+def use(profile):
+    token = _in_use.set(profile)
+    try:
+        yield
+    finally:
+        _in_use.reset(token)
+
+
+def service(profile):
+    """Two model or key profiles at the same service share one retry boundary."""
+    name = profile["provider"]
+    host = (urlsplit(profile["base_url"] or PROVIDERS.get(name, ("", ""))[1]).hostname or "").lower()
+    if name not in ("custom", "ollama"):
+        return {"openrouter-free": "openrouter"}.get(name, name)
+    for provider_id, row in PROVIDERS.items():
+        if provider_id not in ("custom", "ollama") and host and urlsplit(row[1]).hostname == host:
+            return {"openrouter-free": "openrouter"}.get(provider_id, provider_id)
+    return host
+
+
+def attempts():
+    primary = current()
+    seen = set()
+    for p in [primary, *(p for p in _profiles() if p.get("fallback"))]:
+        if p["provider"] not in PROVIDERS:
+            continue
+        family = service(p)
+        if family in seen:
+            continue
+        with use(p):
+            available = ready()
+        if available:
+            seen.add(family)
+            yield p
+
+
+def cooling() -> bool:
+    with _lock:
+        return _cooldowns.get(service(current()), 0) > time.time()
+
+
+def retry_delay(headers, default):
+    raw = headers.get("retry-after", headers.get("Retry-After", ""))
+    try:
+        return max(1, int(raw))
+    except (ValueError, TypeError):
+        try:
+            return max(1, int(parsedate_to_datetime(raw).timestamp() - time.time()))
+        except (ValueError, TypeError, OverflowError):
+            return default
 
 
 def provider() -> str:
@@ -103,20 +179,57 @@ def ready() -> bool:
                 and (c["provider"] != "openrouter-free" or all(_free_model(m) for m in c["models"])))
 
 
+def _summary(c):
+    with use(c):
+        return {k: c[k] for k in ("id", "name", "provider", "models", "base_url", "fallback")} | {
+            "has_key": bool(c["key"]), "key_hint": c["key"][-4:] if len(c["key"]) >= 12 else "",
+            "ready": ready(), "cooling": cooling() if ready() else False, "label": label()}
+
+
 def public() -> dict:
-    """What the settings page may see. The key itself never leaves the server: only whether there is one, and
-    its last four characters so the owner can tell which key it is."""
-    c = current()
-    return {"provider": c["provider"], "models": c["models"], "base_url": c["base_url"], "has_key": bool(c["key"]),
-            "key_hint": c["key"][-4:] if len(c["key"]) >= 12 else "", "ready": ready(), "label": label(),
-            "saved_here": bool(_from_dashboard().get("provider")),
+    return {**_summary(current()), "saved_here": bool(_from_dashboard()),
+            "profiles": [_summary(p) for p in _profiles()],
             "providers": [{"id": k, "label": v[0], "address": v[1], "needs_key": k not in NO_KEY, "key_url": v[3], "example": v[4]}
                           for k, v in PROVIDERS.items()]}
 
 
-def save(provider_id: str, model_ids, address: str = "", new_key=None) -> dict:
-    """Save the choice made in the dashboard. `new_key` None keeps the key that is already there (the page never
-    has it to send back); an empty string removes it."""
+def _write_profiles(rows, active):
+    f = _file()
+    tmp = f.with_suffix(".tmp")
+    # Keep the active settings readable by an older version if the operator rolls back.
+    primary = next(row for row in rows if row["id"] == active)
+    data = {k: primary[k] for k in ("provider", "models", "base_url", "key")}
+    tmp.write_text(json.dumps({**data, "profiles": rows, "active": active}), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(f)
+    _saved["at"] = None
+
+
+def manage(profile_id, action):
+    with _lock:
+        rows = _profiles()
+        if not any(p["id"] == profile_id for p in rows):
+            raise ValueError("That AI profile no longer exists.")
+        active = current()["id"]
+        if action == "activate":
+            active = profile_id
+        elif action == "delete":
+            if len(rows) == 1:
+                raise ValueError("Save another profile before deleting this one.")
+            rows = [p for p in rows if p["id"] != profile_id]
+            if active == profile_id:
+                active = rows[0]["id"]
+        else:
+            raise ValueError("Unknown profile action.")
+        _write_profiles(rows, active)
+    return public()
+
+
+def save(provider_id: str, model_ids, address: str = "", new_key=None, *, profile_id=None,
+         name=None, fallback=None) -> dict:
     p = ALIASES.get(str(provider_id or "").strip().lower(), str(provider_id or "").strip().lower())
     if p not in PROVIDERS:
         raise ValueError("Choose one of the AI services in the list.")
@@ -137,31 +250,35 @@ def save(provider_id: str, model_ids, address: str = "", new_key=None) -> dict:
     if p in ("custom", "qwen") and not address:
         raise ValueError("Enter your workspace's OpenAI-compatible address." if p == "qwen"
                          else "A custom service needs its address, for example http://127.0.0.1:1234/v1")
-    old = current()
-    k = old["key"] if new_key is None and old["provider"] == p else str(new_key or "").strip()[:400]
-    if not k and p not in NO_KEY:
-        raise ValueError("Paste the key for this service.")
     with _lock:
-        f = _file()
-        tmp = f.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"provider": p, "models": ms, "base_url": address, "key": k}), encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)        # the key is only for whoever runs the server
-        except OSError:
-            pass
-        tmp.replace(f)
-        _saved["at"] = None
+        rows = _profiles()
+        active = current()["id"]
+        old = next((row for row in rows if row["id"] == (profile_id or active)), None)
+        if old is None and profile_id != "new":
+            raise ValueError("That AI profile no longer exists.")
+        if old is None and len(rows) >= 12:
+            raise ValueError("You can save up to 12 AI profiles.")
+        k = (old["key"] if new_key is None and old and old["provider"] == p and old["base_url"] == address
+             else str(new_key or "").strip()[:400])
+        if not k and p not in NO_KEY:
+            raise ValueError("Paste a key for this profile and address.")
+        row = {"id": old["id"] if old else secrets.token_hex(8), "provider": p, "models": ms,
+               "base_url": address, "key": k, "name": (str(name or "").strip()[:64] or (old["name"] if old else PROVIDERS[p][0])),
+               "fallback": (old or {}).get("fallback", False) if fallback is None else fallback is True}
+        rows = [row if old is other else other for other in rows] if old else [*rows, row]
+        _write_profiles(rows, active if any(r["id"] == active and r["provider"] for r in rows) else row["id"])
     return public()
 
 
-def list_models(provider_id=None, address=None, with_key=None) -> list:
+def list_models(provider_id=None, address=None, with_key=None, profile_id=None) -> list:
     """The model ids a service offers, so the settings page can show a list to pick from."""
-    c = current()
+    c = next((row for row in _profiles() if row["id"] == profile_id), {}) if profile_id else current()
+    c = c or {"provider": "", "key": "", "base_url": ""}
     p = ALIASES.get(str(provider_id or c["provider"]).lower(), str(provider_id or c["provider"]).lower())
     if p not in PROVIDERS:
         raise ValueError("Choose one of the AI services in the list.")
-    k = str(with_key or "").strip() or (c["key"] if c["provider"] == p else "")
-    base = str(address or "").strip().rstrip("/") or (c["base_url"] if c["provider"] == p else "") or PROVIDERS[p][1]
+    base = str(address if address is not None else c["base_url"] if c["provider"] == p else "").strip().rstrip("/") or PROVIDERS[p][1]
+    k = str(with_key or "").strip() or (c["key"] if c["provider"] == p and (c["base_url"] or PROVIDERS[p][1]) == base else "")
     if p in FIXED_ADDRESS:
         base = PROVIDERS[p][1]
     if p == "zai" and base == PROVIDERS[p][1]:
@@ -188,17 +305,33 @@ def list_models(provider_id=None, address=None, with_key=None) -> list:
     return sorted({m for m in found if m})[:400]
 
 
-def test() -> dict:
+def test(profile_id=None) -> dict:
+    row = next((p for p in _profiles() if p["id"] == profile_id), None) if profile_id else current()
+    if not row:
+        raise ValueError("Save the AI profile first.")
+    with use(row):
+        try:
+            return _test()
+        except AIError as e:
+            raise AIError(explain(e) or "Check the saved model and provider connection.", status=e.status) from None
+
+
+def _test() -> dict:
     """One tiny request with the settings in use, to prove the key, the address and the model all work."""
     ms = models()
     if not ready():
         raise ValueError("Save a service, a model and a key first.")
+    if cooling():
+        raise ValueError("This AI provider is waiting for its rate-limit cooldown.")
     out, sent, wrote = call(ms[0], 'Answer with a JSON array that holds the single string "ok".', {"type": "ARRAY", "items": {"type": "STRING"}})
     return {"ok": True, "model": ms[0], "tokens": sent + wrote, "answer": str(out)[:80]}
 
 
 class AIError(RuntimeError):
-    pass
+    def __init__(self, message, status=0):
+        super().__init__(message)
+        self.status = status
+
 
 
 problem = {"text": "", "at": 0.0}       # why the AI last failed, for the dashboard; cleared when it answers again
@@ -231,8 +364,19 @@ def clear_problem():
 
 
 def _fail(r, model):
-    text = r.text[:300].replace(key() or "\0", "<key>")
-    raise AIError(f"HTTP {r.status_code} {text}")
+    headers = getattr(r, "headers", {})
+    if r.status_code == 429 or (r.status_code >= 500 and headers.get("retry-after")):
+        with _lock:
+            family = service(current())
+            until = time.time() + retry_delay(headers, 900)
+            _cooldowns[family] = max(_cooldowns.get(family, 0), until)
+            try:
+                tmp = _cooldown_file.with_suffix(".tmp")
+                tmp.write_text(json.dumps(_cooldowns), encoding="utf-8")
+                tmp.replace(_cooldown_file)
+            except OSError:  # keep honoring the cooldown in memory
+                pass
+    raise AIError(f"HTTP {r.status_code} for model {model}", status=r.status_code)
 
 
 # ---------------------------------------------------------------- the schema, said in words for chat models

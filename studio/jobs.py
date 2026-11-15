@@ -358,7 +358,7 @@ def running_now() -> int:
     return _q.running
 
 
-def create(source: dict, options: dict, enqueue=True, creator=None, kind="video", rights_cleared=False) -> dict:
+def create(source: dict, options: dict, enqueue=True, creator=None, kind="video", rights_cleared=False, automation=None) -> dict:
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:10]
     c = creators.get(creator) if creator else None
     if c:
@@ -374,6 +374,8 @@ def create(source: dict, options: dict, enqueue=True, creator=None, kind="video"
            "options": opts, "status": "queued", "stage": "Waiting", "progress": 0.0,
            "title": source.get("name", ""), "uploader": "", "duration": 0, "clips": [], "error": None, "ai": {},
            "rights_cleared": rights_cleared, "rights_cleared_at": time.time() if rights_cleared else None}
+    if automation:
+        job["automation"] = automation
     with _lock:
         _jobs[jid] = job
         _by_user.setdefault(job["user"], {})[jid] = job
@@ -1003,7 +1005,8 @@ def _run_job(job):
         quota = max(1, math.ceil(left / (len(blocks) - bi)))
         s0 = int((a - lo) / 16000)
         found, ai = brain.find_clips(bw, db[s0: s0 + int((b - a) / 16000) + 1], (b - a) / 16000, job["title"],
-                                     job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append)
+                                     job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append,
+                                     (job.get("automation") or {}).get("prompt", ""))
         tokens += ai.get("tokens", 0)
         model = ai.get("model") or model
         if ai.get("note"):
@@ -1030,7 +1033,8 @@ def _run_job(job):
     del audio
     clips = job["clips"]
     job["ai"] = {"model": model, "tokens": tokens, "log": notes[-5:],
-                 "note": "The AI returned no usable result, so clips were picked by loudness only." if clips and not model else ""}
+                 "note": (notes[-1] if not clips and notes else
+                          "The AI returned no usable result, so clips were picked by loudness only." if clips and not model else "")}
     stage = "Done" if clips else "Done, but nothing clip-worthy was found"
     finish_video(job, stage, round(time.time() - t0))
     _announce_job_result(job)
@@ -1165,7 +1169,10 @@ def _run_source_job(job, began):
                 except (OSError, RuntimeError, ValueError):
                     candidate["transcript"] = ""
         usage.set_context(job.get("creator"), title)
-        found, _model = brain.rank_gameplay_candidates(title, found, options["max_clips"])
+        direction = (job.get("automation") or {}).get("prompt", "")
+        found, model = brain.rank_gameplay_candidates(title, found, options["max_clips"], direction)
+        if direction and found and not model:
+            job["ai"]["note"] = "No usable dialogue for AI ranking. Signal picks are ready for review and were not queued to post."
         for clip in found:
             clip.pop("strength", None)
             clip.pop("transcript", None)

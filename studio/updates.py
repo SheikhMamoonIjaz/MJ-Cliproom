@@ -9,6 +9,9 @@ sent. The owner sees a notice in the dashboard within a minute or two, with no r
     PEAKCUT_UPDATE_REPO     where to look (default: the project's own repository; a fork points at itself)
     PEAKCUT_UPDATE_BRANCH   which branch (default: main)
     PEAKCUT_UPDATE_CHECK=0  never look"""
+import hashlib
+import json
+import os
 import re
 import subprocess
 import sys
@@ -22,14 +25,17 @@ from . import config
 
 REPO = (config.env("PEAKCUT_UPDATE_REPO") or "SheikhMamoonIjaz/MJ-Cliproom").strip().strip("/")
 BRANCH = (config.env("PEAKCUT_UPDATE_BRANCH") or "main").strip()
-ON = config.env("PEAKCUT_UPDATE_CHECK", "1") != "0" and bool(re.fullmatch(r"[\w.\-]+/[\w.\-]+", REPO))
+ON = config.env("PEAKCUT_UPDATE_CHECK", "1") != "0" and bool(re.fullmatch(r"[\w.\-]+/[\w.\-]+", REPO)) and bool(re.fullmatch(r"[\w][\w./-]*", BRANCH))
 EVERY = 60
 UA = {"User-Agent": "MJ-Cliproom-update-check"}
 _state = {"checked": 0.0, "result": None, "seen": "", "notes": None}
 _lock = threading.Lock()
 _started = False
 _apply_lock = threading.Lock()
-_apply_state = {"state": "idle", "message": "", "latest": "", "requirements_pending": False}
+_apply_state = {"state": "idle", "message": "", "latest": "", "target": ""}
+RESTART_EXIT = 75
+_restart = None
+REQUIRE_SIGNATURE = config.env("PEAKCUT_UPDATE_REQUIRE_SIGNATURE") == "1"
 
 
 class UpdateError(ValueError):
@@ -58,7 +64,7 @@ def _origin_matches() -> bool:
     else:
         from urllib.parse import urlsplit
         parsed = urlsplit(raw)
-        if parsed.hostname != "github.com":
+        if parsed.scheme not in ("https", "ssh") or parsed.hostname != "github.com" or parsed.password or parsed.port:
             return False
         path = parsed.path.lstrip("/")
     if path.endswith(".git"):
@@ -83,58 +89,138 @@ def _preflight() -> None:
         raise UpdateError("The GitHub remote does not match this app's configured update repository.")
 
 
+def managed_restart(callback):
+    global _restart
+    _restart = callback
+
+
 def begin_apply() -> dict:
-    """Download a fast-forward update and changed requirements, without touching the data folder."""
+    """Stage an authenticated fast-forward; the launcher applies it once the server has exited cleanly."""
     _preflight()
+    if _restart is None:
+        raise UpdateError("This server was not started with the MJ Cliproom launcher. Update it while stopped using the README instructions.")
+    if _apply_state["state"] == "restarting":
+        return apply_status()
     if not _apply_lock.acquire(blocking=False):
         return apply_status()
-    _apply_state.update(state="running", message="Checking the GitHub version…", latest="")
+    _apply_state.update(state="running", message="Checking the GitHub version…", latest="", target="")
     threading.Thread(target=_apply, name="mj-cliproom-updater", daemon=True).start()
     return apply_status()
 
 
+def _validate(target):
+    if not re.fullmatch(r"[0-9a-f]{40}", target or ""):
+        raise UpdateError("GitHub did not return a valid update commit.")
+    head = current()
+    if head == target:
+        raise UpdateError("MJ Cliproom is already up to date.")
+    if _git("merge-base", "--is-ancestor", head, target).returncode:
+        raise UpdateError("The configured update is not a fast-forward. Your app and data were left in place.")
+    if REQUIRE_SIGNATURE and _git("-c", "gpg.minTrustLevel=fully", "verify-commit", target).returncode:
+        raise UpdateError("The update commit was not signed by a trusted signer. Review your Git signing settings.")
+    changed = _git("diff", "--name-only", "-z", "--no-renames", head, target, "--")
+    if changed.returncode:
+        raise UpdateError("Git could not inspect the update.")
+    protected = {"data", ".env", ".venv", ".mj-runtime", "storage.json"}
+    root = Path(config.ROOT).resolve()
+    for p in (config.DATA_DIR, config.STORAGE_FILE, config.MODELS_DIR):
+        try:
+            protected.add(Path(p).resolve().relative_to(root).as_posix().casefold())
+        except ValueError:
+            pass
+    names = {path.casefold() for path in changed.stdout.split("\0") if path}
+    if any(name == p or name.startswith(p + "/") or p.startswith(name + "/") for name in names for p in protected):
+        raise UpdateError("The update would change a storage or configuration path. Update manually after reviewing the changes.")
+
+
+
 def _apply() -> None:
     try:
-        before = current()
         target = newest()
         if not target:
             raise UpdateError("GitHub could not be reached. Your current files and data were left alone.")
-        retry_requirements = bool(_apply_state.get("requirements_pending")) and before == target
-        if before == target and not retry_requirements:
+        if target == current():
             raise UpdateError("MJ Cliproom is already up to date.")
-        requirements = Path(config.ROOT) / "requirements.txt"
-        old_requirements = requirements.read_bytes() if requirements.is_file() else b""
-        if not retry_requirements:
-            _apply_state.update(message="Downloading the update…", latest=target[:7])
-            fetched = _git("fetch", "--no-tags", "origin", BRANCH, timeout=180)
-            if fetched.returncode:
-                raise UpdateError("GitHub could not send the update. Check your connection and try again.")
-            fetched_sha = _git("rev-parse", "FETCH_HEAD")
-            if fetched_sha.returncode or fetched_sha.stdout.strip() != target:
-                raise UpdateError("A newer update appeared while downloading. Check for updates again.")
-            merged = _git("merge", "--ff-only", "FETCH_HEAD", timeout=180)
-            if merged.returncode:
-                raise UpdateError("This update cannot be applied as a fast-forward. Your clips and settings are unchanged.")
-        new_requirements = requirements.read_bytes() if requirements.is_file() else b""
-        if new_requirements != old_requirements or retry_requirements:
-            _apply_state.update(message="Installing the updated requirements…")
-            try:
-                pip = subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(requirements)],
-                                     cwd=str(config.ROOT), capture_output=True, text=True, timeout=600, check=False)
-            except (OSError, subprocess.TimeoutExpired) as e:
-                _apply_state.update(requirements_pending=True)
-                raise UpdateError("The code was downloaded, but its Python requirements did not finish installing. Try the update again before restarting.") from e
-            if pip.returncode:
-                _apply_state.update(requirements_pending=True)
-                raise UpdateError("The code was downloaded, but a Python requirement failed to install. Try the update again before restarting.")
-        _apply_state.update(state="done", message="Update downloaded. Restart MJ Cliproom to use it; saved data and resumable jobs stay in place.", latest=target[:7], requirements_pending=False)
-        check(force=True)
+        _apply_state.update(message="Downloading and checking the update…", latest=target[:7])
+        fetched = _git("fetch", "--no-tags", "origin", BRANCH, timeout=180)
+        if fetched.returncode:
+            raise UpdateError("GitHub could not send the update. Check your connection and try again.")
+        fetched_sha = _git("rev-parse", "FETCH_HEAD")
+        if fetched_sha.returncode or fetched_sha.stdout.strip() != target:
+            raise UpdateError("The update changed while downloading. Check for updates again.")
+        _validate(target)
+        _apply_state.update(state="restarting", target=target, message="Update verified. Restarting MJ Cliproom…")
+        _restart(target)
     except UpdateError as e:
-        _apply_state.update(state="error", message=str(e))
-    except Exception:  # noqa: BLE001 - never return command output, which could contain a credential-bearing remote
-        _apply_state.update(state="error", message="The update did not finish. Your saved data was left in place; check the connection and try again.")
+        _apply_state.update(state="error", message=str(e), target="")
+    except Exception:  # never return command output, which could contain a credential-bearing remote
+        _apply_state.update(state="error", target="", message="The update did not finish. Check the connection and try again.")
     finally:
         _apply_lock.release()
+
+
+def _stage_dependencies(target):
+    root = Path(config.ROOT)
+    manifest = root / "requirements.txt"
+    old = manifest.read_bytes()
+    try:
+        r = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{target}:requirements.txt"],
+                           capture_output=True, timeout=45, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise UpdateError("Git could not read the updated requirements.") from e
+    if r.returncode:
+        raise UpdateError("This update is missing its Python requirements. Review it manually.")
+    new = r.stdout
+    if old.replace(b"\r\n", b"\n") == new.replace(b"\r\n", b"\n"):
+        return
+    fingerprint = hashlib.sha256(new.replace(b"\r\n", b"\n")).hexdigest()
+    runtime = root / ".mj-runtime" / fingerprint
+    mark = runtime / "ready"
+    exe = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if mark.is_file() and exe.is_file():
+        return
+    try:
+        mark.unlink(missing_ok=True)
+        # A new environment keeps the old installation runnable even if pip is interrupted.
+        env = subprocess.run([sys.executable, "-m", "venv", str(runtime)],
+                             cwd=root, capture_output=True, timeout=180, check=False)
+        if env.returncode:
+            raise UpdateError("Could not create a separate environment for the update. Your previous version is unchanged.")
+        requirements = runtime / "requirements.txt"
+        requirements.write_bytes(new)
+        deps = subprocess.run([str(exe), "-m", "pip", "install", "-r", str(requirements)],
+                              cwd=root, capture_output=True, timeout=720, check=False)
+        if deps.returncode:
+            raise UpdateError("Dependencies failed to install. The launcher will restart the previous version.")
+        mark.write_text("ready", encoding="utf-8")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise UpdateError("Dependencies did not finish installing. The launcher will restart the previous version.") from e
+
+
+def install_staged(target):
+    _preflight()
+    _validate(target)
+    fetched = _git("rev-parse", "FETCH_HEAD")
+    if fetched.returncode or fetched.stdout.strip() != target:
+        raise UpdateError("The staged commit changed. Your checkout was left in place.")
+    _stage_dependencies(target)
+    _preflight()
+    r = _git("merge", "--ff-only", "--no-overwrite-ignore", target, timeout=180)
+    if r.returncode or current() != target:
+        raise UpdateError("Git could not apply the fast-forward. Check the app folder before retrying.")
+
+
+def _launcher_install():
+    try:
+        target = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["target"]
+        install_staged(target)
+    except UpdateError as e:
+        print(f"MJ Cliproom update: {e}", flush=True)
+        return 1
+    except (OSError, ValueError, KeyError):
+        print("MJ Cliproom update: the staged update could not be read.", flush=True)
+        return 1
+    return 0
 
 
 def current() -> str:
@@ -147,10 +233,12 @@ def current() -> str:
         if not head.startswith("ref:"):
             return head if re.fullmatch(r"[0-9a-f]{40}", head) else ""
         ref = head.split(":", 1)[1].strip()
-        f = g / ref
-        if f.is_file():
-            return f.read_text(encoding="utf-8").strip()
-        packed = g / "packed-refs"
+        common = g / "commondir"
+        refs = (g / common.read_text(encoding="utf-8").strip()).resolve() if common.is_file() else g
+        for f in (g / ref, refs / ref):
+            if f.is_file():
+                return f.read_text(encoding="utf-8").strip()
+        packed = refs / "packed-refs"
         if packed.is_file():
             for line in packed.read_text(encoding="utf-8").splitlines():
                 parts = line.split()
@@ -242,3 +330,7 @@ def start():
                 pass
             time.sleep(EVERY)
     threading.Thread(target=loop, daemon=True).start()
+
+
+if __name__ == "__main__":
+    sys.exit(_launcher_install())

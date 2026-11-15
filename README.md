@@ -1,4 +1,6 @@
-# MJ Cliproom
+# MJ Cliproom · 0.10 beta
+
+[What's new](CHANGELOG.md) · [Install or update the beta](docs/BETA_0_10.md)
 
 **A gaming-focused video clipping studio for gameplay recordings and finished streams.** Find strong moments, shape
 them into vertical clips, add captions and motion graphics, then export videos ready for Shorts, Reels or TikTok.
@@ -66,12 +68,12 @@ the transcript and video metadata used for clip selection may be sent to the pro
 
    If PowerShell blocks activation, use the venv interpreter directly:
    `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` and
-   `.\.venv\Scripts\python.exe -m studio.server`.
+   `.\.venv\Scripts\python.exe -m studio.launcher`.
 
 5. Start MJ Cliproom:
 
    ```powershell
-   python -m studio.server
+   python -m studio.launcher
    ```
 
 6. Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The first launch downloads the speech model. Keep the
@@ -99,7 +101,7 @@ the transcript and video metadata used for clip selection may be sent to the pro
 3. Start the app and open [http://127.0.0.1:8765](http://127.0.0.1:8765):
 
    ```bash
-   python -m studio.server
+   python -m studio.launcher
    ```
 
 ## Install on Linux
@@ -120,7 +122,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-python -m studio.server
+python -m studio.launcher
 ```
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Other Linux distributions need equivalent Python 3, venv,
@@ -183,10 +185,10 @@ under `data/`. **Settings → Storage** shows the active folder, lets you open i
 location. You can also open Storage from the clipping page's **View upload folder** link. A folder move is prepared
 while the app is running and takes effect at the next start; when selected, the existing data is carried over first.
 
-The dashboard's **Update now** action downloads a fast-forward update from the configured GitHub repository and
-installs changed Python requirements. It stops if the checkout has local edits, is not on the configured branch, or
-does not match the configured GitHub repository. Updates change app files only; the selected data folder, cached
-transcripts, finished clips, creator settings, and job history are kept. Restart MJ Cliproom after the update.
+Start a Git installation with the launcher to use **Update now**. It verifies a fast-forward from the
+configured GitHub branch, stages changed dependencies separately when needed, and applies the update after the
+server has stopped. The browser reloads after the updated server is healthy. Your storage path and its contents
+stay in place. See the [beta update guide](docs/BETA_0_10.md) for older installs, stopped-server updates and signatures.
 
 Failed downloads keep a `.part` file when the downloader can resume it. Use **Retry download** on the failed job card
 to continue; a platform may still reject a link or discard its old download URL, in which case try again later or

@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -46,7 +47,8 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-BOOT = f"{int(time.time()) % 100000:x}"     # part of every sync token, so pages reload their data after a restart
+VERSION = "0.10 beta"
+BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
 @app.on_event("startup")
@@ -403,7 +405,9 @@ def admin_page(request: Request, rest: str = ""):
 def healthz():
     with db.engine.connect() as c:
         c.execute(sa.text("select 1"))
-    return {"ok": True}
+    from . import updates
+    return {"ok": True, "app": "mj-cliproom", "version": VERSION, "commit": updates.RUNNING,
+            "boot": BOOT, "update_install_failed": config.env("PEAKCUT_UPDATE_INSTALL_FAILED") == "1"}
 
 
 @app.get("/brand/{name}")
@@ -565,7 +569,7 @@ def status(request: Request):
     from . import notices
     from . import updates
     me_ = _me(request)
-    return {"rights_gate_version": 1, "user": auth.public(me_), "update": updates.latest() if me_.is_admin else None,
+    return {"version": VERSION, "commit": updates.RUNNING, "rights_gate_version": 1, "user": auth.public(me_), "update": updates.latest() if me_.is_admin else None,
             "update_job": updates.apply_status() if me_.is_admin else None,
             "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
@@ -584,8 +588,10 @@ def update_status(request: Request):
 
 @app.post("/api/update")
 def update_start(request: Request):
-    from . import updates
+    from . import storage, updates
     _admin(request)
+    if storage.pending():
+        raise HTTPException(409, "Apply or cancel the pending Storage move before updating.")
     try:
         return updates.begin_apply()
     except updates.UpdateError as e:
@@ -749,6 +755,51 @@ def link_preview(request: Request, url: str = ""):
 
 @app.post("/api/jobs")
 def create_from_link(body: dict = Body(...)):
+    return _create_link_job(body)
+
+
+@app.post("/api/automation")
+def create_automation(body: dict = Body(...)):
+    _need_verified()
+    if body.get("rights_cleared") is not True:
+        raise HTTPException(400, "Confirm that you own or have permission to edit this exact source.")
+    prompt = body.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 1200:
+        raise HTTPException(400, "Enter a clip prompt using 1 to 1,200 characters.")
+    if not ai.ready():
+        raise HTTPException(409, "Set up an AI profile in Settings before queuing a prompt.")
+    ids = body.get("accounts", [])
+    if not isinstance(ids, list) or len(ids) > 20 or any(not isinstance(a, str) for a in ids):
+        raise HTTPException(400, "Choose connected YouTube or Instagram accounts for automatic publishing.")
+    if ids and body.get("publish_authorized") is not True:
+        raise HTTPException(400, "Confirm permission to publish and authorize the selected channels.")
+    platforms = {(accounts.get(a) or {}).get("platform") for a in ids}
+    if platforms - {"youtube", "instagram"}:
+        raise HTTPException(400, "Prompt automation can publish to connected YouTube or Instagram accounts. Export clips for manual sharing on TikTok.")
+    visibility = body.get("visibility", "private")
+    if "youtube" in platforms and visibility not in ("private", "unlisted", "public"):
+        raise HTTPException(400, "Choose the visibility of automatic YouTube posts.")
+    options = body.get("options") or {}
+    if not isinstance(options, dict) or options.get("mode", "gameplay") != "gameplay":
+        raise HTTPException(400, "Prompt automation is for gameplay clips.")
+    body = {**body, "options": {**options, "mode": "gameplay"}}
+    request_id = body.get("request_id", "")
+    if not isinstance(request_id, str) or not re.fullmatch(r"[a-fA-F0-9-]{16,64}", request_id):
+        raise HTTPException(400, "The queue request has expired. Reopen the prompt form and try again.")
+    return _create_link_job(body, {"prompt": prompt.strip(), "accounts": list(dict.fromkeys(ids)),
+                                   "request_id": request_id, "revoked": False, "visibility": visibility})
+
+
+@app.post("/api/jobs/{jid}/stop-auto-post")
+def stop_auto_post(jid: str):
+    try:
+        posting.revoke_prompt_posts(_job_or_404(jid))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True}
+
+
+def _create_link_job(body, automation=None):
     _need_verified()
     if body.get("rights_cleared") is not True:
         raise HTTPException(400, "Confirm that you own or have permission to download and edit this source before clipping it.")
@@ -766,9 +817,14 @@ def create_from_link(body: dict = Body(...)):
         raise HTTPException(404, "No such creator")
     try:
         with _create_lock:
+            if automation:
+                duplicate = next((j for j in jobs.list_jobs() if
+                                  (j.get("automation") or {}).get("request_id") == automation["request_id"]), None)
+                if duplicate:
+                    return jobs.public(duplicate)
             _job_slots()
             job = jobs.create({"type": "url", "url": url, "name": url}, body.get("options") or {}, creator=creator,
-                              rights_cleared=True)
+                              rights_cleared=True, automation=automation)
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e) if isinstance(e, ValueError) else "Those options aren't valid.")
     seen = media._PREVIEWS.get(url)  # already looked up while the user was typing: show it straight away
@@ -1604,8 +1660,21 @@ def ai_put(request: Request, body: dict = Body(...)):
     k = body.get("key")
     try:
         out = ai.save(body.get("provider"), body.get("models"), body.get("base_url") or "",
-                      None if k is None or (isinstance(k, str) and not k.strip() and not body.get("remove_key")) else str(k))
+                      None if k is None or (isinstance(k, str) and not k.strip() and not body.get("remove_key")) else str(k),
+                      profile_id=body.get("profile_id"), name=body.get("name"), fallback=body.get("fallback"))
     except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    usage.forget_all()
+    ctx.bump()
+    return out
+
+
+@app.post("/api/ai/profiles/{profile_id}/{action}")
+def ai_profile(request: Request, profile_id: str, action: str):
+    _admin(request)
+    try:
+        out = ai.manage(profile_id, action)
+    except ValueError as e:
         raise HTTPException(400, str(e))
     usage.forget_all()
     ctx.bump()
@@ -1617,7 +1686,7 @@ def ai_models(request: Request, body: dict = Body(default={})):
     _admin(request)
     _throttle("aimodels:" + ctx.uid(), 30, 600)
     try:
-        return {"models": ai.list_models(body.get("provider"), body.get("base_url"), body.get("key"))}
+        return {"models": ai.list_models(body.get("provider"), body.get("base_url"), body.get("key"), body.get("profile_id"))}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
@@ -1625,11 +1694,11 @@ def ai_models(request: Request, body: dict = Body(default={})):
 
 
 @app.post("/api/ai/test")
-def ai_test(request: Request):
+def ai_test(request: Request, body: dict = Body(default={})):
     _admin(request)
     _throttle("aitest:" + ctx.uid(), 20, 600)
     try:
-        return ai.test()
+        return ai.test(body.get("profile_id"))
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
@@ -1791,6 +1860,8 @@ def add_posts(body: dict = Body(...)):
     if not clip or clip.get("status") != "done":
         raise HTTPException(404, "That clip is not ready")
     _require_source_rights(job)
+    if job.get("automation") and body.get("publish_authorized") is not True:
+        raise HTTPException(400, "Confirm that you have permission to publish this clip to the selected accounts.")
     try:
         made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
     except ValueError as e:
@@ -1890,8 +1961,29 @@ def main():
                     reload_dirs=[str(config.ROOT / "studio")], reload_includes=["*.py"],
                     proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*")
         return
-    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning", backlog=4096,
-                proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*")
+    server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=config.PORT, log_level="warning", backlog=4096,
+                                           proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*",
+                                           timeout_graceful_shutdown=60))
+    plan = config.env("PEAKCUT_LAUNCH_PLAN")
+    if plan:
+        from . import storage, updates
+        staged = Path(plan)
+
+        def restart(target):
+            if live.active() or storage.pending():
+                raise updates.UpdateError("Finish active recordings and pending Storage changes before restarting for the update.")
+            pending = staged.with_suffix(".tmp")
+            pending.write_text(json.dumps({"target": target}), encoding="utf-8")
+            pending.replace(staged)
+            if not posting.prepare_restart():
+                staged.unlink(missing_ok=True)
+                raise updates.UpdateError("An upload is in progress. Wait for it to finish, then try the update again.")
+            server.should_exit = True
+
+        updates.managed_restart(restart)
+    server.run()
+    if plan and Path(plan).is_file():
+        raise SystemExit(updates.RESTART_EXIT)
 
 
 if __name__ == "__main__":
