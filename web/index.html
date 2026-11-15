@@ -1968,9 +1968,11 @@ function drawCreatorForm() {
       ${A.length ? `<div class="row" style="margin-bottom:16px">${A.map(a => `<label class="ck"><input type="checkbox" data-acc value="${esc(a.id)}" ${c.accounts.includes(a.id) ? "checked" : ""}>${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>` : `<button class="btn" data-act="go" data-v="settings" style="margin-bottom:16px">${ic("cog")}Open Settings</button>`}
       <div class="fields"><label class="sw span"><input type="checkbox" data-k="autopost" ${c.autopost ? "checked" : ""}><span>Post new clips automatically<small>Clips that score high enough go out without you approving them.</small></span></label>
         <label class="f">Only auto-post clips scoring at least<input data-k="post_min_score" type="number" min="0" max="100" value="${c.post_min_score}"></label>
-        <label class="f">Minutes between posts on one account<input data-k="post_gap_min" type="number" value="${c.post_gap_min}"></label>
+        <label class="f">Minimum minutes between posts<input data-k="post_gap_min" type="number" min="5" max="1440" value="${c.post_gap_min}"></label>
+        <label class="f">Maximum minutes between posts<input data-k="post_gap_max" type="number" min="5" max="1440" value="${c.post_gap_max ?? c.post_gap_min}"><small>Queued clips are spaced by a random interval in this range while the app is running.</small></label>
         <label class="f">Most posts per account per day<input data-k="daily_cap" type="number" value="${c.daily_cap}"></label>
         <label class="f">Who can see posts (YouTube, TikTok)<select data-k="privacy">${opts({public:"Public", unlisted:"Unlisted", private:"Private"}, c.privacy)}</select></label>
+        <p class="hint span">Only automate posts for content and music you own or are authorized to use. Clipping, credit, cropping, or adding music does not by itself prevent copyright claims or reused-content restrictions.</p>
         <label class="f">Campaign pay per 1,000 views ($)<input data-k="rate_per_1k" type="number" step="0.1" min="0" value="${c.rate_per_1k}"></label>
         <label class="f span">Line added to every post (credit, campaign tag)<input data-k="post_footer" value="${esc(c.post_footer)}" placeholder="Clipped from @streamer"></label></div></div>
     <div class="card danger-card"><h2>Delete this creator</h2><p class="help">Removes ${esc(c.name)}, their settings and every video and clip filed under them. This cannot be undone.</p>
@@ -2275,12 +2277,12 @@ function drawClipDlg(full) {
         <label class="ck"><input type="checkbox" data-f="watermark" ${c.watermark ? "checked" : ""}> MJ video watermark</label>
         <h3>Instrumental background music</h3>
         <label class="f">Track<select data-f="music_id">${musicOptions}</select></label>
-        <label class="f">Music level · ${Math.round((c.music_volume ?? 0.12) * 100)}%<input data-f="music_volume" type="range" min="0" max="0.5" step="0.01" value="${c.music_volume ?? 0.12}"></label>
+        <label class="f">Music level · ${Math.round((c.music_volume ?? 0.22) * 100)}%<input data-f="music_volume" type="range" min="0" max="0.5" step="0.01" value="${c.music_volume ?? 0.22}"></label>
         <label class="ck"><input type="checkbox" data-f="music_duck" ${c.music_duck !== false ? "checked" : ""}> Lower music under the original audio</label>
         <label class="f">Choose an instrumental audio file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" style="max-width:100%"></label>
         <div class="row"><button class="btn sm" data-act="musicupload">Upload instrumental</button>
           ${c.music_id ? `<button class="btn sm ghost" data-act="musicdelete" data-id="${esc(c.music_id)}">Remove track</button>` : ""}</div>
-        <p class="hint">Upload a track you own or have a licence to use. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
+        <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use instrumental audio you have rights to use. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
         <h3>Post text</h3>
         <div class="row"><select id="metaformat" aria-label="Metadata format"><option value="short">YouTube Shorts ideas</option><option value="long">Full video title and description</option></select>
           <select id="metaregion" aria-label="Trend region"><option value="US">US gaming trends</option><option value="GB">UK gaming trends</option><option value="PK">Pakistan gaming trends</option><option value="IN">India gaming trends</option><option value="CA">Canada gaming trends</option><option value="AU">Australia gaming trends</option></select>
@@ -2398,7 +2400,7 @@ document.addEventListener("change", async e => {
   if (t.name === "mainch") return;  // saved by its own click handler
   if (t.closest("#cform") && t.type === "radio") { $$("#cform .plan").forEach(l => l.classList.toggle("on", l.contains(t))); return saveCreator(true); }
   if (!t.closest("#cform") || t.type !== "checkbox") return;
-  if (t.dataset.k === "autopost" && t.checked && !await ask("Turn on auto-posting?", "Clips that score high enough will be posted to the ticked accounts without you seeing them first.", "Turn on")) { t.checked = false; return; }
+  if (t.dataset.k === "autopost" && t.checked && !await ask("Turn on auto-posting?", "Qualifying clips will publish without review. Use this only for content and music you own or are authorized to publish. Cropping, credit, or background music does not guarantee copyright clearance or monetization eligibility.", "Turn on")) { t.checked = false; return; }
   saveCreator(true);
 });
 

@@ -146,6 +146,8 @@ For YouTube posting, open **Settings → Connected apps → YouTube → Continue
 YouTube access, then select the connected channel in a creator's **Setup**. The existing posting queue can schedule
 or automatically publish reviewed clips. Google OAuth credentials and YouTube Data API v3 must be configured by
 the server administrator first; see [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok).
+For the full channel connection, top-10 gameplay workflow, direct-post and scheduled queue instructions, retry behavior,
+and background-music notes, see [YouTube Shorts automation](docs/YOUTUBE_AUTOMATION.md).
 
 The music picker accepts user-supplied audio only. Use tracks you own or have permission to use. YouTube's Shorts
 licensed music catalog has to be added in YouTube's own creation tools; Cliproom does not fetch trending songs.
