@@ -28,7 +28,14 @@ User-facing changes to MJ Cliproom are listed here.
   requires a connected channel and content rights confirmation.
 - Fixed Post now so the title, description and hashtags currently in the editor are saved and sent with the upload.
   YouTube receives them as both Shorts description text and video tags, and each queued post keeps its own snapshot.
-- Replaced blank or generic clip names with source-based gameplay titles, clip times, descriptions and gaming hashtags.
-  Upload progress and the resulting YouTube link stay visible in the app.
+- Replaced old source-title and timestamp metadata with distinct gameplay-first title and description drafts for each
+  clip. AI title ideas now receive the game and clip transcript, not the stream or channel name; local drafts remain
+  available when no AI provider is configured. Drafts do not promise views.
+- Prevented generic "Untitled clip" hooks from being burned into new or re-made renders. Older rendered videos keep
+  their baked overlay until the owner confirms source permission and re-makes those clips.
+- Renamed the clip-card action to Review post, clarified missing rights and account blockers, and made Upload now
+  explicitly use the connected account API while keeping status and the resulting link inside MJ Cliproom.
+- Added ten curated official NCS track pages with copyable attribution. Track audio stays outside the open-source
+  repository; download an instrumental version from NCS and add it to your local library before using it.
 - Kept licensed instrumental music at a 30% starting level, with fades, ducking under prominent source audio,
   and peak limiting. Audition the result in the editor before publishing.

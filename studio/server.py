@@ -1174,18 +1174,14 @@ def clip_metadata(jid: str, cid: str, body: dict = Body(...)):
             if excerpt:
                 sections.append(f"[video section {index + 1}] {excerpt}")
         full_transcript = " ".join(sections)[:9000]
-    trend_titles = []
-    yt_account = next((item for item in accounts._all() if item.get("platform") == "youtube"), None)
-    if yt_account:
-        try:
-            trend_titles = [item["title"] for item in accounts.youtube_gaming_trends(
-                yt_account, body.get("region", "US"))]
-        except Exception:  # noqa: BLE001 - title ideas can still use clip and transcript context
-            pass
+    try:
+        clip_index = next(i for i, item in enumerate(job.get("clips", []), 1) if item.get("id") == clip["id"])
+    except StopIteration:
+        clip_index = 1
     usage.set_context(job.get("creator"), job.get("title") or "")
     try:
         return brain.generate_metadata(video_format, job.get("title") or clip.get("title", ""),
-                                       job.get("uploader") or "", transcript, full_transcript, trend_titles)
+                                       job.get("uploader") or "", transcript, full_transcript, (), clip_index)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001

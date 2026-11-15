@@ -4,6 +4,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -194,7 +195,8 @@ def run_editor(client, root):
     assert job["status"] == "done" and len(job["clips"]) == 1 and job["clips"][0]["status"] == "done", job
     assert not job["ai"]["used"], job
     highlight = job["clips"][0]
-    assert "Gameplay moment at" in highlight["title"] and "captured at" in highlight["description"]
+    assert "Replay" not in highlight["title"] and "0:" not in highlight["title"] + highlight["description"]
+    assert str(highlight.get("hook") or "").strip().lower() != "untitled clip"
     assert highlight["hashtags"] == ["Gaming", "Gameplay", "Shorts"], highlight
     graphics = next(root.rglob(f"{highlight['id']}.ass")).read_text(encoding="utf-8")
     assert "MJ PLAYS GTA" in graphics and any(line.endswith("}MJ") for line in graphics.splitlines()), graphics
@@ -203,11 +205,30 @@ def run_editor(client, root):
 
     from studio import brain, jobs
     draft = brain.gameplay_post("GTA Online races", 60, 90)
-    assert draft["hashtags"][0] == "GTAOnline" and "0:01:00–0:01:30" in draft["description"]
+    next_draft = brain.gameplay_post("GTA Online races", 60, 90, clip_index=2)
+    assert draft["hashtags"][0] == "GTAOnline" and "GTA Online" in draft["title"]
+    assert "0:01:00" not in draft["description"] and draft["title"] != next_draft["title"]
+    assert draft["description"] != next_draft["description"]
     with patch.object(brain, "ask_ai", return_value=([{"title": "The final turn", "description": "MJ takes the final turn.",
                                                        "hashtags": ["GTARacing"]}], "test-model", 10)):
         refined = brain.gameplay_post("GTA Online races", 60, 90, "I am taking the final turn right now", True)
     assert refined["title"] == "The final turn" and refined["hashtags"][:2] == ["GTARacing", "GTAOnline"]
+    legacy_job = {"title": "iShowSpeed's First Day In GTA 5 RP..", "uploader": "iShowSpeed",
+                  "source": {"type": "url"}, "clips": []}
+    for index in range(20):
+        legacy_job["clips"].append({"id": f"clip{index}", "start": index * 30, "end": index * 30 + 20,
+                                    "title": f"{legacy_job['title']} | Gameplay highlight 0:{index:02}:00",
+                                    "description": f"A gameplay moment from {legacy_job['title']}, captured at 0:{index:02}:00–0:{index:02}:20.",
+                                    "hashtags": ["GTA5", "Gaming", "Gameplay", "Shorts"]})
+    drafts = [jobs.post_metadata(legacy_job, clip) for clip in legacy_job["clips"]]
+    assert len({item["title"] for item in drafts}) == 20 and len({item["description"] for item in drafts}) == 20
+    assert all("iShowSpeed" not in (item["title"] + item["description"])
+               and not re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", item["title"] + item["description"])
+               for item in drafts)
+    with patch.object(brain, "ask_ai", side_effect=RuntimeError("provider unavailable")):
+        local_ideas = brain.generate_metadata("short", legacy_job["title"], "iShowSpeed", "", clip_index=1)
+    assert len(local_ideas["ideas"]) == 3 and local_ideas["model"] == "Built-in drafts"
+    assert all("iShowSpeed" not in idea["title"] + idea["description"] for idea in local_ideas["ideas"])
     print("PASS optional AI drafts preserve the source game tag and deterministic fallback")
 
     scan_job = {"options": {"max_clips": 2, "min_len": 5, "max_len": 20}}

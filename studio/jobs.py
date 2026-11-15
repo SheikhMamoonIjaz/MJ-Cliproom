@@ -4,6 +4,7 @@ import json
 import os
 import math
 import queue
+import re
 import shutil
 import statistics
 import threading
@@ -181,36 +182,74 @@ HIDDEN = ("dir", "user", "source_path", "recover", "gameplay_scan")
 _GENERIC_POST_TITLES = {"", "clip", "untitled clip", "untitled", "manual clip", "gameplay clip"}
 
 
-def post_metadata(job, clip, overrides=None) -> dict:
-    """Return complete, source-grounded post text for new and older clips."""
-    values = dict(clip)
-    if overrides:
-        values.update({key: overrides[key] for key in ("title", "description", "hashtags") if key in overrides})
+def _source_display(job):
     source = str(job.get("title") or job.get("source", {}).get("name") or "Gameplay session").strip()
     if job.get("source", {}).get("type") == "file":
         source = Path(source).stem
-    source = source.replace("_", " ").strip() or "Gameplay session"
+    return source.replace("_", " ").strip() or "Gameplay session"
+
+
+def _is_old_generated_text(text, source=""):
+    value = str(text or "").strip()
+    if not value:
+        return True
+    if re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", value):
+        return True
+    if re.search(r"\bgameplay\s+(?:highlight|moment)\b|captured at", value, re.I):
+        return True
+    return bool(source and source.casefold() in value.casefold())
+
+
+def post_metadata(job, clip, overrides=None) -> dict:
+    """Return distinct post drafts without exposing source stream names or clip times."""
+    values = dict(clip)
+    if overrides:
+        values.update({key: overrides[key] for key in ("title", "description", "hashtags") if key in overrides})
+    source = _source_display(job)
     try:
         start = max(0, float(clip.get("start") or 0))
         end = max(start + 3, float(clip.get("end") or start + 30))
     except (TypeError, ValueError):
         start, end = 0, 30
-    draft = brain.gameplay_post(source, start, end)
+    try:
+        clip_index = next(i for i, row in enumerate(job.get("clips", []), 1) if row.get("id") == clip.get("id"))
+    except StopIteration:
+        clip_index = 1
+    words = clip.get("fixed_words") if isinstance(clip.get("fixed_words"), list) else []
+    transcript_bits = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        try:
+            at = float(word.get("s", -1))
+        except (TypeError, ValueError):
+            continue
+        if start <= at <= end and str(word.get("w", "")).strip():
+            transcript_bits.append(str(word["w"]).strip())
+    transcript = " ".join(transcript_bits)
+    if not transcript:
+        cues = clip.get("caption_cues") if isinstance(clip.get("caption_cues"), list) else []
+        transcript = " ".join(str(cue.get("text", "")).strip() for cue in cues if isinstance(cue, dict))
+    draft = brain.gameplay_post(source, start, end, transcript=transcript, use_ai=False,
+                                clip_index=clip_index, hook=clip.get("hook", ""))
 
     title = str(values.get("title") or "").strip()
-    if title.lower() in _GENERIC_POST_TITLES:
-        hook = str(clip.get("hook") or "").strip()
-        if hook and hook.lower() not in _GENERIC_POST_TITLES:
-            title = f"{hook[:60].rstrip()} | {source}"[:100].rstrip(" |:-")
-        else:
-            title = draft["title"][:100]
+    if title.lower() in _GENERIC_POST_TITLES or _is_old_generated_text(title, source):
+        title = draft["title"][:100]
+    else:
+        title = brain._post_text(title, source, job.get("uploader", ""), limit=100)[:100] or draft["title"][:100]
 
-    description = str(values.get("description") or "").strip()[:2000] or draft["description"]
+    description = str(values.get("description") or "").strip()
+    if _is_old_generated_text(description, source):
+        description = draft["description"]
+    else:
+        description = brain._post_text(description, source, job.get("uploader", ""), limit=2000) or draft["description"]
     raw_tags = values.get("hashtags")
     tags = []
     if isinstance(raw_tags, list):
         for value in raw_tags:
-            tag = "".join(char for char in str(value).lstrip("#") if char.isalnum() or char == "_")[:30]
+            tag = brain._post_text(str(value).lstrip("#"), source, job.get("uploader", ""), 30)
+            tag = "".join(char for char in tag if char.isalnum() or char == "_")[:30]
             if tag and tag not in tags:
                 tags.append(tag)
             if len(tags) == 8:
@@ -756,6 +795,9 @@ def render_one(job, clip, words):
                 pass
         # the last word on it: whatever was said, nothing is drawn in Hindi or Urdu script
         corrected = editor.apply_glossary(raw, editor.read_glossary()) if raw else raw
+        if str(clip.get("hook", "")).strip().lower() in _GENERIC_POST_TITLES:
+            # Old clip scans sometimes label an empty hook "Untitled clip". Never burn that placeholder into video.
+            clip["hook"] = ""
         if clip.get("auto_gameplay") and not clip.get("post_drafted"):
             if job["options"].get("ai_post_text"):
                 if not clip.get("metadata_ai"):

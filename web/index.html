@@ -611,6 +611,11 @@ dialog::backdrop{background:rgba(14,12,11,.42);animation:fadein .16s ease}
 .editor .stage{background:#17110E;display:grid;place-items:center;position:relative;min-height:320px}
 .editor video,.editor .stage img{width:100%;max-height:calc(100vh - 48px);aspect-ratio:9/16;object-fit:contain;display:block}
 .editor .panel{padding:22px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+.music-picks{border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px}
+.music-picks summary{cursor:pointer;font-weight:600;color:var(--brand-ink)}
+.ncs-list{display:grid;gap:8px}
+.ncs-list .row{border-top:1px solid var(--line);padding-top:8px;align-items:center}
+.ncs-list small{display:block;color:var(--faint);font-size:11px}
 #sourcedlg{width:min(1120px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto}
 #collectiondlg{width:min(640px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto}
 .source-editor{padding:20px;display:grid;gap:16px}
@@ -1913,7 +1918,7 @@ function clipHtml(j, c) {
     <button class="shot" data-act="openclip" ${a} aria-label="Open clip: ${esc(c.title || c.hook)}">${body}
       <span class="badge l ${scoreCls(c.score)}" title="${c.auto_gameplay ? "Gameplay pick" : "Clip score"}">${c.score || (c.auto_gameplay ? "Play" : "Hand")}</span><span class="badge r">${fmt(c.duration ?? (c.end - c.start))}</span></button>
     <div class="clip-body">
-      ${c.hook ? `<div class="hook">${esc(c.hook)}</div>` : ""}
+      ${c.hook && !isPlaceholderHook(c.hook) ? `<div class="hook">${esc(c.hook)}</div>` : ""}
       <div class="ttl">${esc(c.title)}</div>
       ${postPills(c) ? `<div class="row" style="gap:4px">${postPills(c)}</div>` : ""}
       <div class="clip-foot">
@@ -1922,10 +1927,11 @@ function clipHtml(j, c) {
         <button class="btn sm icon ghost" data-act="copy" ${a} title="Copy post text" aria-label="Copy post text">${ic("copy")}</button>
         ${busyClip ? "" : `<button class="btn sm icon ghost" data-act="delclip" ${a} title="Delete this clip" aria-label="Delete this clip">${ic("trash")}</button>`}
         <span class="grow"></span>
-        ${c.status === "done" ? `<button class="btn sm" data-act="openclip" ${a}>${ic("send")}Post</button>` : ""}
+        ${c.status === "done" ? `<button class="btn sm" data-act="openclip" ${a}>${ic("send")}Review post</button>` : ""}
       </div>
     </div></article>`;
 }
+function isPlaceholderHook(value) { return ["untitled clip", "untitled", "clip", "manual clip", "gameplay clip"].includes(String(value || "").trim().toLowerCase()); }
 function spark(vals, cls, lo, hi) { return `<div class="spark ${cls}">${vals.map(v => `<i style="height:${Math.max(4, Math.min(100, (v - lo) / (hi - lo) * 100))}%"></i>`).join("")}</div>`; }
 const EVERY = [[1, "1 min", ""], [2, "2 min", ""], [3, "3 min", ""], [5, "5 min", ""], [10, "10 min", ""]];
 function everyPick(cid, v) {
@@ -2388,10 +2394,29 @@ async function saveSettings() { const d = {}; $$("#sform [data-s]").forEach(i =>
 function metadataIdeasHtml() {
   if (!D.metaIdeas?.length) return "";
   const long = D.metaFormat === "long";
-  return `<div class="metasuggestions"><p class="hint">${D.metaTrendCount ? `Referenced ${D.metaTrendCount} currently popular gaming video titles.` : "No connected channel trend references were available; these ideas use your video text."} ${long ? "These drafts are for the full source video. Copy them for a long-form upload." : "Ideas are editable and are not a view guarantee."}</p>
+  return `<div class="metasuggestions"><p class="hint">Ideas use the clip transcript when available, otherwise local gameplay templates. Stream names and timestamps are omitted. ${long ? "These drafts are for the full source video. Copy them for a long-form upload." : "Ideas are editable and are not a view guarantee."}</p>
     ${D.metaIdeas.map((idea, i) => `<div class="card" style="padding:12px;margin:8px 0"><b>${esc(idea.title)}</b><p class="sub">${esc(idea.description)}</p>
       <p class="hint">${esc((idea.hashtags || []).map(h => "#" + h).join(" "))}${idea.angle ? ` · ${esc(idea.angle)}` : ""}${idea.evidence ? `<br>Based on: ${esc(idea.evidence)}` : ""}</p>
       <div class="row">${long ? "" : `<button class="btn sm primary" data-act="metaapply" data-i="${i}">Use on this clip</button>`}<button class="btn sm" data-act="metacopy" data-i="${i}">Copy</button></div></div>`).join("")}</div>`;
+}
+
+const NCS_PICKS = [
+  {name:"Why Do I? (Instrumental)", artist:"Unknown Brain feat. Bri Tolani", url:"https://ncs.io/whydoi", credit:"Song: Unknown Brain - Why Do I? (feat. Bri Tolani) [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/WhyDoI\nWatch: http://youtu.be/tcHJodG5hX8"},
+  {name:"Everything [Instrumental]", artist:"Diamond Eyes", url:"https://ncs.io/everything", credit:"Song: Diamond Eyes - Everything [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/Everything\nWatch: http://youtu.be/_XspQUK22-U"},
+  {name:"Talk", artist:"Beave", url:"https://ncs.io/talk", credit:"Song: Beave - Talk [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: https://ncs.io/Talk\nWatch: https://youtu.be/uZi8_rnqgHg"},
+  {name:"Trust Me", artist:"DigEx", url:"https://ncs.io/trustme", credit:"Song: DigEx - Trust Me [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://NCS.io/TrustMe\nWatch: http://youtu.be/ejCRNBpeU7E"},
+  {name:"Reflections", artist:"Kasger", url:"https://ncs.io/kreflections", credit:"Song: Kasger - Reflections [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/kreflections\nWatch: http://youtu.be/M4_ivwYfWFo"},
+  {name:"Memories", artist:"Domastic", url:"https://ncs.io/memories", credit:"Song: Domastic - Memories [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/Memories\nWatch: http://youtu.be/uSpVIx6JnyQ"},
+  {name:"Silence", artist:"Axollo feat. Josh Bogert", url:"https://ncs.io/ASilence", credit:"Song: Axollo - Silence (ft. Josh Bogert) [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/ASilence\nWatch: http://youtu.be/tqLBwaqgpBI"},
+  {name:"On Replay", artist:"NIVIRO", url:"https://ncs.io/onreplay", credit:"Song: NIVIRO - On Replay [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/OnReplay\nWatch: https://ncs.lnk.to/OnReplayAT/youtube"},
+  {name:"CTRL Z", artist:"Halvorsen", url:"https://ncs.io/CTRLZ", credit:"Song: Halvorsen - CTRL Z [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/CTRLZ\nWatch: http://youtu.be/QBkh8TRL194"},
+  {name:"Closer [Instrumental]", artist:"Au5 feat. Danyka Nadeau", url:"https://ncs.io/closer", credit:"Song: Au5 - Closer (feat. Danyka Nadeau) [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/Closer\nWatch: http://youtu.be/B-Jj017-2pQ"},
+];
+function ncsPicksHtml() {
+  return `<details class="music-picks"><summary>Browse 10 NCS instrumental picks</summary>
+    <p class="hint">Curated official track pages, not a popularity ranking. Download the instrumental version from NCS, then upload it to your local library. Audio files are not bundled with MJ Cliproom. Include the copied credit in your video description; check the <a href="https://ncs.io/usage-policy" target="_blank" rel="noopener">NCS usage policy</a>.</p>
+    <div class="ncs-list">${NCS_PICKS.map(t => `<div class="row"><span class="grow"><b>${esc(t.name)}</b><small>${esc(t.artist)}</small></span><a class="btn sm" href="${esc(t.url)}" target="_blank" rel="noopener">NCS page</a><button class="btn sm" data-act="copytext" data-t="${esc(t.credit)}">Copy credit</button></div>`).join("")}</div>
+  </details>`;
 }
 
 /* ============================================================ clip editor */
@@ -2399,6 +2424,7 @@ function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; D.metaIdeas 
 function drawClipDlg(full) {
   const j = jobOf(D.jid), c = j?.clips.find(x => x.id === D.cid), dlg = $("#clipdlg");
   if (!c) { if (dlg.open) dlg.close(); return; }
+  const staleHook = !!c.version && isPlaceholderHook(c.hook);
   const m = `/media/${j.id}/`, sig = c.status + c.version;
   const tracks = S.status.music || [];
   const musicOptions = `<option value="">Original audio only</option>` + tracks.map(t => `<option value="${esc(t.id)}"${t.id === c.music_id ? " selected" : ""}>${esc(t.name)} · ${fmt(t.duration)}</option>`).join("");
@@ -2411,7 +2437,8 @@ function drawClipDlg(full) {
         <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score : c.auto_gameplay ? "Gameplay pick" : "Clipped by hand"}</span>
           <p class="sub" style="margin-top:8px">${esc(c.reason || "")}</p></div><button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button></div>
         <h3>On the video</h3>
-        <label class="f">Big text<input data-f="hook" value="${esc(c.hook)}"></label>
+        ${staleHook ? `<p class="warnline">This older render still has a placeholder burned into the video. After confirming source permission, Save and re-make clears it from the next render.</p>` : ""}
+        <label class="f">Big text<input data-f="hook" value="${esc(staleHook ? "" : c.hook)}"></label>
         <div class="two"><label class="f">Caption style<select data-f="style">${opts(S.status.styles, c.style)}</select></label>
           <label class="f">Layout<select data-f="layout">${opts(S.status.layouts, c.layout)}</select></label></div>
         <div class="two"><label class="f">Start (seconds)<input data-f="start" type="number" step="any" value="${c.start}"></label>
@@ -2436,12 +2463,13 @@ function drawClipDlg(full) {
         <label class="f">Choose an instrumental audio file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" style="max-width:100%"></label>
         <div class="row"><button class="btn sm" data-act="musicupload">Upload instrumental</button>
           ${c.music_id ? `<button class="btn sm ghost" data-act="musicdelete" data-id="${esc(c.music_id)}">Remove track</button>` : ""}</div>
-        <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use instrumental audio you have rights to use. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
+        ${ncsPicksHtml()}
+        <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use the instrumental version and verify its current terms before publishing. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
         <h3>Post text</h3>
         <div class="row"><select id="metaformat" aria-label="Metadata format"><option value="short">YouTube Shorts ideas</option><option value="long">Full video title and description</option></select>
           <select id="metaregion" aria-label="Trend region"><option value="US">US gaming trends</option><option value="GB">UK gaming trends</option><option value="PK">Pakistan gaming trends</option><option value="IN">India gaming trends</option><option value="CA">Canada gaming trends</option><option value="AU">Australia gaming trends</option></select>
           <button class="btn sm" data-act="metagenerate">Generate title ideas</button></div>
-        <p class="hint">Uses the selected LLM and transcript. If YouTube is connected, current popular gaming video titles can guide phrasing. Long-form ideas are based on the full source transcript when available; this clip uploader still posts the clip as a Short.</p>
+        <p class="hint">Drafts avoid the stream name and timestamps. The selected LLM uses the clip transcript when available; otherwise MJ Cliproom makes conservative gameplay drafts. No title can guarantee views. Long-form ideas are for copying into a separate full-video upload; this uploader posts the clip as a Short.</p>
         <div id="metaideas">${metadataIdeasHtml()}</div>
         <label class="f">Title<input data-f="title" value="${esc(c.title || "Gameplay clip")}"></label>
         <label class="f">Description<textarea data-f="description" rows="2">${esc(c.description || "")}</textarea></label>
@@ -2451,9 +2479,12 @@ function drawClipDlg(full) {
         <button class="btn" data-act="remake" ${!rightsGateReady() || j.source_deleted || !j.rights_cleared ? "disabled" : ""}>${ic("scissors")}Save and re-make clip</button>
         <h3>Post it</h3>
         <div id="dposts" class="row" style="gap:4px"></div>
-        ${!rightsGateReady() ? `<p class="hint">Restart MJ Cliproom to enable posting.</p>` : !j.rights_cleared ? `<p class="hint">Confirm source rights in the video card before posting.</p>` : S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
-          <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>`
-          : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
+        ${!rightsGateReady() ? `<p class="hint">Restart MJ Cliproom to enable uploads.</p>` : `${!j.rights_cleared ? `<div class="card" style="padding:12px;border-color:var(--warn)"><b>Upload blocked: source permission is not confirmed.</b><p class="hint">Close this editor, then confirm ownership or permission on the video card. Clipping or credit alone does not grant rights.</p></div>` : ""}
+          ${!S.accounts.some(a => a.platform === "youtube") ? `<div class="card" style="padding:12px;margin-top:8px"><b>No YouTube channel is connected.</b><p class="hint">Connect it in Settings → Connected apps. If Google shows “app is being tested,” the Google account must be on the OAuth test-user list.</p><button class="btn sm" data-act="go" data-v="settings" data-tab="apps">${ic("cog")}Connect YouTube</button></div>` : ""}
+          ${!S.accounts.length ? `<p class="hint">No posting accounts are connected, so there is nowhere to upload this clip yet.</p>` : ""}
+          ${j.rights_cleared && S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
+            <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Upload now</button><button class="btn" data-act="postqueue">Add to queue</button></div>
+            <p class="hint">Upload now sends the clip through the selected account’s API and keeps you on this page. Watch the post status and returned link here.</p>` : ""}`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
           ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
           ${c.status === "done" && c.subtitle ? `<a class="btn" href="${m}${esc(c.subtitle)}?download=1&amp;v=${c.version}">SRT captions</a>` : ""}
@@ -2916,14 +2947,14 @@ document.addEventListener("click", async e => {
       if (!accs.length) return toast("Tick at least one account first.", "bad");
       const needsPermission = !!jobOf(D.jid)?.automation;
       if (needsPermission && !await ask("Confirm publishing permission", "Confirm you own this clip or have permission to publish it to the selected accounts.", a === "postnow" ? "Confirm and post now" : "Confirm and queue")) return;
-      if (!needsPermission && a === "postnow" && !await ask("Post now?", `This clip goes to ${accs.length} account${accs.length > 1 ? "s" : ""} straight away.`, "Post now")) return;
+      if (!needsPermission && a === "postnow" && !await ask("Upload now?", `Send this clip and its title, description, and hashtags to ${accs.length} selected account${accs.length > 1 ? "s" : ""} through the account API. MJ Cliproom stays open and shows the upload status here.`, "Upload now")) return;
       const metadata = {};
       $$("#clipdlg [data-f]").filter(i => ["title", "description", "hashtags"].includes(i.dataset.f))
         .forEach(i => metadata[i.dataset.f] = i.value);
       const result = await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, metadata,
         now:a === "postnow", publish_authorized:needsPermission});
       const count = result.queued || 0;
-      toast(a === "postnow" ? `Uploading to ${count} account${count === 1 ? "" : "s"}. Track the result here.`
+      toast(a === "postnow" ? `Upload queued for ${count} account${count === 1 ? "" : "s"}. This page stays open; follow the status and link here.`
         : `Added to the queue for ${count} account${count === 1 ? "" : "s"}.`, "ok"); return tick();
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }
