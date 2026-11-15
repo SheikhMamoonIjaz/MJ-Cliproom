@@ -10,8 +10,11 @@ sent. The owner sees a notice in the dashboard within a minute or two, with no r
     PEAKCUT_UPDATE_BRANCH   which branch (default: main)
     PEAKCUT_UPDATE_CHECK=0  never look"""
 import re
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 import httpx
 
@@ -25,6 +28,113 @@ UA = {"User-Agent": "MJ-Cliproom-update-check"}
 _state = {"checked": 0.0, "result": None, "seen": "", "notes": None}
 _lock = threading.Lock()
 _started = False
+_apply_lock = threading.Lock()
+_apply_state = {"state": "idle", "message": "", "latest": "", "requirements_pending": False}
+
+
+class UpdateError(ValueError):
+    pass
+
+
+def apply_status() -> dict:
+    return dict(_apply_state)
+
+
+def _git(*args, timeout=60):
+    try:
+        return subprocess.run(["git", "-C", str(config.ROOT), *args], capture_output=True, text=True,
+                              timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise UpdateError("Git could not finish the update. Check that Git is installed and try again.") from e
+
+
+def _origin_matches() -> bool:
+    r = _git("remote", "get-url", "origin")
+    if r.returncode:
+        return False
+    raw = r.stdout.strip()
+    if raw.startswith("git@github.com:"):
+        path = raw.partition(":")[2]
+    else:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(raw)
+        if parsed.hostname != "github.com":
+            return False
+        path = parsed.path.lstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return path.casefold() == REPO.casefold()
+
+
+def _preflight() -> None:
+    if not ON:
+        raise UpdateError("Updates are turned off on this copy of MJ Cliproom.")
+    if not (Path(config.ROOT) / ".git").exists():
+        raise UpdateError("This copy was installed without Git. Follow the update steps in the README.")
+    r = _git("status", "--porcelain", "--untracked-files=all")
+    if r.returncode:
+        raise UpdateError("Git could not check this installation. Try updating it from the project folder.")
+    if r.stdout.strip():
+        raise UpdateError("The app folder has local changes. Save or back them up before updating.")
+    branch = _git("branch", "--show-current")
+    if branch.returncode or branch.stdout.strip() != BRANCH:
+        raise UpdateError(f"This copy is not on the {BRANCH} branch, so it cannot use the in-app updater.")
+    if not _origin_matches():
+        raise UpdateError("The GitHub remote does not match this app's configured update repository.")
+
+
+def begin_apply() -> dict:
+    """Download a fast-forward update and changed requirements, without touching the data folder."""
+    _preflight()
+    if not _apply_lock.acquire(blocking=False):
+        return apply_status()
+    _apply_state.update(state="running", message="Checking the GitHub version…", latest="")
+    threading.Thread(target=_apply, name="mj-cliproom-updater", daemon=True).start()
+    return apply_status()
+
+
+def _apply() -> None:
+    try:
+        before = current()
+        target = newest()
+        if not target:
+            raise UpdateError("GitHub could not be reached. Your current files and data were left alone.")
+        retry_requirements = bool(_apply_state.get("requirements_pending")) and before == target
+        if before == target and not retry_requirements:
+            raise UpdateError("MJ Cliproom is already up to date.")
+        requirements = Path(config.ROOT) / "requirements.txt"
+        old_requirements = requirements.read_bytes() if requirements.is_file() else b""
+        if not retry_requirements:
+            _apply_state.update(message="Downloading the update…", latest=target[:7])
+            fetched = _git("fetch", "--no-tags", "origin", BRANCH, timeout=180)
+            if fetched.returncode:
+                raise UpdateError("GitHub could not send the update. Check your connection and try again.")
+            fetched_sha = _git("rev-parse", "FETCH_HEAD")
+            if fetched_sha.returncode or fetched_sha.stdout.strip() != target:
+                raise UpdateError("A newer update appeared while downloading. Check for updates again.")
+            merged = _git("merge", "--ff-only", "FETCH_HEAD", timeout=180)
+            if merged.returncode:
+                raise UpdateError("This update cannot be applied as a fast-forward. Your clips and settings are unchanged.")
+        new_requirements = requirements.read_bytes() if requirements.is_file() else b""
+        if new_requirements != old_requirements or retry_requirements:
+            _apply_state.update(message="Installing the updated requirements…")
+            try:
+                pip = subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+                                     cwd=str(config.ROOT), capture_output=True, text=True, timeout=600, check=False)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                _apply_state.update(requirements_pending=True)
+                raise UpdateError("The code was downloaded, but its Python requirements did not finish installing. Try the update again before restarting.") from e
+            if pip.returncode:
+                _apply_state.update(requirements_pending=True)
+                raise UpdateError("The code was downloaded, but a Python requirement failed to install. Try the update again before restarting.")
+        _apply_state.update(state="done", message="Update downloaded. Restart MJ Cliproom to use it; saved data and resumable jobs stay in place.", latest=target[:7], requirements_pending=False)
+        check(force=True)
+    except UpdateError as e:
+        _apply_state.update(state="error", message=str(e))
+    except Exception:  # noqa: BLE001 - never return command output, which could contain a credential-bearing remote
+        _apply_state.update(state="error", message="The update did not finish. Your saved data was left in place; check the connection and try again.")
+    finally:
+        _apply_lock.release()
 
 
 def current() -> str:

@@ -30,7 +30,7 @@ import time                                    # noqa: E402
 
 import sqlalchemy as sa                        # noqa: E402
 
-from studio import db                          # noqa: E402
+from studio import db, server                  # noqa: E402
 
 db.init()
 with db.engine.begin() as cn:
@@ -44,8 +44,12 @@ H = {"Content-Type": "application/octet-stream"}
 check("a source upload without rights confirmation is refused",
       a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data)}).status_code == 400)
 rights = {"rights_cleared": True}
-s = a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data), "options": {"max_clips": 2}, "creator": "", **rights}).json()
+fingerprint = "a" * 64
+s = a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data), "fingerprint": fingerprint,
+                                      "options": {"max_clips": 2}, "creator": "", **rights}).json()
 check("a big file is split into pieces", s.get("parts") == 3, str(s))
+check("the owner can see their saved upload and no one else's", (a.get("/api/upload/pending").json()[0]["id"], b.get("/api/upload/pending").json()), (s["id"], []))
+check("an upload status includes its resume fingerprint", a.get(f"/api/upload/{s['id']}").json().get("fingerprint"), fingerprint)
 part = s["part"]
 piece = lambda i: data[i * part:(i + 1) * part]                # noqa: E731
 check("someone else cannot add to my upload", b.put(f"/api/upload/{s['id']}/0", content=piece(0), headers=H).status_code == 404)
@@ -53,6 +57,8 @@ check("a piece of the wrong size is refused", a.put(f"/api/upload/{s['id']}/0", 
 check("a piece number that does not exist is refused", a.put(f"/api/upload/{s['id']}/9", content=b"x", headers=H).status_code == 400)
 for i in (2, 0):
     check(f"piece {i + 1} is accepted", a.put(f"/api/upload/{s['id']}/{i}", content=piece(i), headers=H).status_code == 200)
+server._clean_interrupted_single_uploads()   # the same cleanup used when the server starts after an update
+check("saved pieces and their resume record survive a server restart", a.get(f"/api/upload/{s['id']}").json().get("received"), [0, 2])
 r = a.post(f"/api/upload/{s['id']}/finish", json={})
 check("joining before every piece has arrived is refused", r.status_code == 409)
 a.put(f"/api/upload/{s['id']}/1", content=piece(1), headers=H)
@@ -62,6 +68,7 @@ r = a.post(f"/api/upload/{s['id']}/finish", json={})
 job = r.json()
 check("the pieces are joined into a video", r.status_code == 200 and bool(job.get("id")), r.text[:120])
 check("finishing twice does not make a second video", a.post(f"/api/upload/{s['id']}/finish", json={}).status_code == 404)
+check("a finished upload disappears from the recovery list", a.get("/api/upload/pending").json() == [])
 data_dir = os.environ.get("PEAKCUT_DATA")
 if data_dir and job.get("id"):
     src = list(Path(data_dir).glob(f"users/*/jobs/{job['id']}/source.mp4"))

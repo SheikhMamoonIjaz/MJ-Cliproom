@@ -10,7 +10,7 @@ sys.path.insert(0, ".")
 from pathlib import Path
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
-from studio import accounts, auth, config, ctx, db, server
+from studio import accounts, auth, config, ctx, creators, db, jobs, posting, server
 db.init()
 fails = []
 def check(n, got, want=True):
@@ -150,7 +150,6 @@ jd.mkdir(parents=True)
 (jd.parent / "job.json").write_text(json.dumps({"id": "job-12345678", "user": user.id, "dir": str(jd.parent), "clips": [], "status": "done",
                                                 "creator": None, "created": time.time(), "options": {}, "source": {"type": "file"}}), encoding="utf-8")
 (jd / "clip01.mp4").write_bytes(b"\x00" * 6_000)
-from studio import jobs
 jobs.load_user(user.id)
 with ctx.as_user(user.id):
     link = accounts.clip_link("job-12345678", "clip01.mp4")
@@ -163,6 +162,45 @@ check("a made-up link does not", anon.get("/pub/abc.def.mp4").status_code, 404)
 with ctx.as_user(user.id):
     old = accounts.clip_link("job-12345678", "clip01.mp4", seconds=-5)
 check("an expired link does not", anon.get(urlparse(old).path).status_code, 404)
+
+# ---- queue timing, direct posting, and the auto-post safety filters
+with ctx.as_user(user.id):
+    post_job = jobs.get("job-12345678")
+    post_job["clips"] = [{"id": "clip01", "file": "clip01.mp4", "status": "done", "title": "Test highlight",
+                          "score": 90, "auto_gameplay": True, "score_source": "ai_and_signals"},
+                         {"id": "clip02", "file": "clip01.mp4", "status": "done", "title": "Signal only",
+                          "score": 99, "auto_gameplay": True, "score_source": "signals"},
+                         {"id": "clip03", "file": "clip01.mp4", "status": "done", "title": "Next highlight",
+                          "score": 91, "auto_gameplay": True, "score_source": "ai_and_signals"}]
+    post_job["rights_cleared"] = False
+    jobs.save(post_job)
+r = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "accounts": [accs["youtube"]["id"]]}, headers=ORIGIN)
+check("posting is refused without source-rights confirmation", r.status_code, 403)
+
+with ctx.as_user(user.id):
+    creator = creators.create({"name": "Queue test", "autopost": True, "accounts": [accs["youtube"]["id"]],
+                               "post_gap_min": 15, "post_gap_max": 20, "post_min_score": 75})
+    post_job.update(creator=creator["id"], rights_cleared=True)
+    jobs.save(post_job)
+    start_count = len(posting._posts)
+    posting.on_clip_ready(post_job, post_job["clips"][0])
+    scheduled = [p for p in posting._mine() if p["job"] == post_job["id"] and p["clip"] == "clip01"]
+    check("qualified gameplay clip enters the automatic queue", len(scheduled), 1)
+    first_due = scheduled[0]["due_at"] if scheduled else 0
+    posting.on_clip_ready(post_job, post_job["clips"][2])
+    next_post = next((p for p in posting._mine() if p["job"] == post_job["id"] and p["clip"] == "clip03"), None)
+    gap_minutes = (next_post["due_at"] - first_due) / 60 if next_post else 0
+    check("the automatic queue spaces successive posts 15–20 minutes apart", 15 <= gap_minutes <= 20)
+    posting.on_clip_ready(post_job, post_job["clips"][1])
+    check("signal-only fallback clips stay out of auto-posting", len(posting._posts), start_count + 2)
+
+direct = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "accounts": [accs["instagram"]["id"]], "now": True}, headers=ORIGIN)
+if direct.status_code != 200:
+    print("DEBUG direct-post", direct.status_code, direct.text, posting._posts)
+check("Post now adds the chosen clip to the connected account", (direct.status_code, direct.json().get("queued")), (200, 1))
+with ctx.as_user(user.id):
+    immediate = next((p for p in posting._mine() if p["job"] == "job-12345678" and p["clip"] == "clip01" and p["account"] == accs["instagram"]["id"]), None)
+    check("direct posts are due immediately", immediate is not None and abs(immediate["due_at"] - time.time()) < 2)
 
 # ---- posting
 with ctx.as_user(user.id):

@@ -58,11 +58,7 @@ async def _more_threads():
 @app.on_event("startup")
 def _startup():
     db.init()
-    for f in (config.TMP_DIR / "uploads").glob("*"):      # uploads cut short by a restart
-        try:
-            f.unlink()
-        except OSError:
-            pass
+    _clean_interrupted_single_uploads()
     render.install_fonts()
     if _tools.missing():
         print("\n  " + _tools.HELP + "\n", flush=True)
@@ -74,6 +70,16 @@ def _startup():
     posting.start()
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
+
+
+def _clean_interrupted_single_uploads():
+    """Clear abandoned single-request writes but keep upload directories with individually saved pieces."""
+    for f in (config.TMP_DIR / "uploads").glob("*"):      # single-request uploads cut short by a restart
+        try:
+            if f.is_file():
+                f.unlink()
+        except OSError:
+            pass
 
 
 # ================================================================ the gate: who is asking, and are they allowed
@@ -559,7 +565,9 @@ def status(request: Request):
     from . import notices
     from . import updates
     me_ = _me(request)
-    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
+    return {"rights_gate_version": 1, "user": auth.public(me_), "update": updates.latest() if me_.is_admin else None,
+            "update_job": updates.apply_status() if me_.is_admin else None,
+            "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS,
@@ -567,6 +575,23 @@ def status(request: Request):
 
 
 # ================================================================ videos
+@app.get("/api/update")
+def update_status(request: Request):
+    from . import updates
+    _admin(request)
+    return updates.apply_status()
+
+
+@app.post("/api/update")
+def update_start(request: Request):
+    from . import updates
+    _admin(request)
+    try:
+        return updates.begin_apply()
+    except updates.UpdateError as e:
+        raise HTTPException(409, str(e))
+
+
 def _job_or_404(jid: str):
     job = jobs.get(jid) if re.fullmatch(r"[\w\-]{8,60}", jid) else None
     if not job:
@@ -816,11 +841,20 @@ def _up_root() -> Path:
 
 
 def _up_sweep():
-    """Forget uploads that were started and never finished (after six hours)."""
+    """Forget uploads after six hours and remove only abandoned in-flight temporary pieces."""
     for d in _up_root().glob("up-*"):
         try:
-            if d.is_dir() and time.time() - d.stat().st_mtime > 6 * 3600:
+            if not d.is_dir():
+                continue
+            if time.time() - d.stat().st_mtime > 6 * 3600:
                 shutil.rmtree(d, ignore_errors=True)
+                continue
+            for tmp in d.glob("*.tmp"):
+                try:
+                    if time.time() - tmp.stat().st_mtime > 3600:
+                        tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         except OSError:
             pass
 
@@ -836,6 +870,49 @@ def _up_get(upid: str) -> dict:
     if meta.get("user") != ctx.uid():
         raise HTTPException(404, "No such upload")
     return meta
+
+
+def _up_public(upid: str, meta: dict) -> dict:
+    d = _up_root() / f"up-{upid}"
+    received = []
+    count = int(meta.get("parts") or 0)
+    for part in d.glob("*.part"):
+        if not part.stem.isdigit():
+            continue
+        n = int(part.stem)
+        if not 0 <= n < count:
+            continue
+        want = meta["part"] if n < meta["parts"] - 1 else meta["size"] - meta["part"] * (meta["parts"] - 1)
+        try:
+            if part.is_file() and part.stat().st_size == want:
+                received.append(n)
+        except OSError:
+            pass
+    received.sort()
+    return {"id": upid, "name": meta["name"], "size": meta["size"], "part": meta["part"],
+            "parts": meta["parts"], "received": received, "creator": meta.get("creator") or "",
+            "fingerprint": meta.get("fingerprint") or "", "resumable": bool(meta.get("fingerprint"))}
+
+
+@app.get("/api/upload/pending")
+def upload_pending():
+    _up_sweep()
+    out = []
+    for d in _up_root().glob("up-*"):
+        if not d.is_dir():
+            continue
+        try:
+            meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            if meta.get("user") == ctx.uid():
+                out.append(_up_public(d.name[3:], meta))
+        except (OSError, ValueError, TypeError):
+            continue
+    return sorted(out, key=lambda item: item["id"])
+
+
+@app.get("/api/upload/{upid}")
+def upload_status(upid: str):
+    return _up_public(upid, _up_get(upid))
 
 
 @app.post("/api/upload/start")
@@ -855,6 +932,9 @@ def upload_start(body: dict = Body(...)):
         raise HTTPException(400, "Bad file size.")
     if size > config.MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(413, f"That file is too big. The limit is {config.MAX_UPLOAD_MB} MB.")
+    fingerprint = str(body.get("fingerprint") or "").lower()
+    if fingerprint and not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise HTTPException(400, "Bad upload fingerprint.")
     if _disk.get(ctx.uid(), (0, 0))[1] + size > config.MAX_USER_GB * 1e9:
         raise HTTPException(507, "There isn't room for this file in your storage. Delete some older videos to make room.")
     creator = str(body.get("creator") or "")
@@ -879,9 +959,9 @@ def upload_start(body: dict = Body(...)):
     d = _up_root() / f"up-{upid}"
     d.mkdir()
     meta = {"user": ctx.uid(), "name": name, "ext": ext, "size": size, "part": part, "parts": -(-size // part),
-            "options": opts, "creator": creator, "rights_cleared": True, "t": time.time()}
+            "options": opts, "creator": creator, "rights_cleared": True, "fingerprint": fingerprint, "t": time.time()}
     (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    return {"id": upid, "part": part, "parts": meta["parts"]}
+    return {"id": upid, "part": part, "parts": meta["parts"], "received": []}
 
 
 @app.put("/api/upload/{upid}/{n}")

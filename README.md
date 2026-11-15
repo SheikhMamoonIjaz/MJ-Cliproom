@@ -178,14 +178,28 @@ or in `.env`; never commit real keys.
 
 ## Files, retries and cleanup
 
-By default, MJ Cliproom stores downloads, clips, settings and its speech model under `data/`. **Settings → Storage**
-shows the location and lets you move the data folder. Failed downloads keep a `.part` file when the downloader can
-resume it. Use **Retry download** on the failed job card to continue; a platform may still reject a link or discard
-its old download URL, in which case try again later or upload the source file.
+By default, MJ Cliproom stores uploaded videos, source thumbnails, clips, settings, job history, and its speech model
+under `data/`. **Settings → Storage** shows the active folder, lets you open it, and lets you choose a new default
+location. You can also open Storage from the clipping page's **View upload folder** link. A folder move is prepared
+while the app is running and takes effect at the next start; when selected, the existing data is carried over first.
+
+The dashboard's **Update now** action downloads a fast-forward update from the configured GitHub repository and
+installs changed Python requirements. It stops if the checkout has local edits, is not on the configured branch, or
+does not match the configured GitHub repository. Updates change app files only; the selected data folder, cached
+transcripts, finished clips, creator settings, and job history are kept. Restart MJ Cliproom after the update.
+
+Failed downloads keep a `.part` file when the downloader can resume it. Use **Retry download** on the failed job card
+to continue; a platform may still reject a link or discard its old download URL, in which case try again later or
+upload the source file. Large browser uploads keep completed pieces for six hours across restarts. Select the same
+original file from the saved-upload card to continue; the app checks its name, size and file samples before reusing any
+pieces. After a restart, queued video work picks up from saved checkpoints; unfinished live recordings can only
+recover from pieces that are still on disk.
 
 Use the source cleanup control on a video card to schedule or cancel removal of the downloaded source after clips
 finish. Generated clips and job history are separate. Back up the `data/` folder and, on a deployed server, the
 database before moving or removing stored data.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Configuration
 

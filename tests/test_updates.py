@@ -1,6 +1,6 @@
 """The "new version" notice: the version here is read from .git, GitHub is asked what is newer (a stand-in here,
 so nothing leaves this machine), and only the owner is told."""
-import json, os, sys, tempfile
+import json, os, shutil, sys, tempfile
 from pathlib import Path
 os.environ["PEAKCUT_DATA"] = tempfile.mkdtemp(prefix="pc-upd-")
 os.environ.update(PEAKCUT_UPDATE_CHECK="1", DATABASE_URL="", PEAKCUT_ACCOUNTS="0", PEAKCUT_PUBLIC_URL="http://127.0.0.1:8765", PEAKCUT_AI_KEY="", PEAKCUT_AI_MODELS="")
@@ -98,6 +98,17 @@ updates.httpx.get = fake_get
 c = TestClient(server.app, base_url="http://127.0.0.1:8765")
 st = c.get("/api/status").json()
 check("the owner's dashboard gets the notice", (st["update"] or {}).get("behind"), 2)
+check("dashboard reports updater progress without exposing command output", c.get("/api/update").json()["state"], "idle")
+zip_install = Path(tempfile.mkdtemp(prefix="pc-zip-install-"))
+config.ROOT = zip_install
+saved_job = Path(os.environ["PEAKCUT_DATA"]) / "saved-job.json"
+saved_job.write_text("kept", encoding="utf-8")
+r = c.post("/api/update", headers={"Origin": "http://127.0.0.1:8765"})
+check("in-app updater refuses downloaded-zip installs and leaves user data untouched",
+      (r.status_code, r.json().get("detail"), saved_job.read_text(encoding="utf-8")),
+      (409, "This copy was installed without Git. Follow the update steps in the README.", "kept"))
+config.ROOT = real_root
+shutil.rmtree(zip_install, ignore_errors=True)
 updates.ON = False
 check("PEAKCUT_UPDATE_CHECK=0: never asks, never tells", (updates.check(force=True), c.get("/api/status").json()["update"]), (None, None))
 

@@ -1095,7 +1095,9 @@ function startTour() {
 
 /* ============================================================ state */
 const S = {status:{styles:{}, layouts:{}}, jobs:[], creators:[], accounts:[], overview:null, settings:null,
-           view:"library", ctab:"clips"};
+           view:"library", ctab:"clips", pendingUploads:[], resumeUploadId:null};
+const RIGHTS_GATE_VERSION = 1;
+const rightsGateReady = () => Number(S.status?.rights_gate_version || 0) >= RIGHTS_GATE_VERSION;
 const D = {jid:null, cid:null, sig:"", metaIdeas:[], metaFormat:"short"};
 const creatorId = () => S.view.startsWith("c:") ? S.view.slice(2) : null;
 const creator = () => S.creators.find(c => c.id === creatorId());
@@ -1302,16 +1304,34 @@ async function openFeedback(kind = "bug", context = "") {
 }
 function updateHow() {
   const up = S.status?.update, d = $("#formdlg"); if (!up || d.open) return;
-  const ai = "Update this MJ Cliproom folder to the latest version from GitHub (git pull), keep my .env and data folder as they are, install any new requirements, and restart MJ Cliproom.";
-  const cmd = (label, text) => `<h3>${label}</h3><div class="cmd"><code>${esc(text)}</code><button class="btn sm" type="button" data-act="copytext" data-t="${esc(text)}">${ic("copy")}Copy</button></div>`;
-  d.innerHTML = `<form method="dialog" class="dlg upd"><h2>${up.restart ? "The new version is ready" : "A new version of MJ Cliproom is out"}</h2>
-    <p class="help">${up.restart ? "The new files are already in the MJ Cliproom folder. <b>Close MJ Cliproom and start it again</b> to use them." : `You're on <b>${esc(up.current)}</b>. ${up.behind ? `${up.behind} update${up.behind === 1 ? " has" : "s have"} been added since.` : "Newer changes have been added since."}`} Your settings, keys and clips stay as they are.</p>
+  const job = S.status?.update_job || {}, ready = job.state !== "error" && (up.restart || job.state === "done");
+  d.innerHTML = `<form method="dialog" class="dlg upd"><h2>${job.state === "error" ? "Update needs attention" : ready ? "The new version is ready" : "Update MJ Cliproom"}</h2>
+    <p class="help">${job.state === "error" ? "The update did not finish cleanly. Follow the message below before restarting." : ready ? "The new files are in place. Close MJ Cliproom and start it again to use them." : `You're on <b>${esc(up.current)}</b>. ${up.behind ? `${up.behind} update${up.behind === 1 ? " has" : "s have"} been added since.` : "A newer version is available."}`} Updating changes the app files only. Your settings, uploaded videos, thumbnails, clips, history, download cache and saved jobs stay in the selected storage folder. Incomplete work resumes after restart when its source allows it.</p>
+    ${job.state === "error" ? `<div class="note"><span>${esc(job.message || "The update failed. Your saved data was left in place.")}</span></div>` : ""}
     ${up.notes.length ? `<ul>${up.notes.map(n => `<li>${esc(n.title)} <small>${esc(n.date)}</small></li>`).join("")}</ul>` : ""}
-    ${up.restart ? "" : cmd("Ask your AI coding assistant (Claude, Cursor, Copilot...)", ai) + cmd("Or run it yourself, in the MJ Cliproom folder", "git pull && pip install -r requirements.txt")}
-    <p class="sub">${up.restart ? "" : "Then stop MJ Cliproom and start it again. With Docker, run <code>git pull && docker compose up -d --build</code> instead. "}<a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">See every change on GitHub</a></p>
-    <div class="dlg-foot"><button class="btn" value="later">Remind me next version</button><button class="btn primary" value="ok" autofocus>Got it</button></div></form>`;
+    ${ready ? "" : `<p class="sub">The app checks for a clean Git checkout and only applies a fast-forward from its configured GitHub repository. It installs changed Python requirements and leaves the storage folder untouched. <a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">Review every change on GitHub</a>.</p>`}
+    <div class="dlg-foot">${ready ? `<button class="btn" value="ok" autofocus>Got it</button>` : `<button class="btn" value="later">Later</button><button type="button" class="btn primary" data-act="update-now" ${job.state === "running" ? "disabled" : ""}>${job.state === "running" ? "Updating…" : job.state === "error" ? "Retry update" : "Download and install"}</button>`}</div></form>`;
   d.onclose = () => { if (d.returnValue === "later") { try { localStorage.setItem("peakcut_update_seen", up.latest); } catch {} drawShell(); } };
   d.returnValue = "ok"; d.showModal();
+}
+let watchingUpdate = false;
+async function watchUpdate() {
+  if (watchingUpdate) return;
+  watchingUpdate = true;
+  try {
+    for (let i = 0; i < 300; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try { S.status.update_job = await api("/api/update"); } catch { continue; }
+      drawShell();
+      if (S.status.update_job.state !== "running") {
+        try { S.status = await api("/api/status"); } catch {}
+        drawShell();
+        toast(S.status.update_job.state === "done" ? "Update downloaded. Restart MJ Cliproom when you're ready; saved data stays in place." : S.status.update_job.message || "The update needs attention.", S.status.update_job.state === "done" ? "ok" : "bad");
+        return;
+      }
+    }
+    toast("The update is still running. Check the update message again shortly.");
+  } finally { watchingUpdate = false; }
 }
 function greeting() { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 let lastInd = null;
@@ -1373,12 +1393,15 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   const up = S.status.update;
   let upSeen = "";
   try { upSeen = localStorage.getItem("peakcut_update_seen") || ""; } catch {}
-  const upBar = up && up.latest !== upSeen ? `<div class="vb" role="status">${ic("up")}<span>${up.restart ? "<b>The new version is downloaded.</b> Close MJ Cliproom and start it again to use it." : `A new version of MJ Cliproom is out${up.behind ? `: <b>${up.behind} update${up.behind === 1 ? "" : "s"}</b> since yours` : ""}.`}</span>
-    <button class="btn sm primary" data-act="updhow">${up.restart ? "What's new" : "How to update"}</button><button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button></div>` : "";
+  const uj = S.status.update_job || {};
+  const upBar = uj.state === "running" ? `<div class="vb" role="status">${ic("up")}<span><b>Updating MJ Cliproom.</b> ${esc(uj.message || "Your data and saved jobs are safe.")}</span></div>`
+    : up && (up.latest !== upSeen || up.restart) ? `<div class="vb" role="status">${ic("up")}<span>${uj.state === "error" ? `<b>Update needs attention.</b> ${esc(uj.message || "Retry the update.")}` : up.restart || uj.state === "done" ? "<b>The new version is downloaded.</b> Restart MJ Cliproom to use it; your data and saved jobs stay in place." : `A new version of MJ Cliproom is out${up.behind ? `: <b>${up.behind} update${up.behind === 1 ? "" : "s"}</b> since yours` : ""}.`}</span>
+    <button class="btn sm primary" data-act="updhow">${uj.state === "error" ? "Retry update" : up.restart || uj.state === "done" ? "What's new" : "Update now"}</button>${up.restart || uj.state === "done" ? "" : `<button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button>`}</div>` : "";
   const toolBar = S.status.no_ffmpeg ? `<div class="vb" role="alert">${ic("warn")}<span><b>MJ Cliproom can't make clips yet: ffmpeg isn't installed on this computer.</b> Open a terminal, run <code>winget install Gyan.FFmpeg</code> (Mac: <code>brew install ffmpeg</code>, Linux: <code>sudo apt install ffmpeg</code>), then close MJ Cliproom and start it again.</span></div>` : "";
+  const rightsBar = !rightsGateReady() ? `<div class="vb" role="alert">${ic("warn")}<span><b>Restart MJ Cliproom to enable clipping and posting.</b> This page is newer than the running app. Close MJ Cliproom completely, start it again, then reload this page.</span></div>` : "";
   const aiBar = !toolBar && S.status.ai?.problem && me?.is_admin && S.view !== "settings" ? `<div class="vb" role="status">${ic("warn")}<span><b>The AI isn't answering.</b> ${esc(S.status.ai.problem)} Until then, clips are picked by loudness.</span><button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">Open AI settings</button></div>` : "";
   const diskBar = !toolBar && S.status.disk_full && S.view !== "settings" ? `<div class="vb" role="alert">${ic("warn")}<span><b>The drive MJ Cliproom saves to is almost full, so it can't take new videos.</b> Free up space on it, or move MJ Cliproom's folder to a bigger drive.</span>${me?.is_admin ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="storage">Open Storage</button>` : ""}</div>` : "";
-  put($("#vbanner"), toolBar ? toolBar : diskBar ? diskBar : aiBar ? aiBar : upBar ? upBar : me && me.verified === false ? `<div class="vb" role="status">${ic("warn")}<span>Confirm your email to start clipping. We sent a link to <b>${esc(me.email)}</b>.</span><button class="btn sm" data-act="resendverify">Send a new link</button></div>`
+  put($("#vbanner"), toolBar ? toolBar : diskBar ? diskBar : rightsBar ? rightsBar : aiBar ? aiBar : upBar ? upBar : me && me.verified === false ? `<div class="vb" role="status">${ic("warn")}<span>Confirm your email to start clipping. We sent a link to <b>${esc(me.email)}</b>.</span><button class="btn sm" data-act="resendverify">Send a new link</button></div>`
     : kk && kk.ready === false && S.view !== "usage" ? `<div class="vb" role="status">${ic("bolt")}<span>${me?.is_admin ? "Add your AI key to let the AI pick clips and write titles. Until then, clips are picked by loudness." : "The AI isn't set up on this server yet, so clips are picked by loudness."}</span>${me?.is_admin && S.view !== "settings" ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">${ic("plus")}Add AI key</button>` : ""}</div>` : "");
   put($("#tpic"), pic); $("#tpic").classList.toggle("live", !!(c && (c.live_job || liveOn(c).length)));
   put($("#utabs"), tabs); moveInd(); $(".topbar").classList.toggle("tabbed", !!tabs);
@@ -1442,7 +1465,7 @@ function drawAdd(variant) {
   const c = creator();
   $("#add").innerHTML = `<form class="composer ${variant === "hero" ? "big" : "compact"}" id="addform">
     <div class="composer-input">${ic("link")}<input id="url" placeholder="Paste a YouTube, Twitch or Kick video link" autocomplete="off" aria-label="Video link"></div>
-    <div class="att" id="att"><div><div class="att-in" id="attIn"></div></div></div>
+    <div class="att" id="att"><div><div class="att-in" id="attIn"></div></div></div><div id="upRecovery"></div>
     <div class="composer-bar">
       <button type="button" class="chip" data-act="pickfile">${ic("up")}Upload video</button>
       <button type="button" class="chip" data-act="replays">Replay Picker</button>
@@ -1453,10 +1476,11 @@ function drawAdd(variant) {
         <option value="manual">Manual</option></select></label>
       <button type="button" class="chip" data-act="toggleopts" aria-expanded="false">${ic("sliders")}Options</button>
       <span class="grow"></span><span class="hint">or drop a video file here</span>
-      <button class="btn primary" id="goBtn">${ic("scissors")}Make clips</button>
+      <button class="btn primary" id="goBtn" ${rightsGateReady() ? "" : "disabled title=\"Restart MJ Cliproom to enable clipping\""}>${ic("scissors")}Make clips</button>
     </div>
     <label class="ck" style="margin:8px 2px 0"><input type="checkbox" id="rightsConfirm"> I own this video's content or have permission to download, edit and publish it.</label>
     <p class="hint" style="margin:4px 2px 0">Credit, cropping and background music do not replace permission. Confirm only when you have the rights needed for your planned use.</p>
+    ${S.status.user?.is_admin ? `<p class="hint" style="margin:4px 2px 0">Uploads, thumbnails, clips, download cache and job history use the selected storage folder. <button type="button" class="btn sm ghost" data-act="go" data-v="settings" data-tab="storage">View upload folder</button></p>` : ""}
     <div class="composer-opts" inert><div class="og">
       <div class="ob wide"><div class="ot">Clips</div><div class="nsteps">
         ${stepper("o_max", "How many", c?.max_clips ?? 6, 1, 20, 1, "")}
@@ -1546,6 +1570,10 @@ function jobOptions() {
 const DRAFTS = {};
 const draftKey = () => creatorId() ? "c:" + creatorId() : S.view;
 const att = () => DRAFTS[draftKey()] ||= {files: [], links: [], note: null, busy: false, queued: false};
+async function loadPendingUploads() {
+  if (!rightsGateReady()) { S.pendingUploads = []; return; }
+  try { S.pendingUploads = await api("/api/upload/pending"); if ($("#attIn")) drawAtt(); } catch {}
+}
 const VIDEO_EXT = /\.(mp4|mov|mkv|webm|m4v|ts|flv)$/i;
 const fmtLen = s => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = String(s % 60).padStart(2, "0"); return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`; };
 const fmtSize = b => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.max(1, Math.round(b / 1e6)) + " MB";
@@ -1581,6 +1609,10 @@ function rowHtml(A, {id, kind, thumb, len, title, sub, side, bar}) {
 function drawAtt() {
   const box = $("#attIn"); if (!box) return;
   const A = att();
+  const pending = (S.pendingUploads || []);
+  put($("#upRecovery"), pending.map(u => `<div class="card" style="padding:12px;margin:8px 0"><b>Saved upload: ${esc(u.name)}</b>
+    <p class="hint" style="margin:4px 0">${fmtSize(u.size)} · ${u.received.length} of ${u.parts} pieces saved. This stays available for six hours, including through an app restart. Choose the same file to continue; its name, size and sample are checked first. The settings from when it started are kept.</p>
+    <div class="row">${u.resumable ? `<button type="button" class="btn sm primary" data-act="resumefile" data-upid="${esc(u.id)}">Choose file to resume</button>` : `<span class="hint">This upload began in an older version and cannot be matched safely. Start a fresh upload instead.</span>`}<button type="button" class="btn sm ghost" data-act="discardupload" data-upid="${esc(u.id)}">Discard saved upload</button></div></div>`).join(""));
   let h = A.note ? `<div class="lp bad">${ic("warn")}<span>${esc(A.note)}</span></div>` : "";
   h += A.links.map(l => {
     if (l.state === "wait") return `<div class="lp wait" data-row="${l.id}"><div class="th"></div><div class="tx"><span class="sk" style="width:62%"></span><span class="sk" style="width:34%"></span></div>
@@ -1608,9 +1640,10 @@ function drawAtt() {
   $("#att")?.classList.toggle("has", !!h);
   const u = $("#url"); if (u) u.placeholder = A.links.length || A.files.length ? "Paste another link" : "Paste a YouTube, Twitch or Kick video link";
   const b = $("#goBtn");
-  if (b) { b.disabled = A.busy;
+  if (b) { b.disabled = A.busy || !rightsGateReady(); b.title = rightsGateReady() ? "" : "Restart MJ Cliproom to enable clipping";
     const k = A.files.length + A.links.filter(l => l.state === "ok").length;
-    const label = $("#o_mode")?.value === "manual" ? "Open for editing" : "Make clips";
+    const resumable = A.files.filter(f => f.resumeUploadId).length;
+    const label = resumable ? (resumable === 1 ? "Resume upload" : "Resume uploads") : $("#o_mode")?.value === "manual" ? "Open for editing" : "Make clips";
     b.innerHTML = A.busy ? `${ic("up")}Sending…` : A.queued ? `${ic("clock")}Finding video…` : `${ic("scissors")}${label}${k > 1 ? ` (${k})` : ""}`; }
 }
 
@@ -1668,10 +1701,26 @@ document.addEventListener("click", e => {
 
 // A big file goes in pieces (anything standing in front of the app refuses one huge request), two at a time,
 // and a piece that fails is simply sent again. The bar shows the whole file.
+async function uploadFingerprint(file) {
+  if (!globalThis.crypto?.subtle) throw new Error("This browser can't safely verify a saved upload. Open MJ Cliproom in an up-to-date browser.");
+  const edge = 1024 * 1024;
+  const first = new Uint8Array(await file.slice(0, edge).arrayBuffer());
+  const last = new Uint8Array(await file.slice(Math.max(0, file.size - edge)).arrayBuffer());
+  const meta = new TextEncoder().encode(`${file.name}\0${file.size}\0${file.lastModified || 0}\0`);
+  const sample = new Uint8Array(meta.length + first.length + last.length);
+  sample.set(meta); sample.set(first, meta.length); sample.set(last, meta.length + first.length);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", sample))].map(x => x.toString(16).padStart(2, "0")).join("");
+}
 async function sendBig(f, who) {
   const file = f.file;
-  const s = await send("/api/upload/start", {name: file.name, size: file.size, options: jobOptions(), creator: who, rights_cleared: true});
+  const fingerprint = await uploadFingerprint(file);
+  const s = f.resumeUploadId ? await api(`/api/upload/${encodeURIComponent(f.resumeUploadId)}`)
+    : await send("/api/upload/start", {name: file.name, size: file.size, fingerprint, options: jobOptions(), creator: who, rights_cleared: true});
+  if (s.size !== file.size || s.fingerprint !== fingerprint) throw new Error("That file doesn't match the saved upload. Choose the same original file or discard the saved upload and start again.");
+  if ((s.creator || "") !== (who || "")) throw new Error("Open the same creator workspace used when this upload started, then resume it there.");
+  const received = new Set(s.received || []);
   const sent = new Array(s.parts).fill(0);
+  received.forEach(i => { if (Number.isInteger(i) && i >= 0 && i < s.parts) sent[i] = Math.min(s.part, file.size - i * s.part); });
   const show = () => { f.pct = Math.min(99, Math.round(sent.reduce((a, b) => a + b, 0) / file.size * 100)); drawAtt(); };
   const put = i => new Promise((ok, fail) => {
     const x = new XMLHttpRequest();
@@ -1687,23 +1736,24 @@ async function sendBig(f, who) {
     x.onerror = x.ontimeout = () => fail(new Error("Upload failed. Check your connection."));
     x.send(file.slice(i * s.part, Math.min(file.size, (i + 1) * s.part)));
   });
-  let next = 0;
+  let next = 0, failure = null;
   const worker = async () => {
-    while (next < s.parts) {
+    while (next < s.parts && !failure) {
       const i = next++;
+      if (received.has(i)) continue;
       for (let tries = 0; ; tries++) {
-        try { await put(i); break; }
-        catch (e) { sent[i] = 0; if (e.final || tries >= 3) throw e; await new Promise(r => setTimeout(r, 1500 * (tries + 1))); }
+        try { await put(i); received.add(i); break; }
+        catch (e) { sent[i] = 0; if (e.final || tries >= 3) { failure = e; break; } await new Promise(r => setTimeout(r, 1500 * (tries + 1))); }
       }
     }
   };
   try {
     await Promise.all([worker(), worker()]);
+    if (failure) throw failure;
     await send(`/api/upload/${s.id}/finish`, {});
-    f.pct = 100; drawAtt();
+    f.pct = 100; f.resumeUploadId = null; await loadPendingUploads(); drawAtt();
   } catch (e) {
-    next = s.parts;                                   // stop the other sender
-    api(`/api/upload/${s.id}`, {method: "DELETE"}).catch(() => {});
+    f.resumeUploadId = s.id; await loadPendingUploads();
     throw e;
   }
 }
@@ -1725,6 +1775,7 @@ function sendFile(f, who) {
   });
 }
 async function makeClips() {
+  if (!rightsGateReady()) { toast("Restart MJ Cliproom before making clips.", "bad"); return; }
   const A = att();
   if (A.busy) return;
   const typed = $("#url")?.value.trim();
@@ -1991,7 +2042,12 @@ function drawCreatorForm() {
 const creatorForm = () => { const d = {}; $$("#cform [data-k]").forEach(i => { if (i.type === "radio") { if (i.checked) d[i.dataset.k] = i.value; } else d[i.dataset.k] = i.type === "checkbox" ? i.checked : i.value; }); d.accounts = $$("#cform [data-acc]:checked").map(i => i.value); return d; };
 const dirty = on => $("#savebar")?.classList.toggle("on", on);
 async function saveCreator(quiet) {
-  try { await send(`/api/creators/${creatorId()}`, creatorForm(), "PUT"); dirty(false); if (!quiet) toast("Saved", "ok"); await tick(); return true; }
+  const draft = creatorForm();
+  if (!rightsGateReady() && (draft.auto_watch || draft.autopost)) {
+    toast("Restart MJ Cliproom before enabling automatic recording or posting.", "bad");
+    return false;
+  }
+  try { await send(`/api/creators/${creatorId()}`, draft, "PUT"); dirty(false); if (!quiet) toast("Saved", "ok"); await tick(); return true; }
   catch (e) { toast(e.message, "bad"); return false; }
 }
 function drawLog() {
@@ -2173,7 +2229,7 @@ async function drawSettings() {
       const s = S.stor = await api("/api/storage");
       const usedPct = s.total_gb ? Math.min(100, Math.max(1, 100 * (s.total_gb - s.free_gb) / s.total_gb)) : 0;
       const gb = n => `${Number(n).toLocaleString(undefined, {maximumFractionDigits: 1})} GB`;
-      body.innerHTML = `<section class="set-sec"><h2>Storage</h2><p class="help">Everything MJ Cliproom keeps is in one folder: your videos, clips, recordings, creators and settings. You can open it, back it up, or move it to a drive with more room.</p>
+      body.innerHTML = `<section class="set-sec"><h2>Storage</h2><p class="help">This is the default folder for uploaded videos, source thumbnails, finished clips, recordings, job history, and resumable download data. You can open it, back it up, or move it to another drive with more room. Updates change app files and do not move or clear this folder.</p>
           ${s.full ? `<div class="note" style="margin:0 0 14px">${ic("warn")}<span><b>This drive is almost full, so MJ Cliproom can't take new videos.</b> ${gb(s.free_gb)} free on ${esc(s.drive)}; it needs at least ${gb(s.min_free_gb)}. Free up space, or move the folder to another drive below.</span></div>` : ""}
           ${s.pending ? `<div class="note" style="margin:0 0 14px">${ic("clock")}<span><b>The folder changes to ${esc(s.pending)} the next time MJ Cliproom starts.</b> Close MJ Cliproom and start it again. <button class="btn sm ghost" data-act="storcancel">Undo</button></span></div>` : ""}
           <div class="stor-path"><code>${esc(s.path)}</code>${s.local ? `<button class="btn" data-act="storopen">${ic("folder")}Open folder</button>` : ""}</div>
@@ -2303,10 +2359,10 @@ function drawClipDlg(full) {
         <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).map(h => "#" + h).join(" "))}"></label>
         <button class="btn sm" data-act="savemeta">Save post text</button>
         ${j.source_deleted ? '<p class="hint">The original video was deleted. Download it again before editing or re-rendering this clip.</p>' : ""}
-        <button class="btn" data-act="remake" ${j.source_deleted || !j.rights_cleared ? "disabled" : ""}>${ic("scissors")}Save and re-make clip</button>
+        <button class="btn" data-act="remake" ${!rightsGateReady() || j.source_deleted || !j.rights_cleared ? "disabled" : ""}>${ic("scissors")}Save and re-make clip</button>
         <h3>Post it</h3>
         <div id="dposts" class="row" style="gap:4px"></div>
-        ${!j.rights_cleared ? `<p class="hint">Confirm source rights in the video card before posting.</p>` : S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
+        ${!rightsGateReady() ? `<p class="hint">Restart MJ Cliproom to enable posting.</p>` : !j.rights_cleared ? `<p class="hint">Confirm source rights in the video card before posting.</p>` : S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
           <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>`
           : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
@@ -2385,7 +2441,18 @@ function loop() {
 
 /* ============================================================ actions */
 document.addEventListener("submit", e => { if (e.target.id === "addform") { e.preventDefault(); makeClips(); } });
-$("#file").addEventListener("change", e => { attach(e.target.files); e.target.value = ""; });
+$("#file").addEventListener("change", e => {
+  const chosen = [...e.target.files], pendingId = S.resumeUploadId; S.resumeUploadId = null;
+  attach(chosen);
+  if (pendingId && chosen.length) {
+    const f = att().files.find(x => x.file === chosen[0]) || att().files.find(x => x.file.name === chosen[0].name && x.file.size === chosen[0].size);
+    if (f) f.resumeUploadId = pendingId;
+    else toast("Choose a supported video file to resume this upload.", "bad");
+    drawAtt();
+  }
+  e.target.value = "";
+});
+$("#file").addEventListener("cancel", () => { S.resumeUploadId = null; });
 document.addEventListener("dragover", e => { const a = $(".composer"); if (a) { e.preventDefault(); a.classList.add("over"); } });
 document.addEventListener("dragleave", () => $(".composer")?.classList.remove("over"));
 document.addEventListener("drop", e => { const a = $(".composer"); if (a) { e.preventDefault(); a.classList.remove("over"); attach(e.dataTransfer.files); } });
@@ -2416,6 +2483,9 @@ document.addEventListener("change", async e => {
 document.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const a = b.dataset.act, d = b.dataset;
+  if (["confirmrights", "golive", "clipnow", "sourceedit", "trimsourcereopen", "retryvideo", "remake", "postnow", "postqueue"].includes(a) && !rightsGateReady()) {
+    return toast("Restart MJ Cliproom before clipping or posting.", "bad");
+  }
   if (b.tagName === "A") e.preventDefault();
   try {
     if (a === "confirmrights") {
@@ -2459,6 +2529,13 @@ document.addEventListener("click", async e => {
     }
     if (a === "tab") return setTab(d.t);
     if (a === "pickfile") return $("#file").click();
+    if (a === "resumefile") { S.resumeUploadId = d.upid; return $("#file").click(); }
+    if (a === "discardupload") {
+      const upload = S.pendingUploads.find(x => x.id === d.upid);
+      if (!upload || !await ask("Discard this saved upload?", `${upload.name} and its saved pieces will be removed from the upload cache.`, "Discard upload", true)) return;
+      await api(`/api/upload/${encodeURIComponent(d.upid)}`, {method:"DELETE"});
+      await loadPendingUploads(); toast("Saved upload discarded", "ok"); return;
+    }
     if (a === "addmore") { const u = $("#url"); return u && !u.value ? (u.focus(), toast("Paste another link, or drop a file anywhere on the box.")) : $("#file").click(); }
     if (a === "closedlg") return $("#clipdlg").close();
     if (a === "openclip") return openClip(d.j, d.c);
@@ -2602,6 +2679,17 @@ document.addEventListener("click", async e => {
     if (a === "tour") return startTour();
     if (a === "settab") { e.preventDefault(); S.stab = d.k; remember("settings", d.k); return drawSettings(); }
     if (a === "updhow") return updateHow();
+    if (a === "update-now") {
+      if (!rightsGateReady()) return toast("Restart MJ Cliproom before updating this server.", "bad");
+      b.disabled = true; b.textContent = "Starting…";
+      try {
+        S.status.update_job = await send("/api/update", {});
+        $("#formdlg")?.close(); drawShell();
+        toast("Update started. This can take a few minutes; saved media and cache stay in place.");
+        watchUpdate();
+      } catch (err) { b.disabled = false; b.textContent = "Retry update"; toast(err.message, "bad"); }
+      return;
+    }
     if (a === "updlater") { try { localStorage.setItem("peakcut_update_seen", S.status.update?.latest || ""); } catch {} return drawShell(); }
     if (a === "storopen") { await send("/api/storage/open"); return; }
     if (a === "storchange") { S.storOpen = !S.storOpen; S.storNew = ""; return drawSettings(); }
@@ -2727,6 +2815,7 @@ try { if (localStorage.getItem("mini")) $("#app").classList.add("mini"); } catch
 $("#main").addEventListener("scroll", () => $(".topbar").classList.toggle("stuck", $("#main").scrollTop > 4), {passive:true});
 (async () => {
   try { S.status = await api("/api/status"); } catch {}
+  await loadPendingUploads();
   const q = new URLSearchParams(location.search);
   if (q.get("connected") || q.get("connect_error")) {
     const ok = q.get("connected"), err = q.get("connect_error"), nm = q.get("name");

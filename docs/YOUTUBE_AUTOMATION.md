@@ -63,6 +63,12 @@ Uploads use YouTube's resumable protocol. A failed upload is retried up to two m
 after that, the post appears as failed and can be retried from the queue. If the Google connection expires or is
 revoked, reconnect the channel in **Settings → Connected apps** before retrying.
 
+You can publish immediately with **Post now**, or keep the app running and queue clips at the creator's configured
+interval (for example, 15–20 minutes). The queue and its history are saved in MJ Cliproom's data folder. Use **Update
+now** when an update is available; the updater preserves that folder and requests a restart after downloading code and
+any changed requirements. Partial source downloads and unfinished jobs resume after restart when their saved files and
+the source platform allow it. Check **Settings → Storage** to see or change the folder used for uploads and media.
+
 ## 4. Add background music carefully
 
 Open a clip and choose **Instrumental background music**. Upload an audio-only instrumental you own or are licensed
