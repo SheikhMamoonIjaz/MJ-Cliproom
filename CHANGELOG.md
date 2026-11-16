@@ -2,6 +2,12 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 0.10.3 beta — 2026-11-16
+
+- Expanded each of the ten AI-ranked clip suggestions into a complete post package: a factual title, a realistic short
+  description, and relevant gaming hashtags. Apply or copy the full package, or apply only its title. The prompt uses
+  viral-style hooks without inventing events or promising reach; hashtags are topic-specific rather than a live trend feed.
+
 ## 0.10.2 beta — 2026-11-16
 
 - Fixed the missing `brain` import that blocked the new AI title suggestions endpoint.

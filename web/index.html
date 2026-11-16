@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 0.10.2 beta</title>
+<title>MJ Cliproom · 0.10.3 beta</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1262,7 +1262,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.10.2 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.10.3 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1314,20 +1314,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "0.10.2 beta";
+const RELEASE = "0.10.3 beta";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_10_2";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_10_3";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.10.2 beta</h2>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.10.3 beta</h2>
     <ul><li>Queue clips from a prompt. Review them yourself or authorize posting to selected YouTube or Instagram accounts.</li>
     <li>Save AI profiles with their own models and choose which services may act as backups.</li>
     <li>Queue without a local daily cap by default. Platform limits pause the affected queue.</li>
-    <li>Ask your selected AI model for ten ranked title suggestions for an individual clip.</li>
+    <li>Ask your selected AI model for ten ranked clip packages with realistic descriptions and relevant gaming hashtags.</li>
     <li>On Windows, run update-mj-cliproom.bat to use the supervised updater and preserve your storage folder.</li>
-    <li>Fixed a missing server import that prevented AI title suggestions from running.</li>
     <li>Apply verified updates through the launcher and return to the app after restart.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Install and update guide</a></p>
@@ -2405,10 +2404,11 @@ function metadataIdeasHtml() {
 
 function titleIdeasHtml() {
   if (!D.titleIdeas?.length) return "";
-  return `<div class="metasuggestions"><p class="hint">10 title options from ${esc(D.titleModel || "your selected AI model")}, ranked by hook, clarity, and clip-specific detail. They use the clip transcript when available; no title can guarantee views.</p>
+  return `<div class="metasuggestions"><p class="hint">10 complete post options from ${esc(D.titleModel || "your selected AI model")}, ranked by a truthful hook, clarity, and clip detail. Descriptions and relevant gaming hashtags are included. No title or hashtag can guarantee views.</p>
     ${D.titleIdeas.map((idea, i) => `<div class="card" style="padding:10px;margin:6px 0"><b>${String(i + 1).padStart(2, "0")}. ${esc(idea.title)}</b>
-      ${idea.angle ? `<p class="sub">${esc(idea.angle)}</p>` : ""}${idea.evidence ? `<p class="hint">Based on: ${esc(idea.evidence)}</p>` : ""}
-      <div class="row"><button class="btn sm primary" data-act="titleapply" data-i="${i}">Use this title</button><button class="btn sm" data-act="titlecopy" data-i="${i}">Copy title</button></div></div>`).join("")}</div>`;
+      ${idea.angle ? `<p class="sub">${esc(idea.angle)}</p>` : ""}<p class="hint">${esc(idea.description || "")}</p>
+      <p class="hint">${esc((idea.hashtags || []).map(h => "#" + h).join(" "))}${idea.evidence ? `<br>Based on: ${esc(idea.evidence)}` : ""}</p>
+      <div class="row"><button class="btn sm primary" data-act="metaallapply" data-i="${i}">Use all post text</button><button class="btn sm" data-act="titleapply" data-i="${i}">Use title only</button><button class="btn sm" data-act="titlepackcopy" data-i="${i}">Copy post text</button></div></div>`).join("")}</div>`;
 }
 
 const NCS_PICKS = [
@@ -2477,8 +2477,8 @@ function drawClipDlg(full) {
         ${ncsPicksHtml()}
         <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use the instrumental version and verify its current terms before publishing. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
         <h3>Post text</h3>
-        <div class="row"><button class="btn sm primary" data-act="titlegenerate">Suggest 10 AI titles</button></div>
-        <p class="hint">Uses the active model in Settings → AI and this clip’s captions. The AI ranks specific, attention-grabbing options; it cannot predict or guarantee virality.</p>
+        <div class="row"><button class="btn sm primary" data-act="titlegenerate">Generate 10 viral-style post options</button></div>
+        <p class="hint">Uses the active model in Settings → AI and this clip’s captions. Each option includes a realistic description and relevant gaming hashtags, tuned for viral-style discovery without inventing clip events. Hashtags are not a live trend feed.</p>
         <div id="titleideas">${titleIdeasHtml()}</div>
         <div class="row"><select id="metaformat" aria-label="Metadata format"><option value="short">YouTube Shorts ideas</option><option value="long">Full video title and description</option></select>
           <select id="metaregion" aria-label="Trend region"><option value="US">US gaming trends</option><option value="GB">UK gaming trends</option><option value="PK">Pakistan gaming trends</option><option value="IN">India gaming trends</option><option value="CA">Canada gaming trends</option><option value="AU">Australia gaming trends</option></select>
@@ -2904,16 +2904,27 @@ document.addEventListener("click", async e => {
         const result = await send(`/api/jobs/${D.jid}/clips/${D.cid}/titles`, {});
         D.titleIdeas = result.ideas || []; D.titleModel = result.model || "AI model";
         $("#titleideas").innerHTML = titleIdeasHtml();
-        toast(`10 title ideas ready · ${D.titleModel}`, "ok");
+        toast(`10 post options ready · ${D.titleModel}`, "ok");
       } finally { b.disabled = false; b.textContent = label; }
       return;
     }
-    if (a === "titleapply" || a === "titlecopy") {
+    if (["titleapply", "titlecopy", "metaallapply", "titlepackcopy"].includes(a)) {
       const idea = D.titleIdeas[Number(d.i)]; if (!idea) return;
+      const tags = (idea.hashtags || []).map(tag => "#" + tag).join(" ");
       if (a === "titlecopy") { await navigator.clipboard.writeText(idea.title); return toast("Title copied", "ok"); }
-      await send(`/api/jobs/${D.jid}/clips/${D.cid}/metadata`, {title:idea.title}, "PUT");
+      if (a === "titlepackcopy") {
+        await navigator.clipboard.writeText(`${idea.title}\n\n${idea.description}\n\n${tags}`);
+        return toast("Title, description, and hashtags copied", "ok");
+      }
+      const patch = a === "titleapply" ? {title:idea.title}
+        : {title:idea.title, description:idea.description, hashtags:tags};
+      await send(`/api/jobs/${D.jid}/clips/${D.cid}/metadata`, patch, "PUT");
       $("#clipdlg [data-f=title]").value = idea.title;
-      await tick(); return toast("AI title saved to this clip", "ok");
+      if (a === "metaallapply") {
+        $("#clipdlg [data-f=description]").value = idea.description;
+        $("#clipdlg [data-f=hashtags]").value = tags;
+      }
+      await tick(); return toast(a === "titleapply" ? "AI title saved to this clip" : "AI post text saved to this clip", "ok");
     }
     if (a === "metagenerate") {
       const format = $("#metaformat").value, region = $("#metaregion").value;
