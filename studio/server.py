@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import account, load
-from . import (accounts, ai, alerts, auth, config, creators, ctx, db, editor, jobs, live, media, music, posting,
+from . import (accounts, ai, alerts, auth, brain, config, creators, ctx, db, editor, jobs, live, media, music, posting,
                profiles, render, safe, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
@@ -47,7 +47,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "0.10.1 beta"
+VERSION = "0.10.2 beta"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 

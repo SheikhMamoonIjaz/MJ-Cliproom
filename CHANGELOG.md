@@ -2,6 +2,10 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 0.10.2 beta — 2026-11-16
+
+- Fixed the missing `brain` import that blocked the new AI title suggestions endpoint.
+
 ## 0.10.1 beta — 2026-11-16
 
 - Added ten ranked, clip-specific AI title suggestions using the active LLM profile. Apply a title without changing
