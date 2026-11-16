@@ -31,6 +31,8 @@ User-facing changes to MJ Cliproom are listed here.
 - Replaced old source-title and timestamp metadata with distinct gameplay-first title and description drafts for each
   clip. AI title ideas now receive the game and clip transcript, not the stream or channel name; local drafts remain
   available when no AI provider is configured. Drafts do not promise views.
+- Added a separate LLM API action that returns ten ranked title choices for one clip, with a short angle and transcript
+  evidence. Applying a choice updates only the title, keeping the clip description and hashtags intact.
 - Prevented generic "Untitled clip" hooks from being burned into new or re-made renders. Older rendered videos keep
   their baked overlay until the owner confirms source permission and re-makes those clips.
 - Renamed the clip-card action to Review post, clarified missing rights and account blockers, and made Upload now

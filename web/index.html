@@ -1110,7 +1110,7 @@ const S = {status:{styles:{}, layouts:{}}, jobs:[], creators:[], accounts:[], ov
            view:"library", ctab:"clips", pendingUploads:[], resumeUploadId:null};
 const RIGHTS_GATE_VERSION = 1;
 const rightsGateReady = () => Number(S.status?.rights_gate_version || 0) >= RIGHTS_GATE_VERSION;
-const D = {jid:null, cid:null, sig:"", metaIdeas:[], metaFormat:"short"};
+const D = {jid:null, cid:null, sig:"", metaIdeas:[], metaFormat:"short", titleIdeas:[], titleModel:""};
 const creatorId = () => S.view.startsWith("c:") ? S.view.slice(2) : null;
 const creator = () => S.creators.find(c => c.id === creatorId());
 const jobOf = id => S.jobs.find(j => j.id === id);
@@ -2400,6 +2400,14 @@ function metadataIdeasHtml() {
       <div class="row">${long ? "" : `<button class="btn sm primary" data-act="metaapply" data-i="${i}">Use on this clip</button>`}<button class="btn sm" data-act="metacopy" data-i="${i}">Copy</button></div></div>`).join("")}</div>`;
 }
 
+function titleIdeasHtml() {
+  if (!D.titleIdeas?.length) return "";
+  return `<div class="metasuggestions"><p class="hint">10 title options from ${esc(D.titleModel || "your selected AI model")}, ranked by hook, clarity, and clip-specific detail. They use the clip transcript when available; no title can guarantee views.</p>
+    ${D.titleIdeas.map((idea, i) => `<div class="card" style="padding:10px;margin:6px 0"><b>${String(i + 1).padStart(2, "0")}. ${esc(idea.title)}</b>
+      ${idea.angle ? `<p class="sub">${esc(idea.angle)}</p>` : ""}${idea.evidence ? `<p class="hint">Based on: ${esc(idea.evidence)}</p>` : ""}
+      <div class="row"><button class="btn sm primary" data-act="titleapply" data-i="${i}">Use this title</button><button class="btn sm" data-act="titlecopy" data-i="${i}">Copy title</button></div></div>`).join("")}</div>`;
+}
+
 const NCS_PICKS = [
   {name:"Why Do I? (Instrumental)", artist:"Unknown Brain feat. Bri Tolani", url:"https://ncs.io/whydoi", credit:"Song: Unknown Brain - Why Do I? (feat. Bri Tolani) [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/WhyDoI\nWatch: http://youtu.be/tcHJodG5hX8"},
   {name:"Everything [Instrumental]", artist:"Diamond Eyes", url:"https://ncs.io/everything", credit:"Song: Diamond Eyes - Everything [NCS Release]\nMusic provided by NoCopyrightSounds\nFree Download/Stream: http://ncs.io/Everything\nWatch: http://youtu.be/_XspQUK22-U"},
@@ -2420,7 +2428,7 @@ function ncsPicksHtml() {
 }
 
 /* ============================================================ clip editor */
-function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; D.metaIdeas = []; D.metaTrendCount = 0; D.metaFormat = "short"; drawClipDlg(true); $("#clipdlg").showModal(); }
+function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; D.metaIdeas = []; D.titleIdeas = []; D.titleModel = ""; D.metaTrendCount = 0; D.metaFormat = "short"; drawClipDlg(true); $("#clipdlg").showModal(); }
 function drawClipDlg(full) {
   const j = jobOf(D.jid), c = j?.clips.find(x => x.id === D.cid), dlg = $("#clipdlg");
   if (!c) { if (dlg.open) dlg.close(); return; }
@@ -2466,9 +2474,12 @@ function drawClipDlg(full) {
         ${ncsPicksHtml()}
         <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use the instrumental version and verify its current terms before publishing. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
         <h3>Post text</h3>
+        <div class="row"><button class="btn sm primary" data-act="titlegenerate">Suggest 10 AI titles</button></div>
+        <p class="hint">Uses the active model in Settings → AI and this clip’s captions. The AI ranks specific, attention-grabbing options; it cannot predict or guarantee virality.</p>
+        <div id="titleideas">${titleIdeasHtml()}</div>
         <div class="row"><select id="metaformat" aria-label="Metadata format"><option value="short">YouTube Shorts ideas</option><option value="long">Full video title and description</option></select>
           <select id="metaregion" aria-label="Trend region"><option value="US">US gaming trends</option><option value="GB">UK gaming trends</option><option value="PK">Pakistan gaming trends</option><option value="IN">India gaming trends</option><option value="CA">Canada gaming trends</option><option value="AU">Australia gaming trends</option></select>
-          <button class="btn sm" data-act="metagenerate">Generate title ideas</button></div>
+          <button class="btn sm" data-act="metagenerate">Generate full metadata drafts</button></div>
         <p class="hint">Drafts avoid the stream name and timestamps. The selected LLM uses the clip transcript when available; otherwise MJ Cliproom makes conservative gameplay drafts. No title can guarantee views. Long-form ideas are for copying into a separate full-video upload; this uploader posts the clip as a Short.</p>
         <div id="metaideas">${metadataIdeasHtml()}</div>
         <label class="f">Title<input data-f="title" value="${esc(c.title || "Gameplay clip")}"></label>
@@ -2884,6 +2895,23 @@ document.addEventListener("click", async e => {
     if (a === "retryvideo") { await send(`/api/jobs/${d.j}/retry`, {}); toast("Video queued for retry", "ok"); return tick(); }
     if (a === "resetcaptions") { const input = $("#captiondraft"); input.dataset.dirty = "reset"; input.value = ""; input.readOnly = false; return; }
     if (a === "saveglossary") { await saveCaptionGlossary($("#glossarydraft")); return toast("Caption glossary saved", "ok"); }
+    if (a === "titlegenerate") {
+      b.disabled = true; const label = b.textContent; b.textContent = "Asking AI…";
+      try {
+        const result = await send(`/api/jobs/${D.jid}/clips/${D.cid}/titles`, {});
+        D.titleIdeas = result.ideas || []; D.titleModel = result.model || "AI model";
+        $("#titleideas").innerHTML = titleIdeasHtml();
+        toast(`10 title ideas ready · ${D.titleModel}`, "ok");
+      } finally { b.disabled = false; b.textContent = label; }
+      return;
+    }
+    if (a === "titleapply" || a === "titlecopy") {
+      const idea = D.titleIdeas[Number(d.i)]; if (!idea) return;
+      if (a === "titlecopy") { await navigator.clipboard.writeText(idea.title); return toast("Title copied", "ok"); }
+      await send(`/api/jobs/${D.jid}/clips/${D.cid}/metadata`, {title:idea.title}, "PUT");
+      $("#clipdlg [data-f=title]").value = idea.title;
+      await tick(); return toast("AI title saved to this clip", "ok");
+    }
     if (a === "metagenerate") {
       const format = $("#metaformat").value, region = $("#metaregion").value;
       b.disabled = true; const label = b.textContent; b.textContent = "Writing ideas…";

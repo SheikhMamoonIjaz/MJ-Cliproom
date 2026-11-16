@@ -1188,6 +1188,26 @@ def clip_metadata(jid: str, cid: str, body: dict = Body(...)):
         raise HTTPException(502, _ai_error(e) or "The AI could not write metadata. Try another model or try again.")
 
 
+@app.post("/api/jobs/{jid}/clips/{cid}/titles")
+def clip_title_ideas(jid: str, cid: str):
+    job = _job_or_404(jid)
+    clip = next((item for item in job["clips"] if item["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    _throttle("titles:" + ctx.uid(), 12, 600, "Wait a few minutes before asking for more title ideas.")
+    cues = jobs.editable_captions(job, clip)
+    transcript = " ".join(cue.get("text", "") for cue in cues)
+    usage.set_context(job.get("creator"), job.get("title") or "")
+    try:
+        return brain.generate_title_ideas(job.get("title") or clip.get("title", ""),
+                                          job.get("uploader") or "", transcript,
+                                          clip.get("hook") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, _ai_error(e) or "The AI could not write title ideas. Check Settings, AI, and try again.")
+
+
 @app.put("/api/jobs/{jid}/clips/{cid}/metadata")
 def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
     job = _job_or_404(jid)
