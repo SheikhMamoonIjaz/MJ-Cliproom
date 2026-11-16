@@ -1,4 +1,4 @@
-# MJ Cliproom · 0.10 beta
+# MJ Cliproom · 0.10.1 beta
 
 [What's new](CHANGELOG.md) · [Install or update the beta](docs/BETA_0_10.md)
 

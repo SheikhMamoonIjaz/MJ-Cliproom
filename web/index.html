@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 0.10 beta</title>
+<title>MJ Cliproom · 0.10.1 beta</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1262,7 +1262,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.10 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.10.1 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1314,17 +1314,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "0.10 beta";
+const RELEASE = "0.10.1 beta";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_10";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_10_1";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.10 beta</h2>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.10.1 beta</h2>
     <ul><li>Queue clips from a prompt. Review them yourself or authorize posting to selected YouTube or Instagram accounts.</li>
     <li>Save AI profiles with their own models and choose which services may act as backups.</li>
     <li>Queue without a local daily cap by default. Platform limits pause the affected queue.</li>
+    <li>Ask your selected AI model for ten ranked title suggestions for an individual clip.</li>
+    <li>On Windows, run update-mj-cliproom.bat to use the supervised updater and preserve your storage folder.</li>
     <li>Apply verified updates through the launcher and return to the app after restart.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Install and update guide</a></p>

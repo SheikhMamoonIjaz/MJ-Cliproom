@@ -17,6 +17,10 @@ stages changed dependencies in a separate environment, updates the checkout and 
 The browser refreshes after the new server answers. Finish active live recordings and social uploads
 and resolve pending Storage moves first. A rejected update or dependency failure keeps the previous checkout.
 
+On Windows, double-click `update-mj-cliproom.bat` in this checkout. It starts the supervised launcher if needed and
+requests the same verified update. If sign-in is enabled, it opens the app so an administrator can sign in and use
+**Update now → Install and restart**.
+
 To require signatures, set `PEAKCUT_UPDATE_REQUIRE_SIGNATURE=1` and configure Git to trust the
 release maintainer's signing key outside the repository. For SSH see
 [Git's allowed signers setting](https://git-scm.com/docs/git-config#Documentation/git-config.txt-gpgsshallowedSignersFile).

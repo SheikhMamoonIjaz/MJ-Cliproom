@@ -2,6 +2,13 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 0.10.1 beta — 2026-11-16
+
+- Added ten ranked, clip-specific AI title suggestions using the active LLM profile. Apply a title without changing
+  the description or hashtags; titles aim for strong viewer interest but cannot guarantee virality.
+- Added `update-mj-cliproom.bat` for Windows. It starts the supervised launcher when needed, asks the app's updater
+  to apply a safe fast-forward, leaves the configured storage folder in place, and opens the app after restart.
+
 ## 0.10 beta (v0.10.0-beta) — 2026-11-16
 
 - Added a first-run What’s New dialog and a [beta installation and update guide](docs/BETA_0_10.md).

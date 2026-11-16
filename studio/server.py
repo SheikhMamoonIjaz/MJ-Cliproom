@@ -47,7 +47,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "0.10 beta"
+VERSION = "0.10.1 beta"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
