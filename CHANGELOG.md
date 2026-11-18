@@ -2,6 +2,23 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 0.12.0 beta — 2026-11-18
+
+- A YouTube upload stores its resumable session address and continues that same upload after a crash.
+- Facecam layout uses a face detector when OpenCV is installed, and the busiest corner when it is not.
+- Kick chat is read and counted in the live spike detector, the same way Twitch chat is.
+- Each clip card shows the full viral-score breakdown. Thumbnails are drawn from the busiest moment, in
+  1280×720 and a vertical Short cover, and can be edited before upload.
+- A post package writes five titles, three hooks, a source-credited description, hashtags, a pinned comment,
+  and captions for TikTok, Reels, Facebook and X. It does not invent events and does not call GTA 5 GTA 6.
+- The review queue accepts A or P to approve and post, and X to dismiss. A daily summary is shown in the app
+  and sent through Discord or Telegram when those alerts are already set. Permission notes are still not emailed.
+- Authorized rights can expire. A missing language tag no longer skips a Latin title, and English speech is kept
+  even when the page names another language.
+- Original shorts can be generated and posted from your own words, with no third-party footage. Someone else's
+  footage still uploads only from an allowlisted, unexpired Authorized source.
+- Post all queues every finished clip of a video. Starting a live session checks that the stream has begun.
+
 ## 0.11.0 beta — 2026-11-18
 
 - Added Autopilot for the MJ Plays GTA creator list. It watches those channels (and any campaign source you add),

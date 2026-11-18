@@ -47,7 +47,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "0.11.0 beta"
+VERSION = "0.12.0 beta"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -1631,6 +1631,12 @@ def go_live(cid: str, body: dict = Body(default={})):
     asked = str((body or {}).get("channel") or "")
     url = asked if asked in c["channels"].values() else c["channel"] if c["channel"] in on_air or not on_air else on_air[0]
     try:
+        live.resolve(live.normalize(url))
+    except live.NotLive as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, "Could not verify the live stream: " + str(e)[:180])
+    try:
         return jobs.public(live.start_session(c, url))
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1964,34 +1970,81 @@ def autopilot_commentary_clear():
     return autopilot.public(state)
 
 
+@app.post("/api/jobs/{jid}/clips/{cid}/package")
+def clip_package(jid: str, cid: str):
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    from . import brain
+    words = " ".join(w.get("w", "") for w in (clip.get("fixed_words") or []) if isinstance(w, dict))
+    credit = clip.get("source_credit") or {}
+    pack = brain.viral_pack(words or clip.get("description") or "", job.get("game") or job.get("title") or "",
+                            credit.get("name") or "", credit.get("url") or "", clip.get("hook") or "")
+    return pack
+
+
+@app.post("/api/jobs/{jid}/clips/{cid}/thumb")
+def clip_thumb(jid: str, cid: str, body: dict = Body(default={})):
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    from . import thumbs
+    hook = str((body or {}).get("hook") or clip.get("hook") or clip.get("title") or "GTA 6")[:80]
+    streamer = str((body or {}).get("streamer") or (clip.get("source_credit") or {}).get("name") or "")[:40]
+    wide = Path(job["dir"]) / "clips" / f"{cid}-thumb.jpg"
+    tall = Path(job["dir"]) / "clips" / f"{cid}-cover.jpg"
+    thumbs.draw_thumbnail(wide, hook, wide=True, streamer=streamer)
+    thumbs.draw_thumbnail(tall, hook, wide=False, streamer=streamer)
+    clip["thumb_hook"] = hook
+    clip["thumb_file"] = wide.name
+    jobs.save(job)
+    return {"wide": f"/media/{jid}/{wide.name}", "short": f"/media/{jid}/{tall.name}"}
+
+
 @app.post("/api/posts")
 def add_posts(body: dict = Body(...)):
     job = jobs.get(str(body.get("job")))
-    clip = next((c for c in job["clips"] if c["id"] == body.get("clip")), None) if job else None
-    if not clip or clip.get("status") != "done":
-        raise HTTPException(404, "That clip is not ready")
+    if not job:
+        raise HTTPException(404, "No such video")
     _require_source_rights(job)
     if job.get("automation") and body.get("publish_authorized") is not True:
         raise HTTPException(400, "Confirm that you have permission to publish this clip to the selected accounts.")
+    clip_arg = body.get("clip")
+    clips_arg = body.get("clips")
+    if clip_arg == "all" or body.get("all_clips"):
+        target_clips = [c for c in job["clips"] if c.get("status") == "done"]
+    elif isinstance(clips_arg, list):
+        wanted = set(clips_arg)
+        target_clips = [c for c in job["clips"] if c["id"] in wanted and c.get("status") == "done"]
+    else:
+        target_clips = [c for c in job["clips"] if c["id"] == clip_arg and c.get("status") == "done"]
+    if not target_clips:
+        raise HTTPException(404, "No finished clips are ready to post")
     metadata = body.get("metadata")
-    if metadata is not None:
+    if metadata is not None and len(target_clips) == 1:
         if not isinstance(metadata, dict):
             raise HTTPException(400, "Post text must include a title, description and hashtags.")
         try:
-            jobs.update_metadata(job, clip["id"], metadata)
+            jobs.update_metadata(job, target_clips[0]["id"], metadata)
         except RuntimeError as e:
             raise HTTPException(409, str(e))
         except ValueError as e:
             raise HTTPException(400, str(e))
-    try:
-        made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if not made:
+    account_ids = [str(a) for a in body.get("accounts", [])][:20]
+    all_made = []
+    for clip in target_clips:
+        try:
+            all_made.extend(posting.enqueue(job, clip, account_ids, now=bool(body.get("now"))))
+        except ValueError as e:
+            if len(target_clips) == 1:
+                raise HTTPException(400, str(e))
+    if not all_made:
         raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
-    return {"queued": len(made), "posts": [{"id": post["id"], "platform": post["platform"],
-                                             "account_name": post["account_name"], "status": post["status"],
-                                             "due_at": post["due_at"]} for post in made]}
+    return {"queued": len(all_made), "posts": [{"id": post["id"], "platform": post["platform"],
+                                                 "account_name": post["account_name"], "status": post["status"],
+                                                 "due_at": post["due_at"]} for post in all_made]}
 
 
 @app.post("/api/posts/{pid}/{action}")

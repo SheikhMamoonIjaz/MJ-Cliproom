@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 0.11.0 beta</title>
+<title>MJ Cliproom · 0.12.0 beta</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1262,7 +1262,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.11.0 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.12.0 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1314,19 +1314,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "0.11.0 beta";
+const RELEASE = "0.12.0 beta";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_11_0";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_12_0";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.11.0 beta</h2>
-    <ul><li>Autopilot watches the creator list for English GTA 6 streams, records a few at a time, and uploads only sources you mark Authorized.</li>
-    <li>A stream is GTA 6 only when its category or title says so. GTA 5 is never relabelled as GTA 6.</li>
-    <li>Each moment gets a viral score that does not bypass the rights check. Signal-only clips wait for review unless you turn on full auto for that source.</li>
-    <li>Posts keep a source credit and link. An optional commentary track can be mixed in, and the full frame is kept so a creator watermark is not cropped off.</li>
-    <li>Unconfirmed handles are listed but not watched until you tick Handle checked.</li></ul>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.12.0 beta</h2>
+    <ul><li>YouTube uploads remember their session, so a crash continues the same upload.</li>
+    <li>Facecam layout looks for a face, then uses the busiest corner. Kick chat counts toward live spikes.</li>
+    <li>Clip cards show the full viral score. Thumbnails and a post package can be made before upload.</li>
+    <li>Press A to approve a review clip, X to dismiss it, and P to approve and post. A daily summary stays in the app.</li>
+    <li>Authorized rights can expire. Original shorts use your own words and no one else's footage.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Install and update guide</a></p>
     <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
@@ -1905,6 +1905,11 @@ async function makeClips() {
 
 /* ============================================================ clips + jobs */
 function scoreCls(s) { return s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : ""; }
+function viralBits(v) {
+  if (!v || !v.parts) return "";
+  const names = {hook:"Hook", entertainment:"Entertainment", surprise:"Surprise", relevance:"Relevance", commentary:"Commentary", retention:"Retention", timeliness:"Timeliness"};
+  return `<p class="hint">Viral ${v.total}/100 · ${Object.entries(v.parts).map(([k, n]) => `${names[k] || k} ${n}`).join(" · ")}</p>`;
+}
 function postPills(c) {
   return Object.values(c.posts || {}).filter(p => p.status !== "cancelled").map(p => {
     const cls = p.status === "posted" ? "ok" : p.status === "failed" ? "bad" : "warn";
@@ -1924,6 +1929,7 @@ function clipHtml(j, c) {
     <div class="clip-body">
       ${c.hook && !isPlaceholderHook(c.hook) ? `<div class="hook">${esc(c.hook)}</div>` : ""}
       <div class="ttl">${esc(c.title)}</div>
+      ${viralBits(c.viral)}
       ${postPills(c) ? `<div class="row" style="gap:4px">${postPills(c)}</div>` : ""}
       <div class="clip-foot">
         ${busyClip ? "" : `<label class="selck" title="Select this clip"><input type="checkbox" data-sel="${key}" ${sel().has(key) ? "checked" : ""} aria-label="Select this clip"></label>`}
@@ -1978,6 +1984,7 @@ function jobHtml(j) {
         ${j.can_edit_source ? `<button class="btn sm" data-act="sourceedit" data-j="${j.id}">Make a clip</button>` : ""}
         ${j.can_delete_source ? `<button class="btn sm" data-act="delsource" data-j="${j.id}">Delete source · ${(j.source_size_bytes / 1e9).toFixed(1)} GB</button>` : ""}
         ${j.source_deleted ? `<span class="hint">Downloaded source deleted</span>` : ""}
+        ${j.clips.some(c => c.status === "done") ? `<button class="btn sm" data-act="postalljob" data-j="${j.id}">${ic("send")}Post all (${j.clips.filter(c => c.status === "done").length})</button>` : ""}
         ${j.clips.some(c => c.status === "done") ? `<button class="btn sm icon ghost" data-act="dlall" data-j="${j.id}" title="Download all clips of this video" aria-label="Download all clips of this video">${ic("down")}</button>` : ""}
         <button class="btn sm icon ghost" data-act="deljob" data-j="${j.id}" title="Delete" aria-label="Delete this video and its clips">${ic("trash")}</button>
         <label class="selck" title="Select this video and its clips"><input type="checkbox" data-sel="j:${j.id}" ${sel().has("j:" + j.id) ? "checked" : ""} aria-label="Select this video"></label>`}</div></div>
@@ -2018,9 +2025,40 @@ function drawSelBar() {
   put(bar, `<b>${n} selected</b>
     <button class="btn sm" data-act="selall">Select all</button>
     <button class="btn sm" data-act="clipsets" ${dl ? "" : "disabled"}>Add to Clip Set</button>
+    <button class="btn sm" data-act="selpost" ${dl ? "" : "disabled"}>${ic("send")}Post all (${dl})</button>
     <button class="btn sm primary" data-act="seldl" ${dl ? "" : "disabled"}>${ic("down")}Download${dl ? ` ${dl} clip${dl === 1 ? "" : "s"}` : ""}</button>
     <button class="btn sm danger" data-act="seldel">${ic("trash")}Delete</button>
     <button class="btn sm" data-act="selclear">Cancel</button>`);
+}
+async function openBulkPost(jobIds = [], clipPairs = []) {
+  const readyAccounts = S.accounts || [];
+  if (!readyAccounts.length) return toast("Connect a posting account in Settings first.", "bad");
+  const dialog = $("#formdlg");
+  dialog.innerHTML = `<div class="dlg"><h2>Post the finished clips</h2>
+    <p class="help">Queue the selected clips to the accounts you tick. Each clip still needs source permission.</p>
+    <div class="fields">${readyAccounts.map(a => `<label class="ck"><input type="checkbox" data-bacc value="${esc(a.id)}" checked> ${esc(a.label || a.platform)} · ${esc(a.name)}</label>`).join("")}</div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button>
+    <button class="btn primary" type="button" id="bulkpostgo">Queue posts</button></div></div>`;
+  $("[data-close]", dialog).onclick = () => dialog.close();
+  $("#bulkpostgo", dialog).onclick = async () => {
+    const accs = $$("[data-bacc]:checked", dialog).map(i => i.value);
+    if (!accs.length) return toast("Tick at least one account.", "bad");
+    dialog.close();
+    let total = 0;
+    const handled = new Set();
+    for (const jid of jobIds) {
+      try { total += (await send("/api/posts", {job: jid, clip: "all", accounts: accs})).queued || 0; handled.add(jid); }
+      catch (err) { toast(err.message, "bad"); }
+    }
+    for (const [jid, cid] of clipPairs) {
+      if (handled.has(jid)) continue;
+      try { total += (await send("/api/posts", {job: jid, clip: cid, accounts: accs})).queued || 0; }
+      catch (err) { toast(err.message, "bad"); }
+    }
+    toast(`Queued ${total} post${total === 1 ? "" : "s"}.`, "ok");
+    await tick();
+  };
+  dialog.showModal();
 }
 function zipDownload(ids) {
   if (!ids.length) return toast("None of those clips are ready to download yet.");
@@ -2292,15 +2330,18 @@ function drawAutopilot() {
       <td><input data-k="handle" value="${esc(c.handle || "")}" spellcheck="false" aria-label="Handle for ${esc(c.name)}"></td>
       <td><input type="checkbox" data-k="verified_handle" ${c.verified_handle ? "checked" : ""} aria-label="Handle checked"></td>
       <td><input type="checkbox" data-k="rights" ${c.rights ? "checked" : ""} aria-label="Allowlist"></td>
-      <td><select data-k="rights_status" aria-label="Rights status">${statuses.map(s => `<option ${c.rights_status === s ? "selected" : ""}>${s}</option>`).join("")}</select></td>
+      <td><select data-k="rights_status" aria-label="Rights status">${statuses.map(s => `<option ${c.rights_status === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+        <input data-k="rights_until" type="date" value="${c.rights_until ? new Date(c.rights_until * 1000).toISOString().slice(0, 10) : ""}" aria-label="Rights expiry"></td>
       <td><input type="checkbox" data-k="full_auto" ${c.full_auto ? "checked" : ""} aria-label="Full auto"></td>
       <td><button type="button" class="btn sm ghost" data-act="auto-draft" data-id="${esc(c.id)}">Draft</button> <button type="button" class="btn sm ghost" data-act="auto-remove" data-id="${esc(c.id)}">Remove</button></td></tr>`).join("");
   const streams = (a.streams || []).slice(0, 20).map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.platform || "")}</td><td>${s.live ? "Live" : "Offline"}</td><td>${esc(s.game || "")}</td><td>${esc(s.action || "")}</td><td class="hint">${esc(s.reason || "")}</td></tr>`).join("");
   const queue = (a.queue || []).map(q => `<tr><td>${esc(q.title || "Clip")}</td><td>${esc(q.status)}</td><td>${q.viral ? q.viral.total : ""}</td><td class="hint">${esc(q.reason || "")}</td>
-      <td>${q.preview ? `<a class="btn sm" href="${esc(q.preview)}" target="_blank" rel="noopener">Preview</a> ` : ""}${q.status === "review" ? `<button class="btn sm" data-act="auto-approve" data-id="${esc(q.id)}">Approve</button> <button class="btn sm ghost" data-act="auto-dismiss" data-id="${esc(q.id)}">Dismiss</button>` : ""}</td></tr>`).join("");
+      <td>${viralBits(q.viral)}${q.preview ? `<a class="btn sm" href="${esc(q.preview)}" target="_blank" rel="noopener">Preview</a> ` : ""}${q.status === "review" ? `<button class="btn sm" data-act="auto-approve" data-id="${esc(q.id)}">Approve & post</button> <button class="btn sm ghost" data-act="auto-dismiss" data-id="${esc(q.id)}">Dismiss</button>` : ""}</td></tr>`).join("");
   box.innerHTML = `<section class="set-sec"><h2>Autopilot</h2>
       <p class="help">Watches the creator list for live GTA 6. A stream counts only when its Twitch or Kick category, or its YouTube title, says GTA 6. GTA 5 is skipped and is never renamed. Uploads happen only for a source that is on the allowlist and set to Authorized. The viral score is separate and does not grant permission.</p>
-      <label class="sw"><input type="checkbox" id="auto_on" ${a.enabled ? "checked" : ""}><span>Autopilot is ${a.enabled ? "on" : "off"}<small>${a.recording || 0} recording now. ${a.verified_channels || 0} handles are confirmed. Server live ceiling is ${a.server_live_ceiling}.</small></span></label>
+      <label class="sw"><input type="checkbox" id="auto_on" ${a.enabled ? "checked" : ""}><span>Autopilot is ${a.enabled ? "on" : "off"}<small>${a.recording || 0} recording now. ${a.verified_channels || 0} handles are confirmed. Server live ceiling is ${a.server_live_ceiling}. Keys: A approve, P approve and post, X dismiss.</small></span></label>
+      <label class="sw"><input type="checkbox" id="auto_original" ${a.original_mode ? "checked" : ""}><span>Original shorts<small>Your own narration and royalty-free music. No one else's footage, so no creator permission is required.</small></span></label>
+      <label class="f">Original topic<input id="auto_topic" value="${esc(a.original_topic || "")}" maxlength="240"></label>
       <div class="fields">
         <label class="f">Keywords<textarea id="auto_keywords" rows="2">${esc((a.keywords || []).join(", "))}</textarea><span class="hint">Search uses these words. A listed channel is still kept only when the live game is GTA 6.</span></label>
         <label class="f">Recordings at once<input id="auto_max" type="number" min="1" max="32" value="${a.max_recordings}"></label>
@@ -2321,6 +2362,7 @@ function drawAutopilot() {
     <section class="set-sec"><h2>Live check</h2>
       ${streams ? `<div class="scroll"><table><tr><th>Creator</th><th>Platform</th><th></th><th>Game</th><th>Result</th><th>Why</th></tr>${streams}</table></div>` : `<p class="help">No scan yet. Save, then choose Scan now. Turning Autopilot on scans on its own.</p>`}
     </section>
+    <section class="set-sec"><h2>Today</h2><p class="help">${esc(a.summary || "")}</p></section>
     <section class="set-sec"><h2>Clip queue</h2>
       ${queue ? `<div class="scroll"><table><tr><th>Clip</th><th>Status</th><th>Viral</th><th>Note</th><th></th></tr>${queue}</table></div>` : `<p class="help">Finished clips show up here. Review items are not uploaded.</p>`}
       ${(a.errors || []).length ? `<div class="note">${a.errors.slice(0, 5).map(e => `<div>${esc(e.message || "")}</div>`).join("")}</div>` : ""}
@@ -2334,9 +2376,11 @@ function autopilotBody() {
     verified_handle: tr.querySelector("[data-k=verified_handle]").checked,
     rights: tr.querySelector("[data-k=rights]").checked,
     rights_status: tr.querySelector("[data-k=rights_status]").value,
+    rights_until: tr.querySelector("[data-k=rights_until]").value ? Date.parse(tr.querySelector("[data-k=rights_until]").value) / 1000 + 86399 : null,
     full_auto: tr.querySelector("[data-k=full_auto]").checked,
     note: tr.dataset.note || ""}));
-  return {enabled: $("#auto_on").checked, keywords: $("#auto_keywords").value, channels,
+  return {enabled: $("#auto_on").checked, original_mode: $("#auto_original")?.checked === true,
+    original_topic: $("#auto_topic")?.value || "", keywords: $("#auto_keywords").value, channels,
     max_recordings: Number($("#auto_max").value), gap_min: Number($("#auto_gap").value),
     gap_max: Number($("#auto_gap").value), daily_cap: Number($("#auto_cap").value),
     quota_units: Number($("#auto_quota").value), privacy: $("#auto_privacy").value};
@@ -2577,6 +2621,9 @@ function drawClipDlg(full) {
           ${!S.accounts.length ? `<p class="hint">No posting accounts are connected, so there is nowhere to upload this clip yet.</p>` : ""}
           ${j.rights_cleared && S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
             <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Upload now</button><button class="btn" data-act="postqueue">Add to queue</button></div>
+            <div class="row"><button class="btn sm" data-act="makethumb" data-j="${j.id}" data-c="${c.id}">Make thumbnail</button><button class="btn sm" data-act="makepack" data-j="${j.id}" data-c="${c.id}">Title options</button></div>
+            <p class="hint" id="packnote"></p>
+            ${j.clips.filter(x => x.status === "done").length > 1 ? `<div class="row"><button class="btn sm" data-act="postallinone" data-j="${j.id}">${ic("send")}Post all clips (${j.clips.filter(x => x.status === "done").length})</button></div>` : ""}
             <p class="hint">Upload now sends the clip through the selected account’s API and keeps you on this page. Watch the post status and returned link here.</p>` : ""}`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
           ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
@@ -2654,6 +2701,20 @@ function loop() {
 }
 
 /* ============================================================ actions */
+document.addEventListener("keydown", async e => {
+  if (S.view !== "autopilot" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.matches("input, textarea, select")) return;
+  const row = (S.auto?.queue || []).find(q => q.status === "review");
+  if (!row) return;
+  const key = e.key.toLowerCase();
+  if (!["a", "p", "x"].includes(key)) return;
+  e.preventDefault();
+  try {
+    S.auto = await send("/api/autopilot/queue/" + encodeURIComponent(row.id) + "/" + (key === "x" ? "dismiss" : "approve"), {});
+    drawAutopilot();
+    toast(key === "x" ? "Dismissed." : "Approved and queued.", "ok");
+  } catch (err) { toast(err.message, "bad"); }
+});
 document.addEventListener("submit", e => {
   if (e.target.id === "addform") { e.preventDefault(); makeClips(); }
   if (e.target.id === "promptform") { e.preventDefault(); submitPrompt(e.target); }
@@ -2860,6 +2921,21 @@ document.addEventListener("click", async e => {
       render(); toast("Clip deleted", "ok"); return tick();
     }
     if (a === "dlall") return zipDownload((jobOf(d.j)?.clips || []).filter(c => c.status === "done").map(c => d.j + "." + c.id));
+    if (a === "makethumb") {
+      const hook = prompt("Thumbnail line", "");
+      const made = await send(`/api/jobs/${d.j}/clips/${d.c}/thumb`, {hook: hook || ""});
+      toast("Thumbnail saved.", "ok");
+      return;
+    }
+    if (a === "makepack") {
+      const pack = await send(`/api/jobs/${d.j}/clips/${d.c}/package`, {});
+      const note = $("#packnote");
+      if (note) note.textContent = (pack.titles || []).join(" · ");
+      toast("Title options are ready.", "ok");
+      return;
+    }
+    if (a === "postalljob" || a === "postallinone") return openBulkPost([d.j]);
+    if (a === "selpost") { const {jobsSel, clipsSel} = selParts(); return openBulkPost(jobsSel, clipsSel); }
     if (a === "seldl") return zipDownload(selClips());
     if (a === "selclear") { sel().clear(); return render(); }
     if (a === "selall") {
