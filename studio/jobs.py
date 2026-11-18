@@ -256,6 +256,11 @@ def post_metadata(job, clip, overrides=None) -> dict:
                 break
     if not tags:
         tags = draft["hashtags"]
+    credit = values.get("source_credit") if isinstance(values.get("source_credit"), dict) else None
+    if credit and credit.get("name") and str(credit.get("url") or "").startswith("https://"):
+        url = str(credit["url"]).strip()
+        if url not in description:
+            description = (description + f"\n\nSource: {str(credit['name']).strip()[:80]}\n{url}").strip()[:4000]
     return {"title": title, "description": description, "hashtags": tags}
 
 
@@ -317,21 +322,83 @@ def public(job) -> dict:
     return out
 
 
+def _snapshot(obj, depth=0):
+    """A plain copy so a clip list that changes mid-save cannot throw the write away."""
+    if depth > 6:
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _snapshot(v, depth + 1) for k, v in list(obj.items())}
+    if isinstance(obj, (list, tuple)):
+        return [_snapshot(v, depth + 1) for v in list(obj)]
+    return obj
+
+
+def _known_creator(creator):
+    """The creator id to store. Only an id this account already has, never the raw form text."""
+    if not creator:
+        return None
+    match = re.fullmatch(r"[\w\-]{1,60}", str(creator))
+    if not match:
+        return None
+    ident = match.group(0)
+    row = creators.get(ident)
+    if not row or row.get("id") != ident:
+        return None
+    return ident
+
+
+def _job_folder(job) -> Path:
+    """The job's own folder, and only when it stays inside that account's data folder."""
+    root = config.user_dir(str(job.get("user") or "")).resolve()
+    folder = Path(str(job.get("dir") or "")).resolve()
+    folder.relative_to(root)
+    if folder.is_symlink():
+        raise ValueError("The job folder cannot be a link.")
+    return folder
+
+
+def _write_job(folder: Path, text: str):
+    """Write job.json without following a link out of the job folder."""
+    target = folder / "job.json"
+    tmp = folder / "job.json.tmp"
+    for path in (target, tmp):
+        if path.is_symlink():
+            raise ValueError("The job file cannot be a link.")
+        path.resolve().relative_to(folder)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        os.write(fd, text.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.replace(tmp, target)
+
+
 def save(job):
     ctx.bump(job.get("user"))
     with _lock:
-        d = Path(job["dir"])
+        try:
+            folder = _job_folder(job)
+        except (OSError, ValueError):
+            return
+        text = None
         for _ in range(5):
             try:
                 text = json.dumps(job, indent=1)
                 break
             except RuntimeError:  # changed mid-dump by another thread
                 time.sleep(0.05)
-        else:
+        if text is None:
+            try:
+                text = json.dumps(_snapshot(job), indent=1)
+            except (TypeError, ValueError):
+                return
+        try:
+            _write_job(folder, text)
+        except (OSError, ValueError):
             return
-        tmp = d / "job.json.tmp"
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(d / "job.json")
 
 
 def _set(job, **kw):
@@ -442,17 +509,18 @@ def running_now() -> int:
 
 def create(source: dict, options: dict, enqueue=True, creator=None, kind="video", rights_cleared=False, automation=None) -> dict:
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:10]
-    c = creators.get(creator) if creator else None
+    creator_id = _known_creator(creator)
+    c = creators.get(creator_id) if creator_id else None
     if c:
-        d = creators.root(c["id"]) / ("live" if kind == "live" else "videos") / jid
+        d = creators.root(creator_id) / ("live" if kind == "live" else "videos") / jid
         base = {**DEFAULTS, **{k: c[k] for k in ("max_clips", "min_len", "max_len", "style", "layout")}}
     else:
-        d, base, creator = config.user_dir(ctx.uid()) / "jobs" / jid, dict(DEFAULTS), None
+        d, base, creator_id = config.user_dir(ctx.uid()) / "jobs" / jid, dict(DEFAULTS), None
     d.mkdir(parents=True)
     opts = {**base, **clean_options(options)}
     if opts["min_len"] >= opts["max_len"]:
         opts["min_len"] = max(5, opts["max_len"] - 5)
-    job = {"id": jid, "user": ctx.uid(), "kind": kind, "creator": creator, "dir": str(d), "created": time.time(), "source": source,
+    job = {"id": jid, "user": ctx.uid(), "kind": kind, "creator": creator_id, "dir": str(d), "created": time.time(), "source": source,
            "options": opts, "status": "queued", "stage": "Waiting", "progress": 0.0,
            "title": source.get("name", ""), "uploader": "", "duration": 0, "clips": [], "error": None, "ai": {},
            "rights_cleared": rights_cleared, "rights_cleared_at": time.time() if rights_cleared else None}
@@ -633,9 +701,18 @@ def update_metadata(job, cid: str, changes: dict):
         return clip
 
 
+def path_inside(path, root) -> bool:
+    """True when a saved path stays inside the folder it belongs to, even if it is a shortcut."""
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def source_file(job):
     path = job.get("source_path")
-    if job.get("kind") == "video" and path and Path(path).is_file():
+    if job.get("kind") == "video" and path and Path(path).is_file() and path_inside(path, job["dir"]):
         return Path(path)
     return None
 
@@ -749,7 +826,9 @@ def render_one(job, clip, words):
     save(job)
     try:
         off = clip.get("src_offset", 0.0)
-        src = Path(clip["src"]) if clip.get("src") else Path(job["source_path"])
+        src = Path(clip["src"]) if clip.get("src") else Path(job.get("source_path") or "")
+        if not path_inside(src, job["dir"]):
+            raise RuntimeError("That source file is outside this video's folder, so it was not opened.")
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off,
@@ -760,6 +839,11 @@ def render_one(job, clip, words):
             if not track:
                 raise RuntimeError("The chosen background track is missing. Choose another track and re-make the clip.")
             local["music_path"] = str(track["path"])
+        if clip.get("commentary_id"):
+            from . import commentary
+            voice = commentary.get(clip["commentary_id"])
+            if voice:
+                local["commentary_path"] = str(voice["path"])
         if clip.get("caption_cues") is not None:
             local["caption_cues"] = [dict(c, start=c["start"] - off, end=c["end"] - off)
                                     for c in clip["caption_cues"]]

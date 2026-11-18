@@ -1,4 +1,4 @@
-# MJ Cliproom · 0.10.3 beta
+# MJ Cliproom · 0.11.0 beta
 
 [What's new](CHANGELOG.md) · [Install or update the beta](docs/BETA_0_10.md)
 
@@ -159,6 +159,32 @@ The app can improve candidate ranking and metadata, but no AI can promise a clip
 For a live stream, add its channel under **Creators → Setup**, then choose **Record live stream** when it is on air.
 Use the live workspace to monitor the stream and clip the recent buffer. Availability depends on the platform,
 stream privacy and the stream URL being accessible to the machine running MJ Cliproom.
+
+## Autopilot
+
+**Autopilot** watches the saved creator list for English GTA 6 streams, records a few at a time, and can upload
+Shorts to a connected YouTube channel. It is off until you turn it on. Nothing is uploaded until that source is
+on the allowlist and its rights status is **Authorized**. Signal-only moments stay in the queue for a preview
+unless you turn on full auto for that one source.
+
+1. Connect YouTube under **Settings → Connected apps**. Google OAuth and YouTube Data API v3 have to be set up
+   first. See [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok). A new Google project usually has
+   10,000 quota units a day. One upload costs about 1,600, so the default budget stops at 8,000.
+2. Open **Autopilot**. Confirm any handle marked unchecked before that row is watched. The dictated names Nogla,
+   TGG, Treyten, SpeirsTheAmazingHD, Putther, TheProfessional and Adin Ross (Kick) are not watched until you tick
+   **Handle checked**.
+3. For each source you have permission to clip, tick **Allowlist** and set rights to **Authorized**.
+   **Draft** copies a permission note. It is not emailed.
+4. Set how many streams may record at once (1–32). The server also has `PEAKCUT_MAX_LIVE`. Raise that in `.env`
+   if you want more than the machine's default ceiling. Watching the list does not record all of them at once.
+5. Turn Autopilot on. It keeps running while the app process is up. Docker restarts the container. On a computer,
+   `python -m studio.supervise` starts it again after a crash.
+
+Clips use a gameplay-and-facecam stack, captions with the spoken word highlighted, an MJ Plays GTA intro and outro,
+and a cut that finishes the sentence when the transcript allows it. The description names the source and links it.
+GTA 5 categories and titles are skipped and are never relabelled as GTA 6. Add your own commentary track on the
+Autopilot page if you want a narration over the stream. Background music has to be royalty-free or supplied by
+you. See [YouTube Shorts automation](docs/YOUTUBE_AUTOMATION.md).
 
 ## AI providers
 

@@ -48,7 +48,15 @@ def gameplay(source, start, end, count, minimum, maximum, has_audio=False):
         return []
     raw = _ffmpeg(source, ["-t", str(span), "-map", "0:v:0", "-an",
                            "-vf", "fps=2,scale=48:28,format=gray", "-threads:v", "1", "-f", "rawvideo"], start)
-    frames = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 48 * 28)
+    frame_bytes = 48 * 28
+    # The last frame is sometimes short. Drop the leftover bytes instead of crashing the scan.
+    if len(raw) < frame_bytes * 2:
+        return []
+    raw = raw[:len(raw) - (len(raw) % frame_bytes)]
+    try:
+        frames = np.frombuffer(raw, dtype=np.uint8).reshape(-1, frame_bytes)
+    except ValueError:
+        return []
     if len(frames) < 2:
         return []
     motion = np.concatenate([

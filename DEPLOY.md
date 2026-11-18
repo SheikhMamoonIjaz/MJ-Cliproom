@@ -65,6 +65,21 @@ Set the `PEAKCUT_SMTP_*` lines and `PEAKCUT_MAIL_FROM` to send password-reset an
 SMTP service. On a public site also set `PEAKCUT_VERIFY_EMAIL=1`, so people confirm their address before clipping.
 Without SMTP on an HTTPS site, no reset emails can be sent.
 
+## Autopilot
+
+Autopilot runs inside the app process. Leave the container's restart policy as `unless-stopped`, or run
+`python -m studio.supervise` when you are not using Docker. It survives a restart by reading `autopilot.json`
+in the data folder and by putting an interrupted YouTube upload back on the queue.
+
+Set `PEAKCUT_MAX_LIVE` high enough for the number of simultaneous recordings you choose in the Autopilot page
+(the page allows up to 32). The default ceiling follows the CPU count. One app process should own the data
+folder. Turn Autopilot on only after YouTube is connected and at least one source is allowlisted and Authorized.
+The daily unit budget defaults to 8,000 of YouTube's usual 10,000. One upload is about 1,600 units. Quota resets
+are counted in UTC and are an estimate of what this app spends, not Google's exact counter.
+
+`PEAKCUT_PIXABAY_KEY` is optional. Without it, Pixabay is only a link. With it, search still returns royalty-free
+Pixabay audio and nothing from a chart. Do not put the key in the repository.
+
 ## Good to know
 
 - **Data**: everything lives in two Docker volumes, `pgdata` (accounts, AI usage) and `data` (videos, clips).

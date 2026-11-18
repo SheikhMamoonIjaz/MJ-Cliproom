@@ -70,6 +70,17 @@ def resolve(url: str) -> dict:
             "uploader": info.get("uploader") or info.get("channel") or ""}
 
 
+def retain_segments(segments, keep_from, pinned):
+    """Drop buffer pieces that have scrolled out, except ones a render is still using."""
+    kept, dropped = [], []
+    for path, start, end in segments:
+        if end < keep_from and path not in pinned:
+            dropped.append(path)
+        else:
+            kept.append((path, start, end))
+    return kept, dropped
+
+
 def active():
     return [s for s in SESSIONS.values() if not s.finished and not s.user_stopped]
 
@@ -135,6 +146,7 @@ class Session:
         self.last_spike = -999.0      # when the last jump was sent to the AI (stream seconds)
         self.base = {}                # running averages the jumps are measured against, shown on the card
         self.spikes = 0
+        self.pinned = set()       # buffer files a render is still reading; the rolling cleanup must not delete them
 
     # ---------------------------------------------------------------- recording
     def start(self):
@@ -226,8 +238,9 @@ class Session:
                     self.seg_clock += dur
                 self.csv_seen[i] = len(rows)
             keep_from = self.seg_clock - self.settings["buffer_min"] * 60
-            while self.segments and self.segments[0][2] < keep_from:
-                self.segments.pop(0)[0].unlink(missing_ok=True)
+            self.segments, dropped = retain_segments(self.segments, keep_from, self.pinned)
+            for path in dropped:
+                path.unlink(missing_ok=True)
 
     # ---------------------------------------------------------------- chat (Twitch only)
     def _chat(self, channel):
@@ -360,12 +373,14 @@ class Session:
                                                 n=1 if every <= 2 else 2, must=must)  # Auto (0) asks for one
         except Exception as e:  # noqa: BLE001
             self.job["ai"]["last_error"] = str(e)[-200:]
+            self._signal_fallback(window, why)
             return self._verdict(verdict, "AI error: " + str(e)[-80:])
         self.checks += 1
         self.tokens += tok
         keep = [c for c in cands if c["score"] >= (40 if must else st["min_score"])]
         verdict["transcript"] = max((c["score"] for c in cands), default=0)
         if not keep:
+            self._signal_fallback(window, why)
             return self._verdict(verdict, "Words judge: nothing clip-worthy")
         z = brain.loud_zscore(np.array(self.db, dtype=np.float32))
         lo, hi = int(ws), int(now) + 1
@@ -442,8 +457,44 @@ class Session:
                 c["reason"] = req["why"]
             self._add_clip(c)
 
+    def _signal_fallback(self, window, why):
+        """When Autopilot asks for it, a loud moment is kept for review even if the AI found nothing."""
+        if not self.settings.get("signal_fallback") or not window or not str(why or "").startswith("Jump"):
+            return
+        start, end = float(window[0]), float(window[1])
+        if end - start < 5:
+            return
+        if any(abs(start - k.get("start", 0)) < self.settings["min_gap_min"] * 60 for k in self.job["clips"]):
+            return
+        self._add_clip({"start": round(max(0.0, start), 2), "end": round(end, 2), "score": 55, "title": "",
+                        "hook": "", "description": "", "hashtags": [], "highlight_words": [], "category": "other",
+                        "score_source": "signals",
+                        "reason": "Signal-only moment (" + str(why) + "). Review it before posting."})
+
     def _add_clip(self, c):
         self.n += 1
+        judges = c.get("judges") or {}
+        if judges.get("words") and judges.get("reaction"):
+            c["score_source"] = "ai_and_signals"
+        else:
+            c.setdefault("score_source", "signals")
+        if self.settings.get("commentary_id"):
+            c.setdefault("commentary_id", self.settings["commentary_id"])
+        if self.settings.get("source_credit"):
+            c.setdefault("source_credit", dict(self.settings["source_credit"]))
+        if self.settings.get("preserve_source_marks"):
+            c["preserve_source_marks"] = True
+        if self.settings.get("brand"):
+            c["brand"] = True
+            c["motion"] = "highlight"
+        if self.settings.get("facecam"):
+            c["facecam"] = self.settings["facecam"]
+        dur = max(float(c.get("end") or 0), self.samples / SR)
+        if self.words and c.get("end", 0) > c.get("start", 0):
+            lines = brain.make_lines(self.words)
+            start, end = brain._snap(c, lines, self.words, int(self.settings["min_len"]), int(self.settings["max_len"]), dur)
+            if end - start >= 5:
+                c["start"], c["end"] = start, end
         c.update(id=f"clip{self.n:03d}", style=self.settings["style"], layout=self.settings["layout"],
                  status="queued", version=0, made_at=time.time())
         with self.lock:
@@ -461,6 +512,16 @@ class Session:
             time.sleep(1)
         with self.lock:
             segs = [s for s in self.segments if s[2] > clip["start"] - PAD and s[1] < clip["end"] + PAD and s[0].exists()]
+            for seg in segs:
+                self.pinned.add(seg[0])
+        try:
+            self._render_from(clip, segs)
+        finally:
+            with self.lock:
+                for seg in segs:
+                    self.pinned.discard(seg[0])
+
+    def _render_from(self, clip, segs):
         if not segs or segs[0][1] > clip["start"] + 2:
             clip.update(status="error", error="That part of the stream is no longer in the buffer.")
             jobs.save(self.job)
@@ -643,7 +704,10 @@ def start_session(creator: dict, url=None) -> dict:
     url = normalize(url or creator.get("channel") or "")
     if not re.match(r"^https?://[^/]+\.[^/]+/", url + "/"):
         raise ValueError("Add this creator's channel link first.")
-    if active_for(creator["id"]):
+    same = [s for s in active() if s.job.get("source", {}).get("url") == url]
+    if same:
+        raise ValueError("This stream is already being recorded.")
+    if active_for(creator["id"]) and not creator.get("allow_parallel"):
         raise ValueError("This creator is already being recorded.")
     if not media.site_allowed(url):
         raise ValueError("Channel links must be from YouTube, Twitch or Kick.")

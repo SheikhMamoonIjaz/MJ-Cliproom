@@ -57,6 +57,7 @@ def main() -> int:
                 ("connecting YouTube, Instagram and TikTok", ["tests/test_connect.py"]),
                 ("the new-version notice", ["tests/test_updates.py"]),
                 ("beta prompt and posting queues", ["tests/test_beta_queue.py"]),
+                ("autopilot, layouts and royalty-free music", ["tests/test_autopilot.py"]),
                 ("no limits by default", ["tests/test_limits.py"]),
                 ("captions never overlap, stuck clips, sentence endings", ["tests/test_stuck.py"]),
                 ("source editor, gameplay and free AI", ["tests/test_editor.py"]),
