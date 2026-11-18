@@ -125,6 +125,9 @@ check("Pixabay metadata is kept", music.parse_pixabay({"hits": [{"tags": "electr
 check("a random host is not a Pixabay file", music.audio_host_ok("https://example.com/song.mp3"), False)
 check("the safe catalog does not list chart songs", all("chart" not in row["id"] for row in music.catalog()["sources"]))
 check("CC BY needs a real credit", lambda: music.clean_meta({"license": "cc-by", "attribution": "x"}), _raises)
+from studio import commentary
+check("a commentary file name cannot leave its folder",
+      commentary._record({"id": "ab" * 8, "file": "../secret.mp3", "name": "Voice", "duration": 1, "size": 4}) is None)
 
 # --- safety fixes ------------------------------------------------------------
 folder = Path(tempfile.mkdtemp())

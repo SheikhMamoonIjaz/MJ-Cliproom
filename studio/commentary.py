@@ -25,35 +25,82 @@ def _root() -> Path:
     return d
 
 
-def _manifest() -> Path:
-    return _root() / "manifest.json"
+_FILE = re.compile(r"[0-9a-f]{16}\.(?:mp3|m4a|aac|wav|flac|ogg|opus)")
+_NAME = re.compile(r"[\w .()-]{1,80}")
+
+
+def _inside(path: Path) -> Path:
+    """The final path after resolving shortcuts, and only if it stays in this user's commentary folder."""
+    root = _root().resolve()
+    if path.is_symlink():
+        raise ValueError("Commentary files cannot be links.")
+    real = path.resolve()
+    real.relative_to(root)
+    return real
+
+
+def _record(row: dict):
+    """One saved track, rebuilt from checked fields so a crafted manifest cannot point outside the folder."""
+    if not isinstance(row, dict):
+        return None
+    ident = str(row.get("id") or "")
+    file_name = str(row.get("file") or "")
+    if not re.fullmatch(r"[0-9a-f]{16}", ident) or not _FILE.fullmatch(file_name) or not file_name.startswith(ident + "."):
+        return None
+    name = str(row.get("name") or "Commentary")
+    if not _NAME.fullmatch(name):
+        name = "Commentary"
+    try:
+        duration = round(float(row.get("duration") or 0), 2)
+        size = int(row.get("size") or 0)
+    except (TypeError, ValueError):
+        return None
+    return {"id": ident, "name": name, "file": file_name, "duration": duration, "size": max(0, size)}
 
 
 def _all() -> list:
+    path = _root() / "manifest.json"
     try:
-        rows = json.loads(_manifest().read_text(encoding="utf-8"))
+        if not path.is_file() or path.is_symlink():
+            return []
+        rows = json.loads(_inside(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    return rows if isinstance(rows, list) else []
+    if not isinstance(rows, list):
+        return []
+    return [item for row in rows if (item := _record(row))]
 
 
 def _save(rows: list):
-    tmp = _manifest().with_suffix(".tmp")
-    tmp.write_text(json.dumps(rows, indent=1), encoding="utf-8")
-    tmp.replace(_manifest())
+    root = _root().resolve()
+    clean = [item for row in rows if (item := _record(row))]
+    target = _inside(root / "manifest.json")
+    tmp = _inside(root / "manifest.json.tmp")
+    tmp.write_text(json.dumps(clean, indent=1), encoding="utf-8")
+    tmp.replace(target)
+
+
+def _track_file(file_name: str):
+    if not _FILE.fullmatch(file_name or ""):
+        return None
+    try:
+        path = _inside(_root() / file_name)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
 
 
 def list_tracks() -> list:
-    return [{k: row[k] for k in ("id", "name", "duration", "size") if k in row}
-            for row in _all() if (_root() / row.get("file", "")).is_file()]
+    return [{k: row[k] for k in ("id", "name", "duration", "size")}
+            for row in _all() if _track_file(row["file"])]
 
 
 def get(track_id: str):
     if not re.fullmatch(r"[0-9a-f]{16}", str(track_id or "")):
         return None
     row = next((row for row in _all() if row["id"] == track_id), None)
-    path = _root() / row["file"] if row else None
-    return {**row, "path": path} if row and path.is_file() else None
+    path = _track_file(row["file"]) if row else None
+    return {**row, "path": path} if row and path else None
 
 
 def add(source: Path, filename: str) -> dict:
@@ -88,7 +135,7 @@ def add(source: Path, filename: str) -> dict:
             raise ValueError("Keep up to 20 commentary tracks.")
         track_id = secrets.token_hex(8)
         stored = track_id + ext
-        dest = _root() / stored
+        dest = _inside(_root() / stored)
         shutil.copyfile(source, dest)
         try:
             dest.chmod(0o600)
