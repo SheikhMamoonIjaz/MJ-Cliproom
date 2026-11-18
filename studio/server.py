@@ -5,6 +5,7 @@ Everything under /api, /media and /oauth needs a session, except /api/auth/* and
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -47,7 +48,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "0.12.0 beta"
+VERSION = "1.0.0"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -59,7 +60,11 @@ async def _more_threads():
 
 @app.on_event("startup")
 def _startup():
-    db.init()
+    try:
+        db.init()
+    except Exception:
+        logging.getLogger("mjcliproom").exception("MJ Cliproom could not open its database. Check the data folder and try again.")
+        raise
     _clean_interrupted_single_uploads()
     render.install_fonts()
     if _tools.missing():
@@ -1232,9 +1237,19 @@ def music_catalog():
     return music.catalog()
 
 
+@app.post("/api/music/scan")
+def music_scan(body: dict = Body(...)):
+    _throttle("music-scan:" + ctx.uid(), 6, 600, "Wait a few minutes before scanning the music folder again.")
+    try:
+        found = music.scan_folder(str(body.get("folder") or ""), body.get("rights") is True)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"added": len(found["added"]), "skipped": found["skipped"], "music": music.list_tracks()}
+
+
 @app.post("/api/music")
 def upload_music(file: UploadFile = File(...), license: str = Form("owner"), genre: str = Form("other"),
-                 mood: str = Form("hype"), attribution: str = Form("")):
+                 mood: str = Form("hype"), attribution: str = Form(""), rights: str = Form("")):
     _throttle("music:" + ctx.uid(), 20, 600, "Wait a few minutes before uploading more tracks.")
     temp_dir = config.TMP_DIR / "music-uploads"
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1250,7 +1265,8 @@ def upload_music(file: UploadFile = File(...), license: str = Form("owner"), gen
                 out.write(chunk)
         try:
             return music.add(temp, file.filename or "Instrumental track",
-                             {"license": license, "genre": genre, "mood": mood, "attribution": attribution})
+                             {"license": license, "genre": genre, "mood": mood, "attribution": attribution,
+                              "rights": rights})
         except ValueError as e:
             raise HTTPException(400, str(e))
     finally:
@@ -2126,10 +2142,25 @@ def admin_delete_user(request: Request, uid: str, body: dict = Body(...)):
     return {"ok": True}
 
 
+def _configure_logging():
+    """Write a plain log next to the data folder. Startup problems land there and on the screen."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        folder = config.DATA_DIR / "logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        handle = logging.FileHandler(folder / "studio.log", encoding="utf-8")
+        handle.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logging.getLogger().addHandler(handle)
+    except OSError as exc:
+        print(f"  Could not open the log file: {exc}", flush=True)
+
+
 def main():
-    print(f"\n  PeakCut is running:  {config.PUBLIC_URL}\n")
+    _configure_logging()
+    logging.getLogger("mjcliproom").info("Starting MJ Cliproom %s", VERSION)
+    print(f"\n  MJ Cliproom {VERSION} is running:  {config.PUBLIC_URL}\n", flush=True)
     if not config.ACCOUNTS and (config.HTTPS or config.HOST not in ("127.0.0.1", "localhost", "::1")):
-        print("  Sign-in is off, so anyone who can reach this address can use PeakCut and its AI key.\n"
+        print("  Sign-in is off, so anyone who can reach this address can use MJ Cliproom and its AI key.\n"
               "  On a server other people can reach, set PEAKCUT_ACCOUNTS=1 in .env.\n", flush=True)
     if config.env("PEAKCUT_AUTO_RELOAD") == "1":
         # restart by itself whenever the server code changes (pages in web/ never need a restart)
