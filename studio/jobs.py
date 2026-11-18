@@ -333,10 +333,56 @@ def _snapshot(obj, depth=0):
     return obj
 
 
+def _known_creator(creator):
+    """The creator id to store. Only an id this account already has, never the raw form text."""
+    if not creator:
+        return None
+    match = re.fullmatch(r"[\w\-]{1,60}", str(creator))
+    if not match:
+        return None
+    ident = match.group(0)
+    row = creators.get(ident)
+    if not row or row.get("id") != ident:
+        return None
+    return ident
+
+
+def _job_folder(job) -> Path:
+    """The job's own folder, and only when it stays inside that account's data folder."""
+    root = config.user_dir(str(job.get("user") or "")).resolve()
+    folder = Path(str(job.get("dir") or "")).resolve()
+    folder.relative_to(root)
+    if folder.is_symlink():
+        raise ValueError("The job folder cannot be a link.")
+    return folder
+
+
+def _write_job(folder: Path, text: str):
+    """Write job.json without following a link out of the job folder."""
+    target = folder / "job.json"
+    tmp = folder / "job.json.tmp"
+    for path in (target, tmp):
+        if path.is_symlink():
+            raise ValueError("The job file cannot be a link.")
+        path.resolve().relative_to(folder)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        os.write(fd, text.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.replace(tmp, target)
+
+
 def save(job):
     ctx.bump(job.get("user"))
     with _lock:
-        d = Path(job["dir"])
+        try:
+            folder = _job_folder(job)
+        except (OSError, ValueError):
+            return
         text = None
         for _ in range(5):
             try:
@@ -349,9 +395,10 @@ def save(job):
                 text = json.dumps(_snapshot(job), indent=1)
             except (TypeError, ValueError):
                 return
-        tmp = d / "job.json.tmp"
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(d / "job.json")
+        try:
+            _write_job(folder, text)
+        except (OSError, ValueError):
+            return
 
 
 def _set(job, **kw):
@@ -462,17 +509,18 @@ def running_now() -> int:
 
 def create(source: dict, options: dict, enqueue=True, creator=None, kind="video", rights_cleared=False, automation=None) -> dict:
     jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:10]
-    c = creators.get(creator) if creator else None
+    creator_id = _known_creator(creator)
+    c = creators.get(creator_id) if creator_id else None
     if c:
-        d = creators.root(c["id"]) / ("live" if kind == "live" else "videos") / jid
+        d = creators.root(creator_id) / ("live" if kind == "live" else "videos") / jid
         base = {**DEFAULTS, **{k: c[k] for k in ("max_clips", "min_len", "max_len", "style", "layout")}}
     else:
-        d, base, creator = config.user_dir(ctx.uid()) / "jobs" / jid, dict(DEFAULTS), None
+        d, base, creator_id = config.user_dir(ctx.uid()) / "jobs" / jid, dict(DEFAULTS), None
     d.mkdir(parents=True)
     opts = {**base, **clean_options(options)}
     if opts["min_len"] >= opts["max_len"]:
         opts["min_len"] = max(5, opts["max_len"] - 5)
-    job = {"id": jid, "user": ctx.uid(), "kind": kind, "creator": creator, "dir": str(d), "created": time.time(), "source": source,
+    job = {"id": jid, "user": ctx.uid(), "kind": kind, "creator": creator_id, "dir": str(d), "created": time.time(), "source": source,
            "options": opts, "status": "queued", "stage": "Waiting", "progress": 0.0,
            "title": source.get("name", ""), "uploader": "", "duration": 0, "clips": [], "error": None, "ai": {},
            "rights_cleared": rights_cleared, "rights_cleared_at": time.time() if rights_cleared else None}

@@ -137,6 +137,8 @@ outside = folder.parent / "secret.txt"
 outside.write_text("nope", encoding="utf-8")
 check("a source inside the job folder can be opened", jobs.path_inside(inside, folder))
 check("a source outside the job folder is refused", jobs.path_inside(outside, folder), False)
+check("a creator id cannot be a path", jobs._known_creator("../etc") is None)
+check("a blank creator id is empty", jobs._known_creator("") is None)
 check("an interrupted autopilot upload is queued again",
       posting.settle_interrupted({"status": "posting", "autopilot": True, "tries": 0})["status"], "scheduled")
 check("a hand-made upload still waits for a person",
