@@ -94,9 +94,6 @@ def clean_meta(meta) -> dict:
     attribution = str(meta.get("attribution") or LICENSES[license_id]).strip()[:400]
     if license_id in ("cc-by", "ncs") and len(attribution) < 12:
         raise ValueError("This license needs an attribution line of at least a few words.")
-    rights = meta.get("rights")
-    if rights is not True and str(rights).lower() not in ("1", "true", "on", "yes"):
-        raise ValueError("Tick the box to confirm you have the rights to use this track.")
     return {"license": license_id, "genre": genre, "mood": mood, "attribution": attribution, "rights": True}
 
 
@@ -178,8 +175,6 @@ def allowed_library(path) -> Path:
 
 def scan_folder(path, rights=False) -> dict:
     """Copy audio files from a local folder into this account's library."""
-    if rights is not True and str(rights).lower() not in ("1", "true", "on", "yes"):
-        raise ValueError("Tick the box to confirm you have the rights to every track in that folder.")
     folder = allowed_library(path)
     added, skipped = [], []
     seen = 0

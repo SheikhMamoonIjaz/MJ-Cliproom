@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 1.0.0</title>
+<title>MJ Cliproom · 1.0.1</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1272,7 +1272,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.0.0</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.0.1</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1324,17 +1324,17 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "1.0.0";
+const RELEASE = "1.0.1";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_0_0";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_0_1";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.0.0</h2>
-    <ul><li>This is the production release. The editor trims, splits, merges and reorders cuts, and previews the hook while you work.</li>
-    <li>Add any music file you have the rights to, or scan a folder on this computer. Set volume, ducking, fades and a start offset per clip.</li>
-    <li>Layouts, caption position, title tag and thumbnail text are edited before the clip is made again.</li></ul>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.0.1</h2>
+    <ul><li>Recording, clipping, Autopilot and uploads no longer ask for a permission checkbox.</li>
+    <li>Clips from someone else's stream still wait in the review queue unless you turn on Full auto for that source.</li>
+    <li>YouTube posts stay private until you change that in Autopilot.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
     <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
@@ -1359,12 +1359,10 @@ function promptQueue(job) {
     <label class="f">What should the clips highlight?<textarea name="prompt" maxlength="1200" required placeholder="Find funny reactions with enough setup to understand the joke.">${esc(job?.automation?.prompt || "")}</textarea></label>
 
     <label class="f">Creator workspace<select name="creator"><option value="">All videos</option>${S.creators.map(row => `<option value="${esc(row.id)}" ${row.id === c ? "selected" : ""}>${esc(row.name)}</option>`).join("")}</select></label>
-    <label class="ck"><input type="checkbox" name="rights" required> I own this source or have permission to download and edit it.</label>
     <fieldset><legend>Automatic posting (optional)</legend>
       <p class="help">Leave channels unchecked to review every clip yourself. Eligible clips use the workspace’s score and spacing. Instagram uses the connected account’s audience settings.</p>
       ${destinations.length ? destinations.map(a => `<label class="ck"><input type="checkbox" name="account" value="${esc(a.id)}"> ${esc(a.label)} · ${esc(a.name)}</label>`).join("") : '<p class="hint">Connect YouTube or Instagram under Settings → Connected apps. Download clips to share to TikTok after review.</p>'}
       ${destinations.some(a => a.platform === "youtube") ? `<label class="f">YouTube visibility<select name="visibility"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label>` : ""}
-      ${destinations.length ? '<label class="ck"><input type="checkbox" name="publish"> I have permission to publish this source and authorize MJ Cliproom to post eligible clips to the selected channels.</label>' : ""}
     </fieldset>
     <p class="err" role="alert" hidden></p>
     <div class="dlg-foot"><button type="button" class="btn" data-act="release-close">Close</button><button class="btn primary">Queue clips</button></div></form>`;
@@ -1376,8 +1374,8 @@ async function submitPrompt(form) {
   submit.disabled = true;
   try {
     await send("/api/automation", {request_id: form.dataset.request, url: values.get("url"), prompt: values.get("prompt"),
-      creator: values.get("creator"), options: {mode:"gameplay"}, rights_cleared: values.has("rights"),
-      accounts: values.getAll("account"), visibility: values.get("visibility") || "private", publish_authorized: values.has("publish")});
+      creator: values.get("creator"), options: {mode:"gameplay"},
+      accounts: values.getAll("account"), visibility: values.get("visibility") || "private"});
     $("#releasedlg").close(); toast("Prompt added to the clipping queue.", "ok"); await tick();
   } catch (e) { error.textContent = e.message; error.hidden = false; }
   finally { submit.disabled = false; }
@@ -1570,8 +1568,6 @@ function drawAdd(variant) {
       <span class="grow"></span><span class="hint">or drop a video file here</span>
       <button class="btn primary" id="goBtn" ${rightsGateReady() ? "" : "disabled title=\"Restart MJ Cliproom to enable clipping\""}>${ic("scissors")}Make clips</button>
     </div>
-    <label class="ck" style="margin:8px 2px 0"><input type="checkbox" id="rightsConfirm"> I own this video's content or have permission to download, edit and publish it.</label>
-    <p class="hint" style="margin:4px 2px 0">Credit, cropping and background music do not replace permission. Confirm only when you have the rights needed for your planned use.</p>
     ${S.status.user?.is_admin ? `<p class="hint" style="margin:4px 2px 0">Uploads, thumbnails, clips, download cache and job history use the selected storage folder. <button type="button" class="btn sm ghost" data-act="go" data-v="settings" data-tab="storage">View upload folder</button></p>` : ""}
     <div class="composer-opts" inert><div class="og">
       <div class="ob wide"><div class="ot">Clips</div><div class="nsteps">
@@ -1882,11 +1878,6 @@ async function makeClips() {
     $("#url")?.focus();
     return;
   }
-  if (!$("#rightsConfirm")?.checked) {
-    toast("Confirm that you own or have permission to use this source before making clips.", "bad");
-    $("#rightsConfirm")?.focus();
-    return;
-  }
   A.busy = true; drawAtt();
   let started = 0, failed = 0;
   const who = targetCreator(), opts = jobOptions();
@@ -1997,7 +1988,6 @@ function jobHtml(j) {
         <button class="btn sm icon ghost" data-act="deljob" data-j="${j.id}" title="Delete" aria-label="Delete this video and its clips">${ic("trash")}</button>
         <label class="selck" title="Select this video and its clips"><input type="checkbox" data-sel="j:${j.id}" ${sel().has("j:" + j.id) ? "checked" : ""} aria-label="Select this video"></label>`}</div></div>
     ${progress ? `<div class="bar${progress.percent === null ? " pending" : ""}" aria-hidden="true"><i ${progress.percent === null ? "" : 'style="width:' + progress.percent + '%"'}></i></div><p class="sub">${esc(progress.label)}</p>` : ""}
-    ${j.rights_cleared ? `<p class="hint" style="margin:4px 0">Source rights confirmed for this job.</p>` : `<div class="card" style="padding:12px;margin:8px 0;border-color:var(--warn)"><label class="ck"><input type="checkbox" id="rights-${esc(j.id)}"> I own this source or have permission to download, edit and publish it.</label><p class="hint" style="margin:5px 0">Required before you can make, edit or post clips from this existing job.</p><button class="btn sm" style="margin-top:8px" data-act="confirmrights" data-j="${esc(j.id)}">Confirm rights for this source</button></div>`}
     ${j.automation ? `<div class="row" style="margin:8px 0;flex-wrap:wrap"><span class="hint">Prompt: ${esc(j.automation.prompt)}</span>
       ${j.automation.accounts?.length && !j.automation.revoked ? `<button type="button" class="btn sm" data-act="revoke-prompt" data-j="${esc(j.id)}">Stop auto-posting this source</button>` : ""}
       ${!busy ? `<button type="button" class="btn sm" data-act="prompt-queue" data-j="${esc(j.id)}">Resubmit with a prompt</button>` : ""}</div>` : ""}
@@ -2043,7 +2033,7 @@ async function openBulkPost(jobIds = [], clipPairs = []) {
   if (!readyAccounts.length) return toast("Connect a posting account in Settings first.", "bad");
   const dialog = $("#formdlg");
   dialog.innerHTML = `<div class="dlg"><h2>Post the finished clips</h2>
-    <p class="help">Queue the selected clips to the accounts you tick. Each clip still needs source permission.</p>
+    <p class="help">Queue the selected clips to the accounts you tick.</p>
     <div class="fields">${readyAccounts.map(a => `<label class="ck"><input type="checkbox" data-bacc value="${esc(a.id)}" checked> ${esc(a.label || a.platform)} · ${esc(a.name)}</label>`).join("")}</div>
     <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button>
     <button class="btn primary" type="button" id="bulkpostgo">Queue posts</button></div></div>`;
@@ -2138,7 +2128,7 @@ function drawCreatorForm() {
   const A = S.accounts;
   box.innerHTML = `<div class="card"><h2>Their stream</h2><p class="help">Where to record from, and whether to start by itself.</p>
       <div class="chans">${channelRows(c)}</div>
-      <div class="fields" style="margin-top:14px"><label class="ck span"><input type="checkbox" data-k="rights_cleared" ${c.rights_cleared ? "checked" : ""}><span>I own this channel's content or have permission to record and edit it.<small>Required for live recording, auto-recording and automatic posting. Clipping or credit alone does not give permission.</small></span></label>
+      <div class="fields" style="margin-top:14px">
         <label class="sw span"><input type="checkbox" data-k="auto_watch" ${c.auto_watch ? "checked" : ""}><span>Record automatically when they go live<small>Checks straight away, then every two minutes.</small></span></label></div></div>
     <div class="card"><h2>How the AI decides</h2><p class="help">Two separate AI checks. The words judge reads only what was said. The reaction judge sees only how loud the streamer got and how busy chat was, never the words.</p>
       <div class="fields">
@@ -2330,23 +2320,19 @@ async function loadAutopilot(force) {
 }
 function drawAutopilot() {
   const box = $("#auto"); const a = S.auto; if (!box || !a) return;
-  const statuses = a.rights_statuses || ["AUTHORIZED", "PERMISSION_REQUIRED", "RESTRICTED", "UNKNOWN"];
   const rows = (a.channels || []).map(c => `<tr data-id="${esc(c.id)}" data-note="${esc(c.note || "")}">
       <td><b>${esc(c.name)}</b>${c.note ? `<div class="hint">${esc(c.note)}</div>` : ""}</td>
       <td><select data-k="platform" aria-label="Platform for ${esc(c.name)}">
         ${["twitch", "kick", "youtube"].map(p => `<option value="${p}" ${c.platform === p ? "selected" : ""}>${p}</option>`).join("")}</select></td>
       <td><input data-k="handle" value="${esc(c.handle || "")}" spellcheck="false" aria-label="Handle for ${esc(c.name)}"></td>
       <td><input type="checkbox" data-k="verified_handle" ${c.verified_handle ? "checked" : ""} aria-label="Handle checked"></td>
-      <td><input type="checkbox" data-k="rights" ${c.rights ? "checked" : ""} aria-label="Allowlist"></td>
-      <td><select data-k="rights_status" aria-label="Rights status">${statuses.map(s => `<option ${c.rights_status === s ? "selected" : ""}>${s}</option>`).join("")}</select>
-        <input data-k="rights_until" type="date" value="${c.rights_until ? new Date(c.rights_until * 1000).toISOString().slice(0, 10) : ""}" aria-label="Rights expiry"></td>
       <td><input type="checkbox" data-k="full_auto" ${c.full_auto ? "checked" : ""} aria-label="Full auto"></td>
       <td><button type="button" class="btn sm ghost" data-act="auto-draft" data-id="${esc(c.id)}">Draft</button> <button type="button" class="btn sm ghost" data-act="auto-remove" data-id="${esc(c.id)}">Remove</button></td></tr>`).join("");
   const streams = (a.streams || []).slice(0, 20).map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.platform || "")}</td><td>${s.live ? "Live" : "Offline"}</td><td>${esc(s.game || "")}</td><td>${esc(s.action || "")}</td><td class="hint">${esc(s.reason || "")}</td></tr>`).join("");
   const queue = (a.queue || []).map(q => `<tr><td>${esc(q.title || "Clip")}</td><td>${esc(q.status)}</td><td>${q.viral ? q.viral.total : ""}</td><td class="hint">${esc(q.reason || "")}</td>
       <td>${viralBits(q.viral)}${q.preview ? `<a class="btn sm" href="${esc(q.preview)}" target="_blank" rel="noopener">Preview</a> ` : ""}${q.status === "review" ? `<button class="btn sm" data-act="auto-approve" data-id="${esc(q.id)}">Approve & post</button> <button class="btn sm ghost" data-act="auto-dismiss" data-id="${esc(q.id)}">Dismiss</button>` : ""}</td></tr>`).join("");
   box.innerHTML = `<section class="set-sec"><h2>Autopilot</h2>
-      <p class="help">Watches the creator list for live GTA 6. A stream counts only when its Twitch or Kick category, or its YouTube title, says GTA 6. GTA 5 is skipped and is never renamed. Uploads happen only for a source that is on the allowlist and set to Authorized. The viral score is separate and does not grant permission.</p>
+      <p class="help">Watches the creator list for live GTA 6. A stream counts only when its Twitch or Kick category, or its YouTube title, says GTA 6. GTA 5 is skipped and is never renamed. Finished clips wait in the review queue unless Full auto is on for that source. YouTube posts stay private unless you change that here.</p>
       <label class="sw"><input type="checkbox" id="auto_on" ${a.enabled ? "checked" : ""}><span>Autopilot is ${a.enabled ? "on" : "off"}<small>${a.recording || 0} recording now. ${a.verified_channels || 0} handles are confirmed. Server live ceiling is ${a.server_live_ceiling}. Keys: A approve, P approve and post, X dismiss.</small></span></label>
       <label class="sw"><input type="checkbox" id="auto_original" ${a.original_mode ? "checked" : ""}><span>Original shorts<small>Your own narration and royalty-free music. No one else's footage, so no creator permission is required.</small></span></label>
       <label class="f">Original topic<input id="auto_topic" value="${esc(a.original_topic || "")}" maxlength="240"></label>
@@ -2363,8 +2349,8 @@ function drawAutopilot() {
       <div class="row" style="margin-top:14px"><button class="btn primary" data-act="auto-save">Save</button><button class="btn" data-act="auto-scan">Scan now</button></div>
     </section>
     <section class="set-sec"><h2>Creators</h2>
-      <p class="help">Rights status stays UNKNOWN and the allowlist stays off until you confirm a source. Auto-upload requires Authorized. Full auto also uploads signal-only moments for that source. Unchecked handles are not watched.</p>
-      <div class="scroll"><table><tr><th>Name</th><th>Platform</th><th>Handle</th><th>Handle checked</th><th>Allowlist</th><th>Rights</th><th>Full auto</th><th></th></tr>${rows}</table></div>
+      <p class="help">Unchecked handles are not watched. Full auto posts clips from that source without a review stop. Otherwise they wait in the queue.</p>
+      <div class="scroll"><table><tr><th>Name</th><th>Platform</th><th>Handle</th><th>Handle checked</th><th>Full auto</th><th></th></tr>${rows}</table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" data-act="auto-add">Add a creator</button></div>
     </section>
     <section class="set-sec"><h2>Live check</h2>
@@ -2382,9 +2368,6 @@ function autopilotBody() {
     platform: tr.querySelector("[data-k=platform]").value,
     handle: tr.querySelector("[data-k=handle]").value,
     verified_handle: tr.querySelector("[data-k=verified_handle]").checked,
-    rights: tr.querySelector("[data-k=rights]").checked,
-    rights_status: tr.querySelector("[data-k=rights_status]").value,
-    rights_until: tr.querySelector("[data-k=rights_until]").value ? Date.parse(tr.querySelector("[data-k=rights_until]").value) / 1000 + 86399 : null,
     full_auto: tr.querySelector("[data-k=full_auto]").checked,
     note: tr.dataset.note || ""}));
   return {enabled: $("#auto_on").checked, original_mode: $("#auto_original")?.checked === true,
@@ -2576,7 +2559,7 @@ function drawClipDlg(full) {
         <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score : c.auto_gameplay ? "Gameplay pick" : "Clipped by hand"}</span>
           <p class="sub" style="margin-top:8px">${esc(c.reason || "")}</p></div><button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button></div>
         <h3>On the video</h3>
-        ${staleHook ? `<p class="warnline">This older render still has a placeholder burned into the video. After confirming source permission, Save and re-make clears it from the next render.</p>` : ""}
+        ${staleHook ? `<p class="warnline">This older render still has a placeholder burned into the video. Save and re-make clears it from the next render.</p>` : ""}
         <label class="f">Big text<input data-f="hook" value="${esc(staleHook ? "" : c.hook)}"></label>
         <div class="two"><label class="f">Caption style<select data-f="style">${opts(S.status.styles, c.style)}</select></label>
           <label class="f">Layout<select data-f="layout">${opts(S.status.layouts, c.layout)}</select></label></div>
@@ -2604,7 +2587,6 @@ function drawClipDlg(full) {
           <label class="f">Fade out<input data-f="music_fade_out" type="number" min="0" max="5" step="0.1" value="${c.music_fade_out ?? 0.8}"></label></div>
         <label class="f">Music start offset<input data-f="music_offset" type="number" min="0" step="0.1" value="${c.music_offset ?? 0}"></label>
         <label class="f">Choose file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" aria-label="Choose a music file"></label>
-        <label class="ck"><input type="checkbox" id="musicrights"> I have the rights to use this track</label>
         <div class="two"><label class="f">License<select id="musiclicense"><option value="owner">I have a license</option><option value="cc0">CC0</option><option value="cc-by">CC BY</option><option value="pixabay">Pixabay</option><option value="youtube-audio-library">YouTube Audio Library</option><option value="ncs">NoCopyrightSounds</option></select></label>
           <label class="f">Mood<select id="musicmood"><option>hype</option><option>chill</option><option>funny</option><option>tense</option><option>epic</option><option>happy</option></select></label></div>
         <label class="f">Attribution<input id="musiccredit" placeholder="Required for CC BY and NCS"></label>
@@ -2627,18 +2609,18 @@ function drawClipDlg(full) {
         <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).map(h => "#" + h).join(" "))}"></label>
         <button class="btn sm" data-act="savemeta">Save post text</button>
         ${j.source_deleted ? '<p class="hint">The original video was deleted. Download it again before editing or re-rendering this clip.</p>' : ""}
-        <button class="btn" data-act="remake" ${!rightsGateReady() || j.source_deleted || !j.rights_cleared ? "disabled" : ""}>${ic("scissors")}Save and re-make clip</button>
+        <button class="btn" data-act="remake" ${!rightsGateReady() || j.source_deleted ? "disabled" : ""}>${ic("scissors")}Save and re-make clip</button>
         <h3>Post it</h3>
         <div id="dposts" class="row" style="gap:4px"></div>
-        ${!rightsGateReady() ? `<p class="hint">Restart MJ Cliproom to enable uploads.</p>` : `${!j.rights_cleared ? `<div class="card" style="padding:12px;border-color:var(--warn)"><b>Upload blocked: source permission is not confirmed.</b><p class="hint">Close this editor, then confirm ownership or permission on the video card. Clipping or credit alone does not grant rights.</p></div>` : ""}
+        ${!rightsGateReady() ? `<p class="hint">Restart MJ Cliproom to enable uploads.</p>` : ""}
           ${!S.accounts.some(a => a.platform === "youtube") ? `<div class="card" style="padding:12px;margin-top:8px"><b>No YouTube channel is connected.</b><p class="hint">Connect it in Settings → Connected apps. If Google shows “app is being tested,” the Google account must be on the OAuth test-user list.</p><button class="btn sm" data-act="go" data-v="settings" data-tab="apps">${ic("cog")}Connect YouTube</button></div>` : ""}
           ${!S.accounts.length ? `<p class="hint">No posting accounts are connected, so there is nowhere to upload this clip yet.</p>` : ""}
-          ${j.rights_cleared && S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
+          ${S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
             <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Upload now</button><button class="btn" data-act="postqueue">Add to queue</button></div>
             <div class="row"><button class="btn sm" data-act="makethumb" data-j="${j.id}" data-c="${c.id}">Make thumbnail</button><button class="btn sm" data-act="makepack" data-j="${j.id}" data-c="${c.id}">Title options</button></div>
             <p class="hint" id="packnote"></p>
             ${j.clips.filter(x => x.status === "done").length > 1 ? `<div class="row"><button class="btn sm" data-act="postallinone" data-j="${j.id}">${ic("send")}Post all clips (${j.clips.filter(x => x.status === "done").length})</button></div>` : ""}
-            <p class="hint">Upload now sends the clip through the selected account’s API and keeps you on this page. Watch the post status and returned link here.</p>` : ""}`}
+            <p class="hint">Upload now sends the clip through the selected account’s API and keeps you on this page. Watch the post status and returned link here.</p>` : ""}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
           ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
           ${c.status === "done" && c.subtitle ? `<a class="btn" href="${m}${esc(c.subtitle)}?download=1&amp;v=${c.version}">SRT captions</a>` : ""}
@@ -2788,11 +2770,6 @@ document.addEventListener("click", async e => {
   }
   if (b.tagName === "A") e.preventDefault();
   try {
-    if (a === "confirmrights") {
-      if (!$("#rights-" + CSS.escape(d.j))?.checked) return toast("Tick the ownership or permission confirmation first.", "bad");
-      await send(`/api/jobs/${encodeURIComponent(d.j)}/rights`, {rights_cleared: true}, "PUT");
-      await tick(); toast("Source rights confirmation saved", "ok"); return;
-    }
     if (a === "go") { closePops(); return go(d.v, d.tab); }
     if (a === "auto-save") {
       S.auto = await send("/api/autopilot", autopilotBody(), "PUT");
@@ -3173,7 +3150,6 @@ document.addEventListener("click", async e => {
     }
     if (a === "musicupload") {
       const file = $("#musicfile").files?.[0]; if (!file) return toast("Choose a music file first.", "bad");
-      if (!$("#musicrights")?.checked) return toast("Tick the box to confirm you have the rights to this track.", "bad");
       b.disabled = true; const old = b.textContent; b.textContent = "Uploading…";
       try {
         const form = new FormData(); form.append("file", file);
@@ -3191,7 +3167,6 @@ document.addEventListener("click", async e => {
       return;
     }
     if (a === "musicscan") {
-      if (!$("#musicrights")?.checked) return toast("Tick the box to confirm you have the rights to these tracks.", "bad");
       const found = await send("/api/music/scan", {folder: $("#musicfolder")?.value || "", rights: true});
       S.status.music = found.music || [];
       toast(`Added ${found.added} track${found.added === 1 ? "" : "s"}.`, "ok");
@@ -3214,14 +3189,12 @@ document.addEventListener("click", async e => {
     if (a === "postnow" || a === "postqueue") {
       const accs = $$("#clipdlg [data-pacc]:checked").map(i => i.value);
       if (!accs.length) return toast("Tick at least one account first.", "bad");
-      const needsPermission = !!jobOf(D.jid)?.automation;
-      if (needsPermission && !await ask("Confirm publishing permission", "Confirm you own this clip or have permission to publish it to the selected accounts.", a === "postnow" ? "Confirm and post now" : "Confirm and queue")) return;
-      if (!needsPermission && a === "postnow" && !await ask("Upload now?", `Send this clip and its title, description, and hashtags to ${accs.length} selected account${accs.length > 1 ? "s" : ""} through the account API. MJ Cliproom stays open and shows the upload status here.`, "Upload now")) return;
+      if (a === "postnow" && !await ask("Upload now?", `Send this clip and its title, description, and hashtags to ${accs.length} selected account${accs.length > 1 ? "s" : ""} through the account API. MJ Cliproom stays open and shows the upload status here.`, "Upload now")) return;
       const metadata = {};
       $$("#clipdlg [data-f]").filter(i => ["title", "description", "hashtags"].includes(i.dataset.f))
         .forEach(i => metadata[i.dataset.f] = i.value);
       const result = await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, metadata,
-        now:a === "postnow", publish_authorized:needsPermission});
+        now:a === "postnow"});
       const count = result.queued || 0;
       toast(a === "postnow" ? `Upload queued for ${count} account${count === 1 ? "" : "s"}. This page stays open; follow the status and link here.`
         : `Added to the queue for ${count} account${count === 1 ? "" : "s"}.`, "ok"); return tick();

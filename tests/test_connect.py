@@ -188,7 +188,7 @@ with ctx.as_user(user.id):
     post_job["rights_cleared"] = False
     jobs.save(post_job)
 r = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "accounts": [accs["youtube"]["id"]]}, headers=ORIGIN)
-check("posting is refused without source-rights confirmation", r.status_code, 403)
+check("posting does not wait for a permission checkbox", r.status_code, 200)
 
 with ctx.as_user(user.id):
     creator = creators.create({"name": "Queue test", "autopost": True, "rights_cleared": True, "accounts": [accs["youtube"]["id"]],
@@ -206,7 +206,7 @@ with ctx.as_user(user.id):
     gap_minutes = (next_post["due_at"] - first_due) / 60 if next_post else 0
     check("the automatic queue spaces successive posts 15–20 minutes apart", 15 <= gap_minutes <= 20)
     posting.on_clip_ready(post_job, post_job["clips"][1])
-    check("signal-only fallback clips stay out of auto-posting", len(posting._posts), start_count + 2)
+    check("signal-only fallback clips stay out of auto-posting", len(posting._posts), start_count + 1)
 
 direct = b.post("/api/posts", json={"job": "job-12345678", "clip": "clip01", "accounts": [accs["instagram"]["id"]],
                                     "metadata": {"title": "Final lap escape", "description": "A close GTA gameplay finish.",

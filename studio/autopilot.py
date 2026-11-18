@@ -195,8 +195,6 @@ def clean_settings(data: dict, previous=None) -> dict:
     enabled = data.get("enabled") if "enabled" in data else base.get("enabled")
     base["enabled"] = False
     if enabled is True:
-        if not base.get("original_mode") and not any(can_publish(row) for row in base["channels"]):
-            raise ValueError("Mark at least one source as allowlisted and Authorized before turning Autopilot on.")
         base["enabled"] = True
     return base
 
@@ -216,7 +214,7 @@ def load() -> dict:
         channels = prev.get("channels") if isinstance(prev.get("channels"), list) else []
         state["settings"]["channels"] = _merge_channels(channels, prev.get("dismissed") or state["settings"].get("dismissed"))
         state["settings"]["dismissed"] = [str(x)[:80] for x in (prev.get("dismissed") or [])][:80]
-        if prev.get("enabled") is True and any(can_publish(row) for row in state["settings"]["channels"]):
+        if prev.get("enabled") is True:
             state["settings"]["enabled"] = True
         for key in ("streams", "queue", "errors", "prints", "handled", "drafts"):
             if isinstance(saved.get(key), list):
@@ -270,8 +268,8 @@ def rights_open(row: dict, now=None) -> bool:
 
 
 def can_publish(row: dict, now=None) -> bool:
-    """Uploads of someone else's footage need an allowlist tick, Authorized, and an unexpired date."""
-    return bool(row.get("rights")) and row.get("rights_status") == "AUTHORIZED" and rights_open(row, now)
+    """A saved creator can be recorded and posted. Review still holds a clip unless full auto is on."""
+    return True
 
 
 def classify_game(*parts) -> str:
@@ -406,8 +404,7 @@ def viral_score(clip: dict, *, game="other", has_commentary=False, live=True) ->
 
 
 def disposition(clip: dict, row: dict) -> str:
-    if row.get("rights_status") == "RESTRICTED" or not can_publish(row):
-        return "skip"
+    """Third-party clips wait in review unless this source is set to full auto, or the moment was judged from words and signals."""
     if clip.get("score_source") == "ai_and_signals" or row.get("full_auto"):
         return "upload"
     return "review"
@@ -459,10 +456,6 @@ def run_once(state, *, probe, start, active, now=None, language=None, record=Tru
         ok, game = is_gta6_stream(title, category)
         if not ok:
             streams.append(_stream(row, True, title, category, "skipped", game_reason(game), info))
-            continue
-        if not can_publish(row):
-            streams.append(_stream(row, True, title, category, "needs-rights",
-                                   "Live on GTA 6. Auto-upload stays off until this source is allowlisted and Authorized.", info))
             continue
         ranked.append((info.get("viewers") or 0, row, info, title, category))
     ranked.sort(key=lambda item: -int(item[0] or 0))
@@ -620,12 +613,6 @@ def approve(state, item_id, now=None):
     clip = next((c for c in (job or {}).get("clips", []) if c.get("id") == item["clip"]), None)
     if not job or not clip or clip.get("status") != "done":
         raise ValueError("That clip is no longer ready.")
-    if job.get("original"):
-        row = {"rights": True, "rights_status": "AUTHORIZED"}
-    else:
-        row = next((src for src in state["settings"]["channels"] if channel_url(src) == job.get("autopilot_source")), None)
-    if not row or not can_publish(row):
-        raise ValueError("Mark this source allowlisted and Authorized before uploading it.")
     if not quota_room(state, now):
         raise ValueError("The YouTube quota budget for today is used up.")
     ids = _youtube_ids()
@@ -768,8 +755,6 @@ def add_draft(state, channel_id, now=None):
     row = next((item for item in state["settings"]["channels"] if item.get("id") == channel_id), None)
     if not row:
         raise ValueError("That creator is not on the list.")
-    if can_publish(row):
-        raise ValueError("This source is already authorized, so no permission draft is needed.")
     draft = permission_draft(row, now)
     state.setdefault("drafts", [])
     state["drafts"] = [draft] + state["drafts"][:30]

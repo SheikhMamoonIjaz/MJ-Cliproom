@@ -2,6 +2,12 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 1.0.1 — 2026-11-18
+
+- Removed the permission checkboxes and server checks that blocked recording, clipping, Autopilot and uploads.
+  Any saved creator can be recorded and clipped. Signal-only clips still wait in the review queue unless Full auto
+  is on for that source. YouTube privacy still defaults to private.
+
 ## 1.0.0 — 2026-11-18
 
 - Production release. Version labels no longer say beta. Startup logs to the data folder and names MJ Cliproom.

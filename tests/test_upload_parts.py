@@ -41,8 +41,9 @@ part_mb = st["upload_part_mb"]
 data = os.urandom(int(part_mb * 1024 * 1024 * 2.4))            # two full pieces and a shorter last one
 H = {"Content-Type": "application/octet-stream"}
 
-check("a source upload without rights confirmation is refused",
-      a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data)}).status_code == 400)
+free = a.post("/api/upload/start", json={"name": "rights-free.mp4", "size": 1000, "fingerprint": "b" * 64})
+check("a source upload does not need a permission checkbox", free.status_code == 200 and bool(free.json().get("id")))
+a.delete(f"/api/upload/{free.json()['id']}")
 rights = {"rights_cleared": True}
 fingerprint = "a" * 64
 s = a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data), "fingerprint": fingerprint,

@@ -27,12 +27,10 @@ with ctx.as_user(u.id):
     cs = [creators.create({"name": f"Streamer {i}", "channel": f"https://www.twitch.tv/streamer{i}", "rights_cleared": True}) for i in range(60)]
     check("more than 50 creators can be added", len(creators.all_creators()), 60)
     unapproved = creators.create({"name": "Unapproved streamer", "channel": "https://www.twitch.tv/unapproved"})
-    try:
-        live.start_session(unapproved)
-        unapproved_result = "recording started without a rights confirmation"
-    except ValueError as e:
-        unapproved_result = str(e)
-    check("live recording requires an explicit rights confirmation", "permission" in unapproved_result.lower(), True)
+    started_unapproved = live.start_session(unapproved)
+    check("live recording does not ask for a permission confirmation", started_unapproved["creator"], unapproved["id"])
+    live.SESSIONS.pop(started_unapproved["id"], None)
+    started.clear()
     jobs_ = [live.start_session(c) for c in cs[:4]]
     check("four streams record at once", len(live.active_mine()), 4)
     check("each recording belongs to the creator it was started for", [j["creator"] for j in jobs_], [c["id"] for c in cs[:4]])

@@ -119,8 +119,6 @@ def settle_interrupted(post):
 
 
 def enqueue(job, clip, account_ids, now=False, automatic=False, autopilot=False) -> list:
-    if job.get("rights_cleared") is not True:
-        raise ValueError("Confirm that you own or have permission to publish this source before posting.")
     c = creators.get(job["creator"]) or creators.DEFAULTS
     metadata = jobs.post_metadata(job, clip)
     made = []
@@ -151,10 +149,10 @@ def enqueue(job, clip, account_ids, now=False, automatic=False, autopilot=False)
 
 def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
-    if job.get("rights_cleared") is not True or job.get("automation"):
+    if job.get("automation"):
         return
     c = creators.get(job["creator"])
-    if not c or c.get("rights_cleared") is not True or not c["autopost"] or not c["accounts"]:
+    if not c or not c["autopost"] or not c["accounts"]:
         return
     if clip.get("auto_gameplay") and clip.get("score_source") != "ai_and_signals":
         return  # picture/audio-only candidates need a human review before automatic posting
@@ -168,7 +166,7 @@ def on_clip_ready(job, clip):
 
 def _queue_prompt_posts(job):
     a = job.get("automation") or {}
-    if job.get("status") != "done" or job.get("rights_cleared") is not True or not a.get("accounts") or a.get("revoked"):
+    if job.get("status") != "done" or not a.get("accounts") or a.get("revoked"):
         return
     creator = creators.get(job["creator"]) or creators.DEFAULTS
     allowed = [aid for aid in a["accounts"] if (accounts.get(aid) or {}).get("platform") in ("youtube", "instagram")]
@@ -218,8 +216,8 @@ def _post(p):
     clip = next((c for c in job["clips"] if c["id"] == p["clip"]), None) if job else None
     acc = accounts.get(p["account"])
     try:
-        if not job or job.get("rights_cleared") is not True:
-            raise RuntimeError("Source rights clearance is missing or was revoked. Review the source before retrying this post.")
+        if not job:
+            raise RuntimeError("That video is no longer available.")
         if p.get("automatic") and job.get("automation", {}).get("revoked"):
             p.update(status="cancelled", error="Automatic publishing was revoked for this video.")
             _save()
@@ -287,12 +285,12 @@ def _run():
                     if accounts.settings()["paused"]:
                         continue
                     job = jobs.get(p["job"])
-                    if not job or job.get("rights_cleared") is not True:
+                    if not job:
                         with _lock:
                             if p["status"] != "scheduled":
                                 continue
                             p["status"] = "failed"
-                            p["error"] = "Source rights clearance is missing or was revoked. Review the source before retrying this post."
+                            p["error"] = "That video is no longer available."
                             _save()
                         _mirror(p)
                         continue
@@ -391,8 +389,8 @@ def retry(pid):
         if not p or p["status"] not in ("failed", "cancelled"):
             raise ValueError("Only failed or cancelled posts can be retried.")
         job = jobs.get(p["job"])
-        if not job or job.get("rights_cleared") is not True:
-            raise ValueError("Confirm that you own or have permission to publish this source before retrying the post.")
+        if not job:
+            raise ValueError("That video is no longer available.")
         if p.get("automatic") and job.get("automation", {}).get("revoked"):
             raise ValueError("Automatic publishing was revoked. Review the clip and queue a new post by hand.")
         if any(q is not p and (q["job"], q["clip"], q["account"]) == (p["job"], p["clip"], p["account"])

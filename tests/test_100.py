@@ -21,7 +21,7 @@ def check(name, got, want=True):
         fails.append(name)
 
 
-check("the release version has no beta label", server.VERSION, "1.0.0")
+check("the release version has no beta label", server.VERSION, "1.0.1")
 rows = editor.validate_segments([{"start": 0, "end": 10, "speed": 2}], 20)
 check("double speed halves the cut length", editor.cut_length(rows), 5.0)
 parts = editor.split_segments([{"start": 0, "end": 10}], 4)
@@ -35,11 +35,8 @@ try:
 except ValueError:
     check("a split on the edge is refused", True)
 
-try:
-    music.clean_meta({"license": "owner"})
-    check("a track without a rights tick is refused", False)
-except ValueError:
-    check("a track without a rights tick is refused", True)
+ok = music.clean_meta({"license": "owner"})
+check("a track does not need a rights tick", ok["license"], "owner")
 ok = music.clean_meta({"license": "owner", "rights": True})
 check("a confirmed track is stored as owner-licensed", ok["rights"] is True and ok["license"] == "owner")
 try:

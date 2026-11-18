@@ -85,11 +85,8 @@ def run_editor(client, root):
 
     meta = {"kind": "video", "is_live": False, "duration": 8, "title": "Replay", "uploader": "Player"}
     with patch.object(media, "info", return_value=meta), patch.object(media, "_ydl", downloader):
-        unconfirmed = client.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=example", "options": {"mode": "manual"}})
-        assert unconfirmed.status_code == 400 and "permission" in unconfirmed.json()["detail"].lower()
-        print("PASS source links require an explicit rights confirmation before clipping")
-        response = client.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=example", "options": {"mode": "manual"},
-                                                   "rights_cleared": True})
+        response = client.post("/api/jobs", json={"url": "https://www.youtube.com/watch?v=example", "options": {"mode": "manual"}})
+        print("PASS a source link can be clipped without a permission checkbox")
         response.raise_for_status()
         linked_job = wait_for(client, response.json()["id"], lambda j: j["status"] in ("done", "error"))
     linked_trace = next(iter(root.glob(f"users/*/jobs/{linked_job['id']}/error.log")), None)

@@ -35,10 +35,10 @@ check("every default source starts unauthorized", all(not row["rights"] and row[
 check("unverified handles are not turned into links", autopilot.channel_url({"platform": "youtube", "handle": "Nogla", "verified_handle": False}), "")
 xqc = next(row for row in autopilot.DEFAULT_CHANNELS if row["name"] == "xQc")
 check("a confirmed Twitch handle has a channel link", autopilot.channel_url(xqc), "https://www.twitch.tv/xqc")
-check("upload needs both the allowlist and Authorized", autopilot.can_publish({**xqc, "rights": True, "rights_status": "UNKNOWN"}), False)
-check("Authorized and allowlisted can upload", autopilot.can_publish({**xqc, "rights": True, "rights_status": "AUTHORIZED"}))
-check("turning autopilot on with no Authorized source is refused",
-      _raises(lambda: autopilot.clean_settings({"enabled": True}, autopilot.default_settings())))
+check("a source without an allowlist can still be posted", autopilot.can_publish({**xqc, "rights": False, "rights_status": "UNKNOWN"}))
+check("an expired rights date does not block posting", autopilot.can_publish({**xqc, "rights": True, "rights_status": "AUTHORIZED", "rights_until": 1}))
+check("autopilot can be turned on with no Authorized source",
+      autopilot.clean_settings({"enabled": True}, autopilot.default_settings())["enabled"])
 
 
 # --- game and language -------------------------------------------------------
@@ -94,7 +94,7 @@ score = autopilot.viral_score({"hook": "He barely made the jump", "title": "Last
                               game="gta6", has_commentary=True, live=True)
 check("viral score keeps commentary, relevance and a 0-100 total",
       score["parts"]["commentary"] == 15 and score["parts"]["relevance"] == 15 and score["total"] == sum(score["parts"].values()) <= 100)
-check("viral score does not change rights", autopilot.can_publish(xqc), False)
+check("viral score does not decide posting", autopilot.can_publish(xqc))
 check("near duplicates are caught", autopilot.near_duplicate("he barely made the jump", 12, "https://www.twitch.tv/xqc",
       [{"url": "https://www.twitch.tv/xqc", "start": 14, "tokens": ["barely", "he", "jump", "made", "the"]}]))
 check("a different moment is kept", autopilot.near_duplicate("totally different chase", 90, "https://www.twitch.tv/xqc",
