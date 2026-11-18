@@ -48,7 +48,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -1964,6 +1964,90 @@ def apps_put(request: Request, body: dict = Body(...)):
         return accounts.save_app(str(body.get("platform", "")), body.get("client_id"), body.get("client_secret"))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/engine")
+def engine_get():
+    from . import engine
+    return engine.public()
+
+
+@app.put("/api/engine")
+def engine_put(body: dict = Body(...)):
+    from . import engine
+    state = engine.load()
+    if "enabled" in body:
+        state["enabled"] = body.get("enabled") is True
+    if "interval_min" in body:
+        state["interval_min"] = engine._interval(body.get("interval_min"))
+    engine.save(state)
+    return engine.public(state)
+
+
+@app.post("/api/engine/tick")
+def engine_tick():
+    from . import autopilot, engine
+    state = engine.load()
+
+    def scan():
+        autopilot.cycle()
+
+    engine.tick(state, scan=scan)
+    engine.save(state)
+    return engine.public(state)
+
+
+@app.post("/api/engine/chat")
+def engine_chat(body: dict = Body(...)):
+    from . import engine
+    state = engine.load()
+    reply = engine.answer(state, str((body or {}).get("text") or ""))
+    engine.save(state)
+    return {"reply": reply, "engine": engine.public(state)}
+
+
+@app.post("/api/engine/cards/{card_id}")
+def engine_card(card_id: str):
+    from . import engine
+    state = engine.load()
+    try:
+        shown = engine.toggle_card(state, card_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    engine.save(state)
+    return shown
+
+
+@app.post("/api/engine/learn")
+def engine_learn(body: dict = Body(...)):
+    from . import engine
+    state = engine.load()
+    engine.reweight(state, body if isinstance(body, dict) else {})
+    engine.save(state)
+    return {"weights": state.get("weights")}
+
+
+@app.post("/api/engine/keys")
+def engine_key(body: dict = Body(...)):
+    from . import engine, vault
+    try:
+        vault.put_key(str(body.get("provider") or ""), str(body.get("secret") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    state = engine.load()
+    if body.get("provider"):
+        state["active_provider"] = str(body.get("provider"))
+        engine.save(state)
+    return {"saved": vault.list_saved(), "engine": engine.public(state)}
+
+
+@app.post("/api/engine/failover")
+def engine_failover(body: dict = Body(...)):
+    from . import engine
+    state = engine.load()
+    nxt = engine.failover(state, str((body or {}).get("failed") or ""))
+    engine.save(state)
+    return {"provider": nxt, "engine": engine.public(state)}
 
 
 @app.get("/api/autopilot")

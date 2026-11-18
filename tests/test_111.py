@@ -26,13 +26,13 @@ check("localhost and 127.0.0.1 on the same port match",
       server._same_browser("http://localhost:8765", "127.0.0.1:8765"))
 check("a different port does not match",
       server._same_browser("http://127.0.0.1:8766", "127.0.0.1:8765"), False)
-check("the release is 1.1.0", server.VERSION, "1.1.0")
+check("the release is 1.2.0", server.VERSION, "1.2.0")
 
 client = TestClient(server.app, base_url="http://127.0.0.1:8765")
 page = client.get("/api/diagnostics")
 check("diagnostics answers", page.status_code, 200)
 body = page.json()
-check("diagnostics names the version", body.get("version"), "1.1.0")
+check("diagnostics names the version", body.get("version"), "1.2.0")
 check("diagnostics does not include a key", "key" not in body)
 logs = client.get("/api/logs")
 check("the log endpoint answers", logs.status_code, 200)

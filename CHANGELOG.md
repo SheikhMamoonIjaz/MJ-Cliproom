@@ -2,6 +2,17 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 1.2.0 — 2026-11-18
+
+- The autonomous engine can stay on and scan on a timer you set between 20 and 30 minutes.
+- A Windows task script starts MJ Cliproom at sign-in and starts it again if it stops.
+- Original series topics rotate through GTA 6 Stories, Hidden Locations, Easter Eggs, Map Secrets and Tips without repeating until the list is used.
+- View and retention numbers can raise the weight of a creator, a moment type, a title style or an hour.
+- Home has a chat line for status, today's posts, pausing a creator, and steering the next topic.
+- Provider keys are sealed on this computer. If the active provider fails, the engine moves to the next one.
+- Sixteen tools appear as cards on Home. Each card shows whether it is on and can be switched.
+- The rights note stays one line of text.
+
 ## 1.1.0 — 2026-11-18
 
 - Pages retry a failed request and show “Reconnecting to MJ Cliproom” until the app answers again. Copy works on a plain http address.

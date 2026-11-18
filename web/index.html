@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 1.1.0</title>
+<title>MJ Cliproom · 1.2.0</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -286,6 +286,9 @@ label.ck input{accent-color:var(--brand);margin:0}
 .composer-bar .hint{flex:1 1 140px;min-width:0;text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .composer-bar .btn.primary{margin-left:auto;flex:0 0 auto}
 .composer{overflow:visible}
+.eng-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:12px}
+.eng-card{border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.eng-card b{overflow-wrap:anywhere}
 #linkbar{position:sticky;top:0;z-index:40}
 .composer-opts{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .32s ease,opacity .25s ease}
 .composer-opts.open{grid-template-rows:1fr;opacity:1}
@@ -1324,7 +1327,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}Usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.1.0</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}Usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.2.0</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1376,20 +1379,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await copyText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch (err) { toast(err.message, "bad"); } }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "1.1.0";
+const RELEASE = "1.2.0";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_1_0";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_2_0";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.1.0</h2>
-    <ul><li>If the app restarts, the page retries and shows Reconnecting to MJ Cliproom. Copy still works on a plain http address.</li>
-    <li>localhost and 127.0.0.1 on the same port count as the same computer.</li>
-    <li>Home no longer offers Clip replay. The mode menu and Make clips button wrap onto the next line.</li>
-    <li>Settings is grouped: General, creators, Autopilot, posting, music, storage, captions, clip finding and Advanced.</li>
-    <li>Home shows a setup list and quick tools. A channel scan runs in the background.</li>
-    <li>Advanced can show diagnostics, the recent log, export settings, and remove finished source files.</li></ul>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.2.0</h2>
+    <ul><li>Home has an autonomous engine. It can scan on a timer between 20 and 30 minutes.</li>
+    <li>Original topics rotate through five series without repeating until the list is used.</li>
+    <li>A chat line answers status, today's posts, pause, resume and a topic.</li>
+    <li>Sixteen tools are cards on Home. Each one can be switched on.</li>
+    <li>Provider keys stay on this computer. If one provider fails, the next one is used.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
     <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
@@ -2236,7 +2238,11 @@ function drawLog() {
 }
 
 /* ============================================================ overview */
-async function loadOverview() { try { S.overview = await api("/api/overview"); } catch { return; } drawOverview(); }
+async function loadOverview() {
+  try { S.overview = await api("/api/overview"); } catch { return; }
+  try { S.engine = await api("/api/engine"); } catch { S.engine = null; }
+  drawOverview();
+}
 function barChart(daily) {
   const W = 720, H = 230, pl = 30, pb = 28, pt = 12, n = daily.length, ch = H - pt - pb;
   const peak = Math.max(1, ...daily.map(d => Math.max(d.clips, d.posted)));
@@ -2263,6 +2269,23 @@ function nextSteps(o) {
   if (S.creators.length && !S.creators.some(c => c.auto_watch)) st.push(["Turn on auto-record", "Record by itself whenever a creator goes live.", "go:c:" + S.creators[0].id + ":setup"]);
   return st;
 }
+async function askEngine() {
+  const text = $("#engtext")?.value || "";
+  const reply = await send("/api/engine/chat", {text});
+  S.engine = reply.engine;
+  const box = $("#engreply");
+  if (box) box.textContent = reply.reply || "";
+}
+function engineHtml() {
+  const e = S.engine; if (!e) return "";
+  const cards = (e.cards || []).map(c => `<article class="eng-card"><b>${esc(c.title)}</b><p class="hint">${esc(c.note)}</p><button class="btn sm" data-act="engcard" data-id="${esc(c.id)}">${c.on ? "On" : "Off"}</button></article>`).join("");
+  return `<section class="card"><div class="card-head"><div><h2>Autonomous engine</h2><p class="sub">${e.enabled ? "On" : "Off"} · every ${e.interval_min} minutes · ${esc(e.provider || "")}</p></div>
+    <button class="btn sm ${e.enabled ? "" : "primary"}" data-act="engtoggle">${e.enabled ? "Pause engine" : "Start engine"}</button></div>
+    <p class="hint">${esc(e.disclaimer || "")}</p>
+    <form id="engchat" class="row"><input id="engtext" aria-label="Ask the engine" placeholder="status, what did you post today, pause a creator" style="flex:1"><button class="btn sm">Ask</button></form>
+    <p id="engreply" class="hint"></p>
+    <div class="eng-grid">${cards}</div></section>`;
+}
 function drawOverview() {
   const o = S.overview, box = $("#ov"); if (!o || !box) return;
   const sum = k => o.creators.reduce((a, r) => a + r[k], 0);
@@ -2281,7 +2304,7 @@ function drawOverview() {
   const guide = `<section class="card"><h2>First-run setup</h2><p class="sub">${done} of ${setup.length} steps done. Nothing here blocks the app.</p>
     <div class="steps across">${setup.map((s, i) => `<button class="step" data-act="go" data-v="${s[2]}" data-tab="${s[3]}"><span class="n">${s[1] ? "✓" : i + 1}</span><span><b>${esc(s[0])}</b></span></button>`).join("")}</div></section>`;
   const tools = `<section class="card"><h2>Quick tools</h2><div class="row"><button class="btn sm" data-act="go" data-v="autopilot">Scan channels</button><button class="btn sm" data-act="go" data-v="settings" data-tab="storage">Storage</button><button class="btn sm" data-act="go" data-v="settings" data-tab="tools">Logs and backup</button><button class="btn sm" data-act="go" data-v="settings" data-tab="general">Diagnostics</button></div></section>`;
-  put(box, `${guide}${tools}<div class="tiles">
+  put(box, `${guide}${tools}${engineHtml()}<div class="tiles">
       <div class="tile"><i>${ic("radio")}</i><b>${o.recording}</b><span>Recording now</span></div>
       <div class="tile"><i>${ic("scissors")}</i><b>${sum("clips_today")}</b><span>Clips today</span></div>
       <div class="tile"><i>${ic("send")}</i><b>${sum("posted_today")}</b><span>Posted today</span></div>
@@ -2819,6 +2842,7 @@ document.addEventListener("keydown", async e => {
 document.addEventListener("submit", e => {
   if (e.target.id === "addform") { e.preventDefault(); makeClips(); }
   if (e.target.id === "promptform") { e.preventDefault(); submitPrompt(e.target); }
+  if (e.target.id === "engchat") { e.preventDefault(); askEngine(); }
 });
 $("#file").addEventListener("change", e => {
   const chosen = [...e.target.files], pendingId = S.resumeUploadId; S.resumeUploadId = null;
@@ -2896,6 +2920,14 @@ document.addEventListener("click", async e => {
       const info = await send("/api/storage/cleanup", {confirm: true});
       toast(`Removed ${info.removed} source file${info.removed === 1 ? "" : "s"}.`, "ok");
       return;
+    }
+    if (a === "engtoggle") {
+      S.engine = await send("/api/engine", {enabled: !(S.engine && S.engine.enabled)}, "PUT");
+      drawOverview(); return;
+    }
+    if (a === "engcard") {
+      S.engine = await send("/api/engine/cards/" + encodeURIComponent(d.id), {});
+      drawOverview(); return;
     }
     if (a === "go") { closePops(); return go(d.v, d.tab); }
     if (a === "auto-save") {
