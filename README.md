@@ -1,4 +1,4 @@
-# MJ Cliproom · 1.0.1
+# MJ Cliproom · 1.1.0
 
 [What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 

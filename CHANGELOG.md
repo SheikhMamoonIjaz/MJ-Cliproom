@@ -2,6 +2,13 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 1.1.0 — 2026-11-18
+
+- Pages retry a failed request and show “Reconnecting to MJ Cliproom” until the app answers again.
+- `localhost` and `127.0.0.1` count as the same computer, so a shortcut on the other name still talks to the app.
+- Diagnostics, the recent log, settings export and import, and a cleanup of finished source files are available.
+- On Windows, choosing a storage folder uses the system folder window.
+
 ## 1.0.1 — 2026-11-18
 
 - Removed the permission checkboxes and server checks that blocked recording, clipping, Autopilot and uploads.

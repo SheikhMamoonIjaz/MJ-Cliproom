@@ -81,14 +81,17 @@ def info(local: bool) -> dict:
 
 
 def open_folder():
-    """Show PeakCut's folder in the computer's file manager."""
+    """Show MJ Cliproom's folder in the computer's file manager."""
     p = str(config.DATA_DIR.resolve())
-    if sys.platform == "win32":
-        os.startfile(p)                                   # noqa: S606 - the owner's own folder, on their own computer
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", p])
-    else:
-        subprocess.Popen(["xdg-open", p])
+    try:
+        if sys.platform == "win32":
+            os.startfile(p)                               # noqa: S606 - the owner's own folder, on their own computer
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", p])
+        else:
+            subprocess.Popen(["xdg-open", p])
+    except OSError as exc:
+        raise ValueError(f"Couldn't open the folder. Copy this path and open it yourself: {p}") from exc
 
 
 _PICK = ("import tkinter as tk\nfrom tkinter import filedialog\nr = tk.Tk()\nr.withdraw()\nr.attributes('-topmost', True)\n"
@@ -96,14 +99,31 @@ _PICK = ("import tkinter as tk\nfrom tkinter import filedialog\nr = tk.Tk()\nr.w
 
 
 def pick_folder() -> str:
-    """The computer's own "choose a folder" window. Returns the folder, or "" if it was closed or cannot be shown."""
+    """The computer's own "choose a folder" window. Returns the folder, or "" if the owner closed it."""
+    if sys.platform == "win32":
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$d.Description = 'Choose where MJ Cliproom keeps videos'; "
+            "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"
+        )
+        try:
+            picked = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", script],
+                                    capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.TimeoutExpired):
+            picked = None
+        if picked is not None and picked.returncode == 0:
+            lines = [line.strip() for line in (picked.stdout or "").splitlines() if line.strip()]
+            return lines[-1] if lines else ""
     try:
         r = subprocess.run([sys.executable, "-c", _PICK], capture_output=True, text=True, timeout=600,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.TimeoutExpired):
-        return ""
-    out = (r.stdout or "").strip().splitlines()
-    return str(Path(out[-1])) if r.returncode == 0 and out and out[-1].strip() else ""
+        raise ValueError("The folder window could not open. Type the full path instead.")
+    out = [line.strip() for line in (r.stdout or "").splitlines() if line.strip()]
+    if r.returncode != 0:
+        raise ValueError("The folder window could not open. Type the full path instead.")
+    return str(Path(out[-1])) if out else ""
 
 
 def change(path: str, move: bool = True) -> dict:
