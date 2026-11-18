@@ -32,9 +32,22 @@ _again: set = set()
 _lock = threading.Lock()
 
 
+class _Stay(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only when it stays on YouTube, Twitch or Kick."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        from . import media
+        if not media.site_allowed(newurl):
+            raise urllib.error.HTTPError(newurl, code, "That redirect left the allowed sites.", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_Stay)
+
+
 def _get(url: str, accept: str = "text/html", limit: int = 3_000_000):
     req = urllib.request.Request(url, headers={**UA, "Accept": accept})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with _opener.open(req, timeout=10) as r:
         return r.headers.get("Content-Type") or "", r.read(limit)
 
 
@@ -145,7 +158,7 @@ _TWITCH_WEB = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 def _twitch_live(login: str, off: dict) -> dict:
     import calendar
     import httpx
-    q = 'query($l:String!){user(login:$l){login stream{title viewersCount createdAt type}}}'
+    q = 'query($l:String!){user(login:$l){login stream{title viewersCount createdAt type game{name}}}}'
     r = httpx.post("https://gql.twitch.tv/gql", json={"query": q, "variables": {"l": login}},
                    headers={"Client-ID": _TWITCH_WEB, **UA}, timeout=8)
     r.raise_for_status()
@@ -160,8 +173,9 @@ def _twitch_live(login: str, off: dict) -> dict:
         started = calendar.timegm(time.strptime(st["createdAt"], "%Y-%m-%dT%H:%M:%SZ"))
     except Exception:  # noqa: BLE001
         pass
+    game = ((st.get("game") or {}).get("name") or "")[:80]
     return {"live": True, "viewers": st.get("viewersCount"), "title": (st.get("title") or "")[:140], "started": started,
-            "embed": (user.get("login") or login).lower()}
+            "embed": (user.get("login") or login).lower(), "category": game}
 
 
 def _twitch_profile(url: str):
@@ -204,7 +218,7 @@ def live_now(platform: str, url: str) -> dict:
     """{live, viewers, title, started (unix time), embed}. `embed` is what the platform's own player needs:
     the Twitch login, the YouTube video id or the Kick channel name."""
     url = url.rstrip("/")
-    off = {"live": False, "viewers": None, "title": "", "started": None, "embed": ""}
+    off = {"live": False, "viewers": None, "title": "", "started": None, "embed": "", "category": ""}
     path = urlparse(url).path.strip("/").split("/")
     if platform == "Kick":
         slug = path[0]
@@ -218,7 +232,13 @@ def live_now(platform: str, url: str) -> dict:
             started = calendar.timegm(time.strptime(ls.get("start_time") or ls.get("created_at"), "%Y-%m-%d %H:%M:%S"))
         except Exception:
             pass
-        return {"live": True, "viewers": ls.get("viewer_count"), "title": ls.get("session_title") or "", "started": started, "embed": slug}
+        category = ls.get("category") or ls.get("categories") or {}
+        if isinstance(category, list):
+            category = category[0] if category else {}
+        if isinstance(category, dict):
+            category = category.get("name") or category.get("slug") or ""
+        return {"live": True, "viewers": ls.get("viewer_count"), "title": ls.get("session_title") or "",
+                "started": started, "embed": slug, "category": str(category)[:80]}
     if platform == "YouTube":
         base = re.sub(r"/(live|videos|streams|featured)$", "", url)
         _, raw = _get(base + "/live")
@@ -226,11 +246,13 @@ def live_now(platform: str, url: str) -> dict:
         if '"isLiveNow":true' not in html:
             return off
         vid = (re.search(r'<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([\w-]{11})"', html) or [None, ""])[1]
-        out = {"live": True, "viewers": None, "title": _meta(html, "og:title"), "started": None, "embed": vid}
+        out = {"live": True, "viewers": None, "title": _meta(html, "og:title"), "started": None, "embed": vid, "category": ""}
         try:
             i = _ydl_info(base + "/live")
+            cats = [str(c) for c in (i.get("categories") or []) if c]
             out.update(viewers=i.get("concurrent_view_count"), title=_no_date(i.get("title")) or out["title"],
-                       started=i.get("release_timestamp") or i.get("timestamp"), embed=i.get("id") or vid)
+                       started=i.get("release_timestamp") or i.get("timestamp"), embed=i.get("id") or vid,
+                       category=cats[0][:80] if cats else "", language=i.get("language") or "")
         except Exception:
             pass
         return out
@@ -251,7 +273,8 @@ def live_now(platform: str, url: str) -> dict:
         if (not title or title.lower() == (i.get("uploader_id") or "").lower()) and i.get("description"):
             title = str(i["description"]).splitlines()[0][:140]   # Twitch keeps the real stream title here
         return {"live": True, "viewers": i.get("concurrent_view_count"), "title": title,
-                "started": i.get("timestamp"), "embed": (i.get("uploader_id") or path[0]).lower()}
+                "started": i.get("timestamp"), "embed": (i.get("uploader_id") or path[0]).lower(),
+                "category": str(i.get("category") or (i.get("categories") or [""])[0] or "")[:80]}
     return off
 
 

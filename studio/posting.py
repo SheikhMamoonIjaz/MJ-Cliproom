@@ -96,7 +96,25 @@ def _next_slot(account_id, gap_min, gap_max, cap):
     return t
 
 
-def enqueue(job, clip, account_ids, now=False, automatic=False) -> list:
+def settle_interrupted(post):
+    """A restart cut an upload off. Autopilot tries again; a hand-made post waits for a person."""
+    if post.get("status") != "posting":
+        return post
+    if post.get("autopilot"):
+        tries = int(post.get("tries") or 0) + 1
+        if tries <= 3:
+            post.update(status="scheduled", tries=tries,
+                        due_at=time.time() + min(900, 60 * (2 ** (tries - 1))),
+                        error="The upload was interrupted by a restart and will be tried again.")
+        else:
+            post.update(status="failed", tries=tries,
+                        error="The upload was interrupted too many times. Check the channel, then retry.")
+    else:
+        post.update(status="failed", error="The studio closed during this upload. Check the account, then retry.")
+    return post
+
+
+def enqueue(job, clip, account_ids, now=False, automatic=False, autopilot=False) -> list:
     if job.get("rights_cleared") is not True:
         raise ValueError("Confirm that you own or have permission to publish this source before posting.")
     c = creators.get(job["creator"]) or creators.DEFAULTS
@@ -117,7 +135,8 @@ def enqueue(job, clip, account_ids, now=False, automatic=False) -> list:
                  "account": aid, "account_name": acc["name"], "platform": acc["platform"], "status": "scheduled",
                  "due_at": due, "created": time.time(), "title": metadata["title"],
                  "description": metadata["description"], "hashtags": metadata["hashtags"],
-                 "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None, "views": None, "automatic": automatic}
+                 "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None, "views": None,
+                 "automatic": automatic, "autopilot": bool(autopilot)}
             _posts.append(p)
             made.append(p)
         _save()
@@ -278,7 +297,18 @@ def _run():
                     _mirror(p)
                     _post(p)
             except Exception:  # noqa: BLE001
-                pass
+                if p.get("status") == "posting":
+                    p["tries"] = int(p.get("tries") or 0) + 1
+                    if p["tries"] < 3:
+                        p.update(status="scheduled", due_at=time.time() + min(900, 30 * p["tries"]),
+                                 error="The upload stopped unexpectedly and will be tried again.")
+                    else:
+                        p.update(status="failed", error="The upload stopped unexpectedly.")
+                    _save()
+                    try:
+                        _mirror(p)
+                    except Exception:  # noqa: BLE001
+                        pass
 
 
 def _stats_for(recent):
@@ -419,7 +449,7 @@ def start():
     with _lock:
         for p in _posts:
             if p["status"] == "posting":  # interrupted mid-upload last time
-                p.update(status="failed", error="The studio closed during this upload. Check the account, then retry.")
+                settle_interrupted(p)
         _save()
     jobs.on_clip_ready.append(on_clip_ready)
     threading.Thread(target=_run, daemon=True).start()

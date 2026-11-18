@@ -20,6 +20,7 @@ services:
 
   app:
     build: .
+    # Restarts the process after a crash so Autopilot can resume from the data volume.
     restart: unless-stopped
     depends_on:
       db:

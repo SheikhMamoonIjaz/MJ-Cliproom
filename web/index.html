@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 0.10.3 beta</title>
+<title>MJ Cliproom · 0.11.0 beta</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1262,7 +1262,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.10.3 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.11.0 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1314,20 +1314,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "0.10.3 beta";
+const RELEASE = "0.11.0 beta";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_10_3";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_11_0";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.10.3 beta</h2>
-    <ul><li>Queue clips from a prompt. Review them yourself or authorize posting to selected YouTube or Instagram accounts.</li>
-    <li>Save AI profiles with their own models and choose which services may act as backups.</li>
-    <li>Queue without a local daily cap by default. Platform limits pause the affected queue.</li>
-    <li>Ask your selected AI model for ten ranked clip packages with realistic descriptions and relevant gaming hashtags.</li>
-    <li>On Windows, run update-mj-cliproom.bat to use the supervised updater and preserve your storage folder.</li>
-    <li>Apply verified updates through the launcher and return to the app after restart.</li></ul>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.11.0 beta</h2>
+    <ul><li>Autopilot watches the creator list for English GTA 6 streams, records a few at a time, and uploads only sources you mark Authorized.</li>
+    <li>A stream is GTA 6 only when its category or title says so. GTA 5 is never relabelled as GTA 6.</li>
+    <li>Each moment gets a viral score that does not bypass the rights check. Signal-only clips wait for review unless you turn on full auto for that source.</li>
+    <li>Posts keep a source credit and link. An optional commentary track can be mixed in, and the full frame is kept so a creator watermark is not cropped off.</li>
+    <li>Unconfirmed handles are listed but not watched until you tick Handle checked.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Install and update guide</a></p>
     <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
@@ -1430,6 +1429,7 @@ function moveInd() {
 }
 function drawShell() {  const nav = (v, icon, label, extra = "") => `<button class="nav-item ${S.view === v ? "on" : ""}" data-act="go" data-v="${esc(v)}" title="${esc(label)}">${icon}<span class="label">${esc(label)}</span>${extra}</button>`;
   put($("#nav"), nav("overview", navIc("home", "overview"), "Home") +
+    nav("autopilot", navIc("radio", "autopilot"), "Autopilot") +
     nav("library", navIc("film", "library"), "All videos", (() => { const w = S.jobs.filter(j => ["queued", "running"].includes(j.status)).length;
       return w ? `<span class="working" title="${w} working now"><i></i>${w} working</span>` : S.jobs.length ? `<span class="count">${S.jobs.length}</span>` : ""; })()) +
     `<h4><span>Creators</span></h4>` +
@@ -1447,7 +1447,8 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
       <button class="icon-btn bell" data-act="bell" title="Notifications" aria-label="Notifications${S.status.unread ? `, ${S.status.unread} new` : ""}" aria-haspopup="dialog">${ic("bell")}${S.status.unread ? `<span class="dotn">${S.status.unread > 9 ? "9+" : S.status.unread}</span>` : ""}</button></div>` : ""));
   const c = creator();
   const recording = S.creators.filter(x => x.live_job).length;
-  let title = {overview:"Overview", library:"Gameplay studio", settings:"Settings", usage:"AI usage"}[S.view] || "", sub = "", act = "";
+  let title = {overview:"Overview", library:"Gameplay studio", settings:"Settings", usage:"AI usage", autopilot:"Autopilot"}[S.view] || "", sub = "", act = "";
+  if (S.view === "autopilot") sub = "Watch GTA 6 streams, keep English moments, and upload only what you have authorized.";
   if (S.view === "usage") sub = "What the AI has been used for.";
   if (S.view === "overview") sub = `${greeting()}. ${S.creators.length} creator${S.creators.length === 1 ? "" : "s"}${recording ? `, ${recording} recording now` : ""}.`;
   if (S.view === "library") sub = "Every video and recording, across all creators.";
@@ -1489,7 +1490,7 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   put($("#title"), `<span>${esc(title)}</span>`); put($("#subtitle"), subHtml ?? esc(sub)); put($("#actions"), act);
 }
 
-const ROUTES = {overview: "overview", library: "videos", settings: "settings", usage: "usage"};
+const ROUTES = {overview: "overview", library: "videos", settings: "settings", usage: "usage", autopilot: "autopilot"};
 function pathFor(v, tab) {
   if (v.startsWith("c:")) return `/app/creators/${encodeURIComponent(v.slice(2))}${tab && tab !== "clips" ? "/" + tab : ""}`;
   if (v === "settings") return "/app/settings" + (tab ? "/" + tab : "");
@@ -1498,7 +1499,7 @@ function pathFor(v, tab) {
 function fromPath(path) {
   const m = path.match(/^\/app\/creators\/([^/]+)(?:\/(setup|activity|clips))?\/?$/);
   if (m) return ["c:" + decodeURIComponent(m[1]), m[2] || "clips"];
-  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage))?\/?$/);
+  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage|autopilot))?\/?$/);
   if (st) return ["settings", st[1] || null];
   const k = Object.keys(ROUTES).find(x => ROUTES[x] && path.replace(/\/$/, "") === "/app/" + ROUTES[x]);
   return [k || "library", "clips"];
@@ -1523,6 +1524,7 @@ function go(v, tab, fromHistory) {
   else if (v === "library") view.innerHTML = `<div id="add"></div><div id="jobs"></div>`;
   else if (v === "settings") view.innerHTML = `<div id="sform"></div>`;
   else if (v === "usage") { view.innerHTML = `<div id="usage"></div>`; loadUsage(); }
+  else if (v === "autopilot") { view.innerHTML = `<div id="auto"></div>`; loadAutopilot(true); }
   else view.innerHTML = `<div id="stream"></div><div id="cbody"></div>`;   // the live player stays put across tabs: no restart, no rebuffer
   if ($("#add")) drawAdd(v === "overview" ? "hero" : "compact");
   if (v === "settings") drawSettings();
@@ -1585,7 +1587,7 @@ function drawAdd(variant) {
     </div></div></form>`;
   drawAtt();
 }
-const LAYOUT_SHORT = {blur:"Blurred fill", zoom:"Zoomed in", crop:"Fill screen"};
+const LAYOUT_SHORT = {blur:"Blurred fill", zoom:"Zoomed in", crop:"Fill screen", stack:"Gameplay + cam", split:"Cam + gameplay"};
 const CAP_LOOK = {bounce:{font:"'Archivo Black'", hl:"#FFFF00", up:true}, hype:{font:"Anton", hl:"#FF3C3C", up:true}, clean:{font:"Poppins", hl:"#6BD7FF", up:false, w:800}};
 function capPrev(k) {
   const s = CAP_LOOK[k] || {font:"inherit", hl:"#ffa27c", up:true};
@@ -2257,6 +2259,7 @@ const setTabs = () => [
   ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name, email and how you sign in"],
                                           ["security", "Security", "lock", "Password and signing out"]]),
   ["apps", "Connected apps", "plug", "Where your clips get posted"],
+  ["autopilot", "Autopilot", "radio", "GTA 6 live clipping and uploads"],
   ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos and clips are kept"]] : [])];
 function aiHints() {
   const k = S.aiEdit, sel = $("#ai_provider"); if (!k || !sel) return;
@@ -2269,6 +2272,75 @@ function aiHints() {
   if (pv.id === "qwen") $("#ai_base").placeholder = "Your Model Studio workspace address ending in /compatible-mode/v1";
   if (pv.id === "openrouter-free") $("#ai_model").placeholder = "openrouter/free or a model ending in :free";
 }
+let autoDirty = false;
+async function loadAutopilot(force) {
+  const box = $("#auto"); if (!box) return;
+  if (autoDirty && !force) return;
+  try {
+    S.auto = await api("/api/autopilot");
+    autoDirty = false;
+    drawAutopilot();
+  } catch (e) { box.innerHTML = `<div class="note">${esc(e.message)}</div>`; }
+}
+function drawAutopilot() {
+  const box = $("#auto"); const a = S.auto; if (!box || !a) return;
+  const statuses = a.rights_statuses || ["AUTHORIZED", "PERMISSION_REQUIRED", "RESTRICTED", "UNKNOWN"];
+  const rows = (a.channels || []).map(c => `<tr data-id="${esc(c.id)}" data-note="${esc(c.note || "")}">
+      <td><b>${esc(c.name)}</b>${c.note ? `<div class="hint">${esc(c.note)}</div>` : ""}</td>
+      <td><select data-k="platform" aria-label="Platform for ${esc(c.name)}">
+        ${["twitch", "kick", "youtube"].map(p => `<option value="${p}" ${c.platform === p ? "selected" : ""}>${p}</option>`).join("")}</select></td>
+      <td><input data-k="handle" value="${esc(c.handle || "")}" spellcheck="false" aria-label="Handle for ${esc(c.name)}"></td>
+      <td><input type="checkbox" data-k="verified_handle" ${c.verified_handle ? "checked" : ""} aria-label="Handle checked"></td>
+      <td><input type="checkbox" data-k="rights" ${c.rights ? "checked" : ""} aria-label="Allowlist"></td>
+      <td><select data-k="rights_status" aria-label="Rights status">${statuses.map(s => `<option ${c.rights_status === s ? "selected" : ""}>${s}</option>`).join("")}</select></td>
+      <td><input type="checkbox" data-k="full_auto" ${c.full_auto ? "checked" : ""} aria-label="Full auto"></td>
+      <td><button type="button" class="btn sm ghost" data-act="auto-draft" data-id="${esc(c.id)}">Draft</button> <button type="button" class="btn sm ghost" data-act="auto-remove" data-id="${esc(c.id)}">Remove</button></td></tr>`).join("");
+  const streams = (a.streams || []).slice(0, 20).map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.platform || "")}</td><td>${s.live ? "Live" : "Offline"}</td><td>${esc(s.game || "")}</td><td>${esc(s.action || "")}</td><td class="hint">${esc(s.reason || "")}</td></tr>`).join("");
+  const queue = (a.queue || []).map(q => `<tr><td>${esc(q.title || "Clip")}</td><td>${esc(q.status)}</td><td>${q.viral ? q.viral.total : ""}</td><td class="hint">${esc(q.reason || "")}</td>
+      <td>${q.preview ? `<a class="btn sm" href="${esc(q.preview)}" target="_blank" rel="noopener">Preview</a> ` : ""}${q.status === "review" ? `<button class="btn sm" data-act="auto-approve" data-id="${esc(q.id)}">Approve</button> <button class="btn sm ghost" data-act="auto-dismiss" data-id="${esc(q.id)}">Dismiss</button>` : ""}</td></tr>`).join("");
+  box.innerHTML = `<section class="set-sec"><h2>Autopilot</h2>
+      <p class="help">Watches the creator list for live GTA 6. A stream counts only when its Twitch or Kick category, or its YouTube title, says GTA 6. GTA 5 is skipped and is never renamed. Uploads happen only for a source that is on the allowlist and set to Authorized. The viral score is separate and does not grant permission.</p>
+      <label class="sw"><input type="checkbox" id="auto_on" ${a.enabled ? "checked" : ""}><span>Autopilot is ${a.enabled ? "on" : "off"}<small>${a.recording || 0} recording now. ${a.verified_channels || 0} handles are confirmed. Server live ceiling is ${a.server_live_ceiling}.</small></span></label>
+      <div class="fields">
+        <label class="f">Keywords<textarea id="auto_keywords" rows="2">${esc((a.keywords || []).join(", "))}</textarea><span class="hint">Search uses these words. A listed channel is still kept only when the live game is GTA 6.</span></label>
+        <label class="f">Recordings at once<input id="auto_max" type="number" min="1" max="32" value="${a.max_recordings}"></label>
+        <label class="f">Minutes between uploads<input id="auto_gap" type="number" min="5" max="1440" value="${a.gap_min}"></label>
+        <label class="f">Daily upload cap<input id="auto_cap" type="number" min="0" max="100" value="${a.daily_cap}"></label>
+        <label class="f">YouTube unit budget<input id="auto_quota" type="number" min="0" max="100000" value="${a.quota_units}"><span class="hint">${a.quota_used || 0} estimated units used today. One upload is about 1600. Default project quota is 10,000.</span></label>
+        <label class="f">YouTube privacy<select id="auto_privacy"><option ${a.privacy === "private" ? "selected" : ""}>private</option><option ${a.privacy === "unlisted" ? "selected" : ""}>unlisted</option><option ${a.privacy === "public" ? "selected" : ""}>public</option></select></label>
+      </div>
+      <p class="help">Commentary is optional. It is your own narration, mixed over the stream. The picture is fitted whole so a creator watermark is not cropped off.</p>
+      <div class="row">${a.commentary ? `<span class="pill ok">${esc(a.commentary.name)}</span><button class="btn sm ghost" data-act="auto-clear-voice">Remove commentary</button>` : `<label class="btn sm">Add commentary<input id="auto_voice" type="file" accept="audio/*" hidden></label>`}</div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" data-act="auto-save">Save</button><button class="btn" data-act="auto-scan">Scan now</button></div>
+    </section>
+    <section class="set-sec"><h2>Creators</h2>
+      <p class="help">Rights status stays UNKNOWN and the allowlist stays off until you confirm a source. Auto-upload requires Authorized. Full auto also uploads signal-only moments for that source. Unchecked handles are not watched.</p>
+      <div class="scroll"><table><tr><th>Name</th><th>Platform</th><th>Handle</th><th>Handle checked</th><th>Allowlist</th><th>Rights</th><th>Full auto</th><th></th></tr>${rows}</table></div>
+      <div class="row" style="margin-top:10px"><button class="btn sm" data-act="auto-add">Add a creator</button></div>
+    </section>
+    <section class="set-sec"><h2>Live check</h2>
+      ${streams ? `<div class="scroll"><table><tr><th>Creator</th><th>Platform</th><th></th><th>Game</th><th>Result</th><th>Why</th></tr>${streams}</table></div>` : `<p class="help">No scan yet. Save, then choose Scan now. Turning Autopilot on scans on its own.</p>`}
+    </section>
+    <section class="set-sec"><h2>Clip queue</h2>
+      ${queue ? `<div class="scroll"><table><tr><th>Clip</th><th>Status</th><th>Viral</th><th>Note</th><th></th></tr>${queue}</table></div>` : `<p class="help">Finished clips show up here. Review items are not uploaded.</p>`}
+      ${(a.errors || []).length ? `<div class="note">${a.errors.slice(0, 5).map(e => `<div>${esc(e.message || "")}</div>`).join("")}</div>` : ""}
+    </section>`;
+}
+function autopilotBody() {
+  const channels = [...$$("#auto tr[data-id]")].map(tr => ({
+    id: tr.dataset.id, name: tr.querySelector("b")?.textContent || "",
+    platform: tr.querySelector("[data-k=platform]").value,
+    handle: tr.querySelector("[data-k=handle]").value,
+    verified_handle: tr.querySelector("[data-k=verified_handle]").checked,
+    rights: tr.querySelector("[data-k=rights]").checked,
+    rights_status: tr.querySelector("[data-k=rights_status]").value,
+    full_auto: tr.querySelector("[data-k=full_auto]").checked,
+    note: tr.dataset.note || ""}));
+  return {enabled: $("#auto_on").checked, keywords: $("#auto_keywords").value, channels,
+    max_recordings: Number($("#auto_max").value), gap_min: Number($("#auto_gap").value),
+    gap_max: Number($("#auto_gap").value), daily_cap: Number($("#auto_cap").value),
+    quota_units: Number($("#auto_quota").value), privacy: $("#auto_privacy").value};
+}
 async function drawSettings() {
   const box = $("#sform"); if (!box) return;
   const tab = S.stab || setTabs()[0][0], me = S.status.user;
@@ -2277,6 +2349,10 @@ async function drawSettings() {
     <div class="set-body" id="setbody"><div class="set-load">Loading…</div></div></div>`;
   const body = $("#setbody");
   try {
+    if (tab === "autopilot") {
+      body.innerHTML = `<div id="auto"><div class="set-load">Loading…</div></div>`;
+      return loadAutopilot(true);
+    }
     if (tab === "ai") {
       const data = S.ai = await api("/api/ai");
       const k = S.aiEdit = S.aiProfile === "new" ? {id:"new", name:"", provider:"gemini", models:[], base_url:"", fallback:false}
@@ -2472,6 +2548,9 @@ function drawClipDlg(full) {
         <label class="f">Music level · ${Math.round((c.music_volume ?? 0.3) * 100)}%<input data-f="music_volume" type="range" min="0" max="0.5" step="0.01" value="${c.music_volume ?? 0.3}"></label>
         <label class="ck"><input type="checkbox" data-f="music_duck" ${c.music_duck !== false ? "checked" : ""}> Lower music under the original audio</label>
         <label class="f">Choose an instrumental audio file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" style="max-width:100%"></label>
+        <div class="two"><label class="f">License<select id="musiclicense"><option value="owner">I have a license</option><option value="cc0">CC0</option><option value="cc-by">CC BY</option><option value="pixabay">Pixabay</option><option value="youtube-audio-library">YouTube Audio Library</option><option value="ncs">NoCopyrightSounds</option></select></label>
+          <label class="f">Mood<select id="musicmood"><option>hype</option><option>chill</option><option>funny</option><option>tense</option><option>epic</option><option>happy</option></select></label></div>
+        <label class="f">Attribution<input id="musiccredit" placeholder="Required for CC BY and NCS"></label>
         <div class="row"><button class="btn sm" data-act="musicupload">Upload instrumental</button>
           ${c.music_id ? `<button class="btn sm ghost" data-act="musicdelete" data-id="${esc(c.music_id)}">Remove track</button>` : ""}</div>
         ${ncsPicksHtml()}
@@ -2549,6 +2628,7 @@ async function tick() {
     if (got.ai) S.status.ai = got.ai;
     if (got.unread != null) S.status.unread = got.unread;
     if (S.view === "overview") { S.overview = await api("/api/overview"); S.ovAt = Date.now(); }
+    if (S.view === "autopilot" && !autoDirty && !document.activeElement?.closest?.("#auto")) loadAutopilot(false);
     if (creatorId() && !creator()) return go("overview");
     render();
   } catch {}
@@ -2595,6 +2675,13 @@ document.addEventListener("dragleave", () => $(".composer")?.classList.remove("o
 document.addEventListener("drop", e => { const a = $(".composer"); if (a) { e.preventDefault(); a.classList.remove("over"); attach(e.dataTransfer.files); } });
 document.addEventListener("change", async e => {
   const t = e.target;
+  if (t.id === "auto_voice" && t.files?.[0]) {
+    const form = new FormData(); form.append("file", t.files[0]);
+    try { S.auto = await api("/api/autopilot/commentary", {method:"POST", body:form}); autoDirty = false; drawAutopilot(); toast("Commentary saved.", "ok"); }
+    catch (err) { toast(err.message, "bad"); }
+    return;
+  }
+  if (t.closest("#auto")) autoDirty = true;
   if (t.id === "o_mode") return drawAtt();
   if (t.id === "ai_profile") { S.aiProfile = t.value; return drawSettings(); }
   if (t.id === "ai_provider") { $("#ai_models").innerHTML = ""; $("#ai_key").value = ""; if (S.aiEdit && t.value !== S.aiEdit.provider) { $("#ai_model").value = ""; $("#ai_base").value = ""; } return aiHints(); }
@@ -2632,6 +2719,42 @@ document.addEventListener("click", async e => {
       await tick(); toast("Source rights confirmation saved", "ok"); return;
     }
     if (a === "go") { closePops(); return go(d.v, d.tab); }
+    if (a === "auto-save") {
+      S.auto = await send("/api/autopilot", autopilotBody(), "PUT");
+      autoDirty = false; drawAutopilot(); toast("Autopilot saved.", "ok"); return;
+    }
+    if (a === "auto-scan") {
+      b.disabled = true;
+      try { S.auto = await send("/api/autopilot/scan", {}); autoDirty = false; drawAutopilot(); toast("Scan finished.", "ok"); }
+      finally { b.disabled = false; }
+      return;
+    }
+    if (a === "auto-add") {
+      const body = autopilotBody();
+      body.channels.push({name: "New creator", platform: "twitch", handle: "", verified_handle: false, rights: false, rights_status: "UNKNOWN", full_auto: false, note: ""});
+      body.enabled = false;
+      S.auto = await send("/api/autopilot", body, "PUT");
+      autoDirty = false; drawAutopilot(); return;
+    }
+    if (a === "auto-remove") {
+      const body = autopilotBody();
+      body.channels = body.channels.filter(c => c.id !== d.id);
+      S.auto = await send("/api/autopilot", body, "PUT");
+      autoDirty = false; drawAutopilot(); return;
+    }
+    if (a === "auto-draft") {
+      const draft = await send("/api/autopilot/drafts", {channel_id: d.id});
+      try { await navigator.clipboard.writeText(draft.draft.subject + "\n\n" + draft.draft.body); } catch {}
+      toast("Permission draft copied. Nothing was emailed.", "ok"); return;
+    }
+    if (a === "auto-approve" || a === "auto-dismiss") {
+      S.auto = await send("/api/autopilot/queue/" + encodeURIComponent(d.id) + "/" + (a === "auto-approve" ? "approve" : "dismiss"), {});
+      drawAutopilot(); return;
+    }
+    if (a === "auto-clear-voice") {
+      S.auto = await send("/api/autopilot/commentary", {}, "DELETE");
+      drawAutopilot(); return;
+    }
     if (a === "whats-new") { closePops(); return whatsNew(); }
     if (a === "release-close") return $("#releasedlg").close();
     if (a === "prompt-queue") return promptQueue(d.j ? jobOf(d.j) : null);
@@ -2963,6 +3086,10 @@ document.addEventListener("click", async e => {
       b.disabled = true; const old = b.textContent; b.textContent = "Uploading…";
       try {
         const form = new FormData(); form.append("file", file);
+        form.append("license", $("#musiclicense")?.value || "owner");
+        form.append("genre", "other");
+        form.append("mood", $("#musicmood")?.value || "hype");
+        form.append("attribution", $("#musiccredit")?.value || "");
         const made = await api("/api/music", {method:"POST", body:form});
         S.status.music = await api("/api/music");
         const select = $("#clipdlg [data-f=music_id]");

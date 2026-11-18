@@ -22,8 +22,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import account, load
-from . import (accounts, ai, alerts, auth, brain, config, creators, ctx, db, editor, jobs, live, media, music, posting,
-               profiles, render, safe, transcribe, usage)
+from . import (accounts, ai, alerts, auth, autopilot, brain, config, creators, ctx, db, editor, jobs, live, media,
+               music, posting, profiles, render, safe, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
 
@@ -47,7 +47,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "0.10.3 beta"
+VERSION = "0.11.0 beta"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -70,6 +70,7 @@ def _startup():
     jobs.start()
     live.start()
     posting.start()
+    autopilot.start()
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
 
@@ -110,7 +111,7 @@ class Gate:
             # Only the upload may be big. Everything else is a small form, and is cut off at 256 KB whatever its
             # headers claim, so nobody can fill the server's memory by posting junk (signed in or not).
             piece = method == "PUT" and path.startswith("/api/upload/")
-            music_upload = method == "POST" and path == "/api/music"
+            music_upload = method == "POST" and path in ("/api/music", "/api/autopilot/commentary")
             cap = ((min(config.MAX_UPLOAD_MB, config.UPLOAD_PART_MB) if piece else config.MAX_UPLOAD_MB) + 8) * 1024 * 1024 \
                 if path == "/api/upload" or piece else (32 * 1024 * 1024 if music_upload else 256 * 1024)
             try:
@@ -1226,8 +1227,14 @@ def list_music():
     return music.list_tracks()
 
 
+@app.get("/api/music/catalog")
+def music_catalog():
+    return music.catalog()
+
+
 @app.post("/api/music")
-def upload_music(file: UploadFile = File(...)):
+def upload_music(file: UploadFile = File(...), license: str = Form("owner"), genre: str = Form("other"),
+                 mood: str = Form("hype"), attribution: str = Form("")):
     _throttle("music:" + ctx.uid(), 20, 600, "Wait a few minutes before uploading more tracks.")
     temp_dir = config.TMP_DIR / "music-uploads"
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1242,7 +1249,8 @@ def upload_music(file: UploadFile = File(...)):
                     raise HTTPException(413, "Instrumental tracks must be 30 MB or smaller.")
                 out.write(chunk)
         try:
-            return music.add(temp, file.filename or "Instrumental track")
+            return music.add(temp, file.filename or "Instrumental track",
+                             {"license": license, "genre": genre, "mood": mood, "attribution": attribution})
         except ValueError as e:
             raise HTTPException(400, str(e))
     finally:
@@ -1867,6 +1875,93 @@ def apps_put(request: Request, body: dict = Body(...)):
         return accounts.save_app(str(body.get("platform", "")), body.get("client_id"), body.get("client_secret"))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/autopilot")
+def autopilot_get():
+    return autopilot.public()
+
+
+@app.put("/api/autopilot")
+def autopilot_put(body: dict = Body(...)):
+    try:
+        state = autopilot.update_settings(body if isinstance(body, dict) else {})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return autopilot.public(state)
+
+
+@app.post("/api/autopilot/drafts")
+def autopilot_draft(body: dict = Body(...)):
+    state = autopilot.load()
+    try:
+        draft = autopilot.add_draft(state, str(body.get("channel_id") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    autopilot.save(state)
+    return {"draft": draft, "sent": False}
+
+
+@app.post("/api/autopilot/scan")
+def autopilot_scan():
+    _throttle("autopilot:" + ctx.uid(), 6, 60, "Wait a minute before scanning again.")
+    try:
+        state = autopilot.cycle()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, safe.friendly(e))
+    return autopilot.public(state)
+
+
+@app.post("/api/autopilot/queue/{item_id}/{action}")
+def autopilot_queue(item_id: str, action: str):
+    state = autopilot.load()
+    try:
+        if action == "approve":
+            autopilot.approve(state, item_id)
+        elif action == "dismiss":
+            autopilot.dismiss(state, item_id)
+        else:
+            raise HTTPException(404)
+        autopilot.save(state)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return autopilot.public(state)
+
+
+@app.post("/api/autopilot/commentary")
+def autopilot_commentary(file: UploadFile = File(...)):
+    from . import commentary
+    _throttle("commentary:" + ctx.uid(), 20, 600, "Wait a few minutes before uploading more commentary.")
+    temp_dir = config.TMP_DIR / "commentary-uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(file.filename or "commentary.mp3").suffix.lower()
+    temp = temp_dir / (os.urandom(12).hex() + ext)
+    size = 0
+    try:
+        with temp.open("wb") as out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > commentary.MAX_TRACK_BYTES:
+                    raise HTTPException(413, "Commentary tracks must be 30 MB or smaller.")
+                out.write(chunk)
+        try:
+            track = commentary.add(temp, file.filename or "commentary.mp3")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    finally:
+        temp.unlink(missing_ok=True)
+    state = autopilot.load()
+    state["settings"]["commentary_id"] = track["id"]
+    autopilot.save(state)
+    return autopilot.public(state)
+
+
+@app.delete("/api/autopilot/commentary")
+def autopilot_commentary_clear():
+    state = autopilot.load()
+    state["settings"]["commentary_id"] = ""
+    autopilot.save(state)
+    return autopilot.public(state)
 
 
 @app.post("/api/posts")

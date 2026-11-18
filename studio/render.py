@@ -78,7 +78,10 @@ def install_fonts():
             shutil.copyfile(f, config.FONTS_DIR / f.name)
 
 
-LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)"}
+LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill",
+           "crop": "Fill the screen (centre crop)",
+           "stack": "Gameplay on top, facecam below",
+           "split": "Facecam on top, gameplay below"}
 
 
 def _ts(t):
@@ -108,8 +111,35 @@ def _groups(words, per):
     return out
 
 
+def choose_facecam(corners) -> str:
+    """Pick the corner with the most activity. That is usually the facecam."""
+    if not isinstance(corners, dict) or not corners:
+        return "left"
+    return max(("left", "right", "center"), key=lambda name: float(corners.get(name) or 0))
+
+
+def face_x(corner: str) -> str:
+    return {"left": "0", "right": "iw-ow", "center": "(iw-ow)/2"}.get(corner or "left", "0")
+
+
+def split_filter(layout: str, facecam: str = "left") -> str:
+    """Stack gameplay and facecam in a vertical frame. The facecam pane is not cropped away."""
+    face_h, game_h = 700, H - 700
+    x = face_x(facecam)
+    face = f"scale={W}:{face_h}:force_original_aspect_ratio=increase,crop={W}:{face_h}:{x}:(ih-oh)/2"
+    game = f"scale={W}:{game_h}:force_original_aspect_ratio=increase,crop={W}:{game_h}:(iw-ow)/2:(ih-oh)/2"
+    if layout == "split":
+        top, bottom = face, game
+    else:
+        top, bottom = game, face
+    return (f"[0:v]fps={config.OUT_FPS},split=2[panetop][panebot];"
+            f"[panetop]{top}[a];[panebot]{bottom}[b];[a][b]vstack=inputs=2,setsar=1[v0];")
+
+
 def geometry(src_w, src_h, layout):
     """Where the video sits in the 1080x1920 frame, and where hook and captions go."""
+    if layout in ("stack", "split"):
+        return layout, 1220 if layout == "stack" else 1280, 150, 980 if layout == "split" else 620
     if src_h >= src_w and layout != "crop":
         layout = "crop"  # already vertical or square: nothing to gain from a blurred fill
     if layout == "blur":
@@ -155,8 +185,19 @@ def _hook_events(hook, dur, y):
     return ev
 
 
+def _brand_events(dur: float) -> list:
+    """A short MJ Plays GTA title at the start and again at the end. It does not cover the facecam."""
+    intro = min(1.8, max(0.5, dur * 0.12))
+    look = r"{\an7\pos(56,220)\fad(140,200)\fs48\b1\bord3\c&HD7F1FF&\3c&H3A3312&}MJ PLAYS GTA"
+    events = [f"Dialogue: 3,0:00:00.00,{_ts(intro)},Cap,,0,0,0,,{look}"]
+    if dur > 4:
+        begin = max(intro + 0.3, dur - 1.8)
+        events.append(f"Dialogue: 3,{_ts(begin)},{_ts(dur)},Cap,,0,0,0,,{look}")
+    return events
+
+
 def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, cues=None, motion="none",
-              watermark=False) -> str:
+              watermark=False, brand=False) -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
@@ -177,11 +218,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
     ev = _hook_events(_clean(hook), dur, hook_y)
-    if motion == "highlight":
-        until = _ts(min(dur, 2.2))
-        ev.append(f"Dialogue: 3,0:00:00.00,{until},Cap,,0,0,0,,"
-                  r"{\an7\move(56,265,76,265,0,200)\fad(140,250)\fs50\b1\bord3"
-                  r"\c&HD7F1FF&\3c&H3A3312&}MJ PLAYS GTA")
+    if motion == "highlight" or brand:
+        ev.extend(_brand_events(dur))
     if watermark:
         ev.append(f"Dialogue: 5,0:00:00.00,{_ts(dur)},Cap,,0,0,0,,"
                   r"{\an7\pos(76,174)\fs62\b1\bord4\c&HD7F1FF&\3c&H3A3312&\alpha&H20&}MJ")
@@ -258,7 +296,13 @@ def _crop_expression(keyframes, axis, initial):
     return value
 
 
-def _filter(layout, fg_h, crop_x=0.5, crop_y=0.5, keyframes=()):
+def _filter(layout, fg_h, crop_x=0.5, crop_y=0.5, keyframes=(), preserve_marks=False, facecam="left"):
+    if layout in ("stack", "split"):
+        return split_filter(layout, facecam)
+    if preserve_marks:
+        # Fit the whole picture, including a corner watermark. Nothing is cropped off and nothing is blurred away.
+        return (f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v0];")
     x = f"x='(iw-ow)*({_crop_expression(keyframes, 'x', crop_x)})'"
     y = f"y='(ih-oh)*({_crop_expression(keyframes, 'y', crop_y)})'"
     if layout == "crop":
@@ -272,6 +316,30 @@ def _filter(layout, fg_h, crop_x=0.5, crop_y=0.5, keyframes=()):
 
 _qsv_ok = None
 RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a frozen encoder is stopped, not waited on
+
+
+def apply_commentary(fc, inputs, audio, audio_map, cut, commentary_path, duration, volume=1.0):
+    """Mix the owner's own narration on top of the stream. The picture is not changed."""
+    if not commentary_path:
+        return fc, inputs, audio
+    path = Path(commentary_path)
+    if not path.is_file():
+        raise RuntimeError("The commentary track is missing.")
+    index = list(inputs).count("-i")
+    inputs = list(inputs) + ["-i", str(path)]
+    vol = max(0.0, min(1.0, float(volume)))
+    dur = max(0.1, float(duration))
+    fc += f";[{index}:a:0]volume={vol:.3f},atrim=duration={dur:.3f},asetpts=PTS-STARTPTS[voice]"
+    mix = "amix=inputs=2:duration=first:dropout_transition=2:normalize=0,alimiter=limit=0.95[narrated]"
+    if list(audio)[:2] == ["-map", "[mixout]"]:
+        fc += f";[mixout][voice]{mix}"
+    elif audio_map and cut:
+        fc += f";[edited_audio][voice]{mix}"
+    elif audio_map:
+        fc += f";[0:a:0]loudnorm=I=-14:TP=-1.5:LRA=11[sourceaudio];[sourceaudio][voice]{mix}"
+    else:
+        fc += ";[voice]anull[narrated]"
+    return fc, inputs, ["-map", "[narrated]"]
 
 
 def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, src_w: int, src_h: int) -> dict:
@@ -294,7 +362,8 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     ass = build_ass([] if clean else words, start, end, "" if clean else clip.get("hook", ""),
                     clip.get("style", "bounce"), clip.get("highlight_words", []), hook_y, cap_y,
                     [] if clean else cues, "none" if clean else clip.get("motion", "none"),
-                    watermark=not clean and clip.get("watermark", False))
+                    watermark=not clean and clip.get("watermark", False),
+                    brand=not clean and bool(clip.get("brand") or clip.get("motion") == "highlight"))
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
@@ -304,7 +373,9 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
         return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, sidecar,
                           clip.get("crop_x", 0.5), clip.get("crop_y", 0.5), clean,
                           segments, has_audio, clip.get("crop_keyframes") or [], clip.get("music_path"),
-                          clip.get("music_volume", 0.30), clip.get("music_duck", True))
+                          clip.get("music_volume", 0.30), clip.get("music_duck", True),
+                          clip.get("commentary_path"), clip.get("commentary_volume", 1.0),
+                          bool(clip.get("preserve_source_marks")), clip.get("facecam") or "left")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -332,14 +403,15 @@ def _cut_inputs(src, start, end, segments, has_audio):
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
                sidecar, crop_x, crop_y, clean, segments, has_audio, keyframes,
-               music_path=None, music_volume=0.30, music_duck=True) -> dict:
+               music_path=None, music_volume=0.30, music_duck=True, commentary_path=None,
+               commentary_volume=1.0, preserve_marks=False, facecam="left") -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
     inputs, cut, audio_map = _cut_inputs(src, start, end, segments, has_audio)
-    fc = _filter(layout, fg_h, crop_x, crop_y, keyframes).rstrip(";")
+    fc = _filter(layout, fg_h, crop_x, crop_y, keyframes, preserve_marks, facecam).rstrip(";")
     if cut:
         fc = cut + fc.replace("[0:v]", "[edited]")
     if not clean:
@@ -374,6 +446,8 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         else:
             fc += ";[musicbed]anull[mixout]"
         audio = ["-map", "[mixout]"]
+    fc, inputs, audio = apply_commentary(fc, inputs, audio, audio_map, bool(segments), commentary_path,
+                                         max(0.1, end - start), commentary_volume)
     base = ["ffmpeg", "-y", "-v", "error", *inputs,
             "-filter_complex", fc, "-map", "[v0]" if clean else "[v]", *audio,
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]

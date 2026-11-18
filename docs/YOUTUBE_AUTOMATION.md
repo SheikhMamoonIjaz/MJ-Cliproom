@@ -79,7 +79,20 @@ now** when an update is available; the launcher keeps that folder, applies the u
 and reloads the page after the new version starts. Partial source downloads and unfinished jobs resume when saved files and
 the source platform allow it. Check **Settings → Storage** to see or change the folder used for uploads and media.
 
-## 4. Add background music carefully
+## 4. Autopilot
+
+Open **Autopilot** after YouTube is connected. The watch list is the saved creator list, plus any campaign
+source you add there. Confirm the handle, tick **Allowlist**, and set rights to **Authorized** before that
+channel can be recorded or uploaded. **Draft** only copies a permission note. It does not send email.
+
+GTA 5 streams are ignored. Non-English streams are ignored. Signal-only clips stay in the queue with a preview
+until you approve them. Full auto, per source, is the switch that uploads those without a click. The gap you
+set is how long a finished clip waits, so you can open the preview before it goes out.
+
+YouTube's quota, OAuth testing limits and the server's `PEAKCUT_MAX_LIVE` ceiling still apply. See
+[DEPLOY.md](../DEPLOY.md#autopilot).
+
+## 5. Add background music carefully
 
 Open a clip and choose **Instrumental background music**. Upload an audio-only instrumental you own or are licensed
 to use. New music mixes start at 30%, duck beneath the streamer's speech and other prominent source audio, and use

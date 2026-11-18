@@ -256,6 +256,11 @@ def post_metadata(job, clip, overrides=None) -> dict:
                 break
     if not tags:
         tags = draft["hashtags"]
+    credit = values.get("source_credit") if isinstance(values.get("source_credit"), dict) else None
+    if credit and credit.get("name") and str(credit.get("url") or "").startswith("https://"):
+        url = str(credit["url"]).strip()
+        if url not in description:
+            description = (description + f"\n\nSource: {str(credit['name']).strip()[:80]}\n{url}").strip()[:4000]
     return {"title": title, "description": description, "hashtags": tags}
 
 
@@ -317,18 +322,33 @@ def public(job) -> dict:
     return out
 
 
+def _snapshot(obj, depth=0):
+    """A plain copy so a clip list that changes mid-save cannot throw the write away."""
+    if depth > 6:
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _snapshot(v, depth + 1) for k, v in list(obj.items())}
+    if isinstance(obj, (list, tuple)):
+        return [_snapshot(v, depth + 1) for v in list(obj)]
+    return obj
+
+
 def save(job):
     ctx.bump(job.get("user"))
     with _lock:
         d = Path(job["dir"])
+        text = None
         for _ in range(5):
             try:
                 text = json.dumps(job, indent=1)
                 break
             except RuntimeError:  # changed mid-dump by another thread
                 time.sleep(0.05)
-        else:
-            return
+        if text is None:
+            try:
+                text = json.dumps(_snapshot(job), indent=1)
+            except (TypeError, ValueError):
+                return
         tmp = d / "job.json.tmp"
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(d / "job.json")
@@ -633,9 +653,18 @@ def update_metadata(job, cid: str, changes: dict):
         return clip
 
 
+def path_inside(path, root) -> bool:
+    """True when a saved path stays inside the folder it belongs to, even if it is a shortcut."""
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def source_file(job):
     path = job.get("source_path")
-    if job.get("kind") == "video" and path and Path(path).is_file():
+    if job.get("kind") == "video" and path and Path(path).is_file() and path_inside(path, job["dir"]):
         return Path(path)
     return None
 
@@ -749,7 +778,9 @@ def render_one(job, clip, words):
     save(job)
     try:
         off = clip.get("src_offset", 0.0)
-        src = Path(clip["src"]) if clip.get("src") else Path(job["source_path"])
+        src = Path(clip["src"]) if clip.get("src") else Path(job.get("source_path") or "")
+        if not path_inside(src, job["dir"]):
+            raise RuntimeError("That source file is outside this video's folder, so it was not opened.")
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off,
@@ -760,6 +791,11 @@ def render_one(job, clip, words):
             if not track:
                 raise RuntimeError("The chosen background track is missing. Choose another track and re-make the clip.")
             local["music_path"] = str(track["path"])
+        if clip.get("commentary_id"):
+            from . import commentary
+            voice = commentary.get(clip["commentary_id"])
+            if voice:
+                local["commentary_path"] = str(voice["path"])
         if clip.get("caption_cues") is not None:
             local["caption_cues"] = [dict(c, start=c["start"] - off, end=c["end"] - off)
                                     for c in clip["caption_cues"]]

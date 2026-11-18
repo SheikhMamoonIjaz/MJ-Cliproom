@@ -2,6 +2,23 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 0.11.0 beta — 2026-11-18
+
+- Added Autopilot for the MJ Plays GTA creator list. It watches those channels (and any campaign source you add),
+  records only confirmed English GTA 6 streams, and uploads only after you set the source to Authorized on the
+  allowlist. GTA 5 is skipped and is never called GTA 6.
+- The clip queue shows a preview before a scheduled upload. Signal-only moments wait for approval. A viral score
+  is stored separately and does not grant permission. Permission notes are drafts you copy. They are not emailed.
+- Live clips can use stacked or split gameplay and facecam layouts, a busiest-corner facecam choice, sentence-aware
+  cuts, highlighted captions, hook text, MJ Plays GTA intro and outro, loudness normalization, and an optional
+  commentary track. A full-frame layout keeps corner watermarks in view.
+- Background music accepts only royalty-free or owner-licensed tracks, with genre, mood and attribution. Chart
+  songs are refused. Pixabay results are used only when you set a key, and only from Pixabay's own files.
+- Uploads keep a YouTube quota budget, a gap between posts, a retry with backoff, and a resume after a restart.
+  Several recordings can run at once, up to the number you set and the server's live ceiling.
+- A source file outside its job folder is no longer opened. A partial gameplay scan no longer crashes. A live
+  render keeps the buffer file it is reading. Channel lookups no longer follow a redirect off YouTube, Twitch or Kick.
+
 ## 0.10.3 beta — 2026-11-16
 
 - Expanded each of the ten AI-ranked clip suggestions into a complete post package: a factual title, a realistic short
