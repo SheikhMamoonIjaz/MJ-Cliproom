@@ -2129,7 +2129,8 @@ function drawCreatorForm() {
   box.innerHTML = `<div class="card"><h2>Their stream</h2><p class="help">Where to record from, and whether to start by itself.</p>
       <div class="chans">${channelRows(c)}</div>
       <div class="fields" style="margin-top:14px">
-        <label class="sw span"><input type="checkbox" data-k="auto_watch" ${c.auto_watch ? "checked" : ""}><span>Record automatically when they go live<small>Checks straight away, then every two minutes.</small></span></label></div></div>
+        <label class="sw span"><input type="checkbox" data-k="auto_watch" ${c.auto_watch ? "checked" : ""}><span>Record automatically when they go live<small>Checks straight away, then every two minutes.</small></span></label>
+        <p class="hint span">You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.</p></div></div>
     <div class="card"><h2>How the AI decides</h2><p class="help">Two separate AI checks. The words judge reads only what was said. The reaction judge sees only how loud the streamer got and how busy chat was, never the words.</p>
       <div class="fields">
         <label class="f">Check the live stream every<select data-k="ai_every_min">${opts({1:"1 minute", 2:"2 minutes", 3:"3 minutes", 5:"5 minutes", 10:"10 minutes"}, c.ai_every_min || 3)}</select><small class="sub" id="costhint" style="font-weight:400">${costHint(c.ai_every_min)}</small></label>
@@ -2333,6 +2334,7 @@ function drawAutopilot() {
       <td>${viralBits(q.viral)}${q.preview ? `<a class="btn sm" href="${esc(q.preview)}" target="_blank" rel="noopener">Preview</a> ` : ""}${q.status === "review" ? `<button class="btn sm" data-act="auto-approve" data-id="${esc(q.id)}">Approve & post</button> <button class="btn sm ghost" data-act="auto-dismiss" data-id="${esc(q.id)}">Dismiss</button>` : ""}</td></tr>`).join("");
   box.innerHTML = `<section class="set-sec"><h2>Autopilot</h2>
       <p class="help">Watches the creator list for live GTA 6. A stream counts only when its Twitch or Kick category, or its YouTube title, says GTA 6. GTA 5 is skipped and is never renamed. Finished clips wait in the review queue unless Full auto is on for that source. YouTube posts stay private unless you change that here.</p>
+      <p class="hint">You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.</p>
       <label class="sw"><input type="checkbox" id="auto_on" ${a.enabled ? "checked" : ""}><span>Autopilot is ${a.enabled ? "on" : "off"}<small>${a.recording || 0} recording now. ${a.verified_channels || 0} handles are confirmed. Server live ceiling is ${a.server_live_ceiling}. Keys: A approve, P approve and post, X dismiss.</small></span></label>
       <label class="sw"><input type="checkbox" id="auto_original" ${a.original_mode ? "checked" : ""}><span>Original shorts<small>Your own narration and royalty-free music. No one else's footage, so no creator permission is required.</small></span></label>
       <label class="f">Original topic<input id="auto_topic" value="${esc(a.original_topic || "")}" maxlength="240"></label>

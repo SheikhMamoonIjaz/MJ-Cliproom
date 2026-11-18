@@ -160,6 +160,10 @@ For a live stream, add its channel under **Creators → Setup**, then choose **R
 Use the live workspace to monitor the stream and clip the recent buffer. Availability depends on the platform,
 stream privacy and the stream URL being accessible to the machine running MJ Cliproom.
 
+## Your responsibility
+
+You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.
+
 ## Autopilot
 
 **Autopilot** watches the saved creator list for English GTA 6 streams, records a few at a time, and can upload
