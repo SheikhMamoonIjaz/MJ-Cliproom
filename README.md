@@ -1,6 +1,6 @@
-# MJ Cliproom · 0.12.0 beta
+# MJ Cliproom · 1.0.0
 
-[What's new](CHANGELOG.md) · [Install or update the beta](docs/BETA_0_10.md)
+[What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 
 **A gaming-focused video clipping studio for gameplay recordings and finished streams.** Find strong moments, shape
 them into vertical clips, add captions and motion graphics, then export videos ready for Shorts, Reels or TikTok.
@@ -232,7 +232,7 @@ while the app is running and takes effect at the next start; when selected, the 
 Start a Git installation with the launcher to use **Update now**. It verifies a fast-forward from the
 configured GitHub branch, stages changed dependencies separately when needed, and applies the update after the
 server has stopped. The browser reloads after the updated server is healthy. Your storage path and its contents
-stay in place. See the [beta update guide](docs/BETA_0_10.md) for older installs, stopped-server updates and signatures.
+stay in place. See the [install guide](docs/INSTALL.md) for Windows setup, stopped-server updates and signatures.
 
 Failed downloads keep a `.part` file when the downloader can resume it. Use **Retry download** on the failed job card
 to continue; a platform may still reject a link or discard its old download URL, in which case try again later or

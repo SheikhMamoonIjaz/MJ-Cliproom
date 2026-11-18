@@ -122,25 +122,81 @@ def validate_segments(segments, duration):
             raise ValueError("Keep each range inside the video and at least 0.25 seconds long.")
         if any(a < part["end"] and b > part["start"] for part in result):
             raise ValueError("Cut ranges cannot overlap.")
-        result.append({"start": a, "end": b})
+        try:
+            speed = float(span.get("speed") or 1)
+        except (TypeError, ValueError):
+            raise ValueError("Each range needs a speed between 0.5 and 2.")
+        if not 0.5 <= speed <= 2:
+            raise ValueError("Each range needs a speed between 0.5 and 2.")
+        row = {"start": a, "end": b}
+        if abs(speed - 1) > 0.001:
+            row["speed"] = round(speed, 2)
+        result.append(row)
     if result and not 3 <= cut_length(result) <= 180:
         raise ValueError("The combined clip must be 3 to 180 seconds long.")
     return result
 
 
+def span_length(span) -> float:
+    speed = float(span.get("speed") or 1) or 1
+    return (float(span["end"]) - float(span["start"])) / speed
+
+
 def cut_length(segments):
-    return round(sum(span["end"] - span["start"] for span in segments), 3)
+    return round(sum(span_length(span) for span in segments), 3)
+
+
+def split_segments(segments, at: float):
+    """Split the range that contains this source time. The two pieces keep its speed."""
+    at = round(float(at), 3)
+    out = []
+    hit = False
+    for span in segments:
+        if hit or not (span["start"] < at < span["end"] and min(at - span["start"], span["end"] - at) >= 0.25):
+            out.append(dict(span))
+            continue
+        hit = True
+        left, right = dict(span, end=at), dict(span, start=at)
+        out.extend((left, right))
+    if not hit:
+        raise ValueError("Move the playhead inside a cut, away from its edges, before splitting.")
+    return out
+
+
+def merge_segments(segments, index: int):
+    """Join one cut with the next cut in the list."""
+    index = int(index)
+    if not 0 <= index < len(segments) - 1:
+        raise ValueError("Choose a cut that has another cut after it.")
+    left, right = segments[index], segments[index + 1]
+    joined = {"start": min(left["start"], right["start"]), "end": max(left["end"], right["end"])}
+    if left.get("speed") and left.get("speed") == right.get("speed"):
+        joined["speed"] = left["speed"]
+    return segments[:index] + [joined] + segments[index + 2:]
+
+
+def move_segment(segments, index: int, direction: int):
+    """Reorder cuts. direction -1 moves earlier in the list, 1 moves later."""
+    index = int(index)
+    target = index + (1 if direction > 0 else -1)
+    if not 0 <= index < len(segments) or not 0 <= target < len(segments):
+        raise ValueError("That cut cannot move any further.")
+    rows = [dict(span) for span in segments]
+    rows[index], rows[target] = rows[target], rows[index]
+    return rows
 
 
 def stitch_words(words, segments, offset=0):
     """Translate source timestamps into the ordered cuts."""
     result, elapsed = [], offset
     for span in segments:
+        speed = float(span.get("speed") or 1) or 1
         for word in words:
             a, b = max(span["start"], word["s"]), min(span["end"], word["e"])
             if b > a:
-                result.append(dict(word, s=elapsed + a - span["start"], e=elapsed + b - span["start"]))
-        elapsed += span["end"] - span["start"]
+                result.append(dict(word, s=elapsed + (a - span["start"]) / speed,
+                                    e=elapsed + (b - span["start"]) / speed))
+        elapsed += span_length(span)
     return result
 
 

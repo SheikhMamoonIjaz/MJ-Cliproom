@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 0.12.0 beta</title>
+<title>MJ Cliproom · 1.0.0</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -607,7 +607,7 @@ dialog::backdrop{background:rgba(14,12,11,.42);animation:fadein .16s ease}
 .dlg{padding:24px;width:450px;max-width:100%;display:flex;flex-direction:column;gap:14px}
 .dlg h2{font-size:18px;font-weight:600;color:var(--brand-ink)}
 .dlg-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
-.editor{display:grid;grid-template-columns:minmax(240px,340px) minmax(300px,450px);max-height:calc(100vh - 48px)}
+.editor{display:grid;grid-template-columns:minmax(220px,340px) minmax(280px,1fr);width:min(1040px,calc(100vw - 24px));max-height:calc(100dvh - 24px)}
 .editor .stage{background:#17110E;display:grid;place-items:center;position:relative;min-height:320px}
 .editor video,.editor .stage img{width:100%;max-height:calc(100vh - 48px);aspect-ratio:9/16;object-fit:contain;display:block}
 .editor .panel{padding:22px;overflow:auto;display:flex;flex-direction:column;gap:14px}
@@ -624,6 +624,13 @@ dialog::backdrop{background:rgba(14,12,11,.42);animation:fadein .16s ease}
 .source-editor header h2{font-size:20px}
 .source-columns{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(270px,1fr);gap:20px}
 .source-frame{position:relative;background:#14110f;border-radius:8px;overflow:hidden}
+.live-overlay{position:absolute;left:8%;right:8%;display:flex;flex-direction:column;gap:6px;pointer-events:none;text-align:center;color:#fff;text-shadow:0 1px 2px #000}
+.live-overlay[data-place=bottom]{bottom:12%}.live-overlay[data-place=middle]{top:42%}.live-overlay[data-place=top]{top:12%}
+.live-overlay b{font-size:18px}.layout-picks{display:flex;flex-wrap:wrap;gap:6px}
+.layout-picks [aria-pressed=true]{background:var(--brand-soft);color:var(--brand-ink)}
+.btn:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+dialog{max-height:calc(100dvh - 24px)}
+#clipdlg{width:min(1040px,calc(100vw - 24px));max-height:calc(100dvh - 24px)}
 .source-frame video{display:block;width:100%;height:min(40vh,380px);object-fit:contain}
 .source-crop{position:absolute;border:2px solid var(--brand);pointer-events:none}
 .source-editor canvas{display:block;width:100%;height:66px;margin:10px 0 6px;cursor:crosshair;border-radius:4px}
@@ -767,6 +774,8 @@ dialog[open]{animation:fadein .16s ease}
 @keyframes fadein{from{opacity:0}}
 
 /* ---------- responsive */
+@media (max-width:1440px){.content{padding:24px 22px 64px}}
+@media (max-width:1366px){.app:not(.mini){grid-template-columns:220px minmax(0,1fr)}.job-actions{flex-wrap:wrap}}
 @media (max-width:1100px){.tiles,.tiles.five{grid-template-columns:repeat(2,minmax(0,1fr))}.home-grid,.split{grid-template-columns:1fr}}
 @media (max-width:900px){
   .app,.app.mini{grid-template-columns:1fr}
@@ -796,7 +805,7 @@ dialog[open]{animation:fadein .16s ease}
   .toast{max-width:none}
 }
 @media (max-width:560px){
-  .composer-bar .btn.primary{width:100%;height:42px}.topbar #actions .btn{height:36px;padding:0 10px;font-size:13px}.topbar h1{font-size:22px}.hero{padding:40px 14px 28px}.hero h2{font-size:26px}.hint{display:none}.tiles{gap:10px}.tile{padding:14px}.two{grid-template-columns:1fr}
+  .composer-bar .btn.primary{width:100%;height:42px}.topbar #actions .btn{height:36px;padding:0 10px;font-size:13px}.topbar h1{font-size:22px}.hero{padding:40px 14px 28px}.hero h2{font-size:26px}.topbar .hint,.composer-bar .hint{display:none}.tiles{gap:10px}.tile{padding:14px}.two{grid-template-columns:1fr}
   .topbar{padding-top:max(10px,env(safe-area-inset-top))}
   .content{padding:16px 12px max(56px,env(safe-area-inset-bottom))}
   .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -971,7 +980,8 @@ function toast(msg, kind = "") {
   if (!msg) return;
   const t = document.createElement("div"); t.className = "toast " + kind; t.textContent = msg;
   if (kind === "bad") { const r = document.createElement("button"); r.className = "rep"; r.textContent = "Report"; r.onclick = () => { t.remove(); openFeedback("bug", msg); }; t.append(r); }
-  $("#toasts").append(t); setTimeout(() => t.remove(), kind === "bad" ? 7000 : 3200);
+  const open = document.querySelector("dialog[open]");
+  (open || $("#toasts")).append(t); setTimeout(() => t.remove(), kind === "bad" ? 7000 : 3200);
 }
 const cache = new WeakMap();
 function put(el, html) { if (el && cache.get(el) !== html) { cache.set(el, html); el.innerHTML = html; } }
@@ -1262,7 +1272,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 0.12.0 beta</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.0.0</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1314,21 +1324,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "0.12.0 beta";
+const RELEASE = "1.0.0";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_0_12_0";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_0_0";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 0.12.0 beta</h2>
-    <ul><li>YouTube uploads remember their session, so a crash continues the same upload.</li>
-    <li>Facecam layout looks for a face, then uses the busiest corner. Kick chat counts toward live spikes.</li>
-    <li>Clip cards show the full viral score. Thumbnails and a post package can be made before upload.</li>
-    <li>Press A to approve a review clip, X to dismiss it, and P to approve and post. A daily summary stays in the app.</li>
-    <li>Authorized rights can expire. Original shorts use your own words and no one else's footage.</li></ul>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.0.0</h2>
+    <ul><li>This is the production release. The editor trims, splits, merges and reorders cuts, and previews the hook while you work.</li>
+    <li>Add any music file you have the rights to, or scan a folder on this computer. Set volume, ducking, fades and a start offset per clip.</li>
+    <li>Layouts, caption position, title tag and thumbnail text are edited before the clip is made again.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
-      <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Install and update guide</a></p>
+      <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
     <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
   d.onclose = () => {
     try { localStorage.setItem(whatsNewKey(), "1"); } catch {}
@@ -1381,7 +1389,7 @@ function updateHow() {
     <p class="help">The launcher checks the configured GitHub branch and applies a fast-forward after a clean server stop. Saved media, cache and settings stay in the selected folder.</p>
     ${job.message ? `<p role="status">${esc(job.message)}</p>` : ""}
     ${up.notes.length ? `<ul>${up.notes.map(n => `<li>${esc(n.title)} <small>${esc(n.date)}</small></li>`).join("")}</ul>` : ""}
-    <p><a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">Review changes</a> · <a class="lnk" href="${RELEASE_REF}docs/BETA_0_10.md" target="_blank" rel="noopener">Manual update guide</a></p>
+    <p><a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">Review changes</a> · <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Manual update guide</a></p>
     <div class="dlg-foot"><button class="btn" value="later">Later</button><button type="button" class="btn primary" data-act="update-now" ${busy || up.restart ? "disabled" : ""}>Install and restart</button></div></form>`;
   d.onclose = null;
   d.showModal();
@@ -2589,13 +2597,19 @@ function drawClipDlg(full) {
         <label class="ck"><input type="checkbox" data-f="watermark" ${c.watermark ? "checked" : ""}> MJ video watermark</label>
         <h3>Instrumental background music</h3>
         <label class="f">Track<select data-f="music_id">${musicOptions}</select></label>
-        <label class="f">Music level · ${Math.round((c.music_volume ?? 0.3) * 100)}%<input data-f="music_volume" type="range" min="0" max="0.5" step="0.01" value="${c.music_volume ?? 0.3}"></label>
+        <label class="f">Caption position<select data-f="caption_position"><option value="bottom" ${c.caption_position === "bottom" || !c.caption_position ? "selected" : ""}>Bottom</option><option value="middle" ${c.caption_position === "middle" ? "selected" : ""}>Middle</option><option value="top" ${c.caption_position === "top" ? "selected" : ""}>Top</option></select></label>
+        <label class="f">Music level · ${Math.round((c.music_volume ?? 0.3) * 100)}%<input data-f="music_volume" type="range" min="0" max="1" step="0.01" value="${c.music_volume ?? 0.3}"></label>
         <label class="ck"><input type="checkbox" data-f="music_duck" ${c.music_duck !== false ? "checked" : ""}> Lower music under the original audio</label>
-        <label class="f">Choose an instrumental audio file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" style="max-width:100%"></label>
+        <div class="two"><label class="f">Fade in<input data-f="music_fade_in" type="number" min="0" max="5" step="0.1" value="${c.music_fade_in ?? 0.4}"></label>
+          <label class="f">Fade out<input data-f="music_fade_out" type="number" min="0" max="5" step="0.1" value="${c.music_fade_out ?? 0.8}"></label></div>
+        <label class="f">Music start offset<input data-f="music_offset" type="number" min="0" step="0.1" value="${c.music_offset ?? 0}"></label>
+        <label class="f">Choose file<input id="musicfile" type="file" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,audio/*" aria-label="Choose a music file"></label>
+        <label class="ck"><input type="checkbox" id="musicrights"> I have the rights to use this track</label>
         <div class="two"><label class="f">License<select id="musiclicense"><option value="owner">I have a license</option><option value="cc0">CC0</option><option value="cc-by">CC BY</option><option value="pixabay">Pixabay</option><option value="youtube-audio-library">YouTube Audio Library</option><option value="ncs">NoCopyrightSounds</option></select></label>
           <label class="f">Mood<select id="musicmood"><option>hype</option><option>chill</option><option>funny</option><option>tense</option><option>epic</option><option>happy</option></select></label></div>
         <label class="f">Attribution<input id="musiccredit" placeholder="Required for CC BY and NCS"></label>
-        <div class="row"><button class="btn sm" data-act="musicupload">Upload instrumental</button>
+        <label class="f">Music folder<input id="musicfolder" placeholder="Full path of a folder on this computer" aria-label="Music folder"></label>
+        <div class="row"><button class="btn sm" data-act="musicupload">Upload track</button><button class="btn sm" data-act="musicscan">Scan folder</button>
           ${c.music_id ? `<button class="btn sm ghost" data-act="musicdelete" data-id="${esc(c.music_id)}">Remove track</button>` : ""}</div>
         ${ncsPicksHtml()}
         <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use the instrumental version and verify its current terms before publishing. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
@@ -3158,7 +3172,8 @@ document.addEventListener("click", async e => {
       await tick(); return toast("Post text saved", "ok");
     }
     if (a === "musicupload") {
-      const file = $("#musicfile").files?.[0]; if (!file) return toast("Choose an instrumental audio file first.", "bad");
+      const file = $("#musicfile").files?.[0]; if (!file) return toast("Choose a music file first.", "bad");
+      if (!$("#musicrights")?.checked) return toast("Tick the box to confirm you have the rights to this track.", "bad");
       b.disabled = true; const old = b.textContent; b.textContent = "Uploading…";
       try {
         const form = new FormData(); form.append("file", file);
@@ -3166,12 +3181,21 @@ document.addEventListener("click", async e => {
         form.append("genre", "other");
         form.append("mood", $("#musicmood")?.value || "hype");
         form.append("attribution", $("#musiccredit")?.value || "");
+        form.append("rights", "true");
         const made = await api("/api/music", {method:"POST", body:form});
         S.status.music = await api("/api/music");
         const select = $("#clipdlg [data-f=music_id]");
         select.add(new Option(`${made.name} · ${fmt(made.duration)}`, made.id)); select.value = made.id;
         toast("Track added. Save and re-make the clip to mix it in.", "ok");
       } finally { b.disabled = false; b.textContent = old; }
+      return;
+    }
+    if (a === "musicscan") {
+      if (!$("#musicrights")?.checked) return toast("Tick the box to confirm you have the rights to these tracks.", "bad");
+      const found = await send("/api/music/scan", {folder: $("#musicfolder")?.value || "", rights: true});
+      S.status.music = found.music || [];
+      toast(`Added ${found.added} track${found.added === 1 ? "" : "s"}.`, "ok");
+      drawClipDlg(true);
       return;
     }
     if (a === "musicdelete") {

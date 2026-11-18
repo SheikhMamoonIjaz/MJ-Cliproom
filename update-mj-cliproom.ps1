@@ -49,19 +49,23 @@ try {
         $portBusy = Test-NetConnection -ComputerName "127.0.0.1" -Port $preferredPort -InformationLevel Quiet -WarningAction SilentlyContinue
         if ($portBusy) { throw "Port $preferredPort is in use by another app. Close it before starting MJ Cliproom." }
 
-        $python = Join-Path $env:LOCALAPPDATA "Programs\PeakCut\.venv\Scripts\python.exe"
         $pythonArgs = @("-m", "studio.launcher")
-        if (-not (Test-Path -LiteralPath $python)) {
-            $python = Join-Path $root ".venv\Scripts\python.exe"
+        $python = ""
+        foreach ($candidate in @(
+            (Join-Path $root ".venv\Scripts\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\MJ Cliproom\.venv\Scripts\python.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\PeakCut\.venv\Scripts\python.exe")
+        )) {
+            if (Test-Path -LiteralPath $candidate) { $python = $candidate; break }
         }
-        if (-not (Test-Path -LiteralPath $python)) {
+        if (-not $python) {
             $py = Get-Command "py.exe" -ErrorAction SilentlyContinue
             if ($py) {
                 $python = $py.Source
                 $pythonArgs = @("-3", "-m", "studio.launcher")
             } else {
                 $pythonCmd = Get-Command "python.exe" -ErrorAction SilentlyContinue
-                if (-not $pythonCmd) { throw "Python was not found. Install Python or repair the existing PeakCut environment." }
+                if (-not $pythonCmd) { throw "Python was not found. Run install-mj-cliproom.bat first." }
                 $python = $pythonCmd.Source
             }
         }

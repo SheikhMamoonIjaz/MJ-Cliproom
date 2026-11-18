@@ -1,4 +1,6 @@
-# MJ Cliproom 0.10 beta
+# Install MJ Cliproom
+
+The current install and update steps are in [INSTALL.md](INSTALL.md). This page keeps the older update notes.
 
 See the [changelog](../CHANGELOG.md) and the [YouTube setup and test guide](YOUTUBE_AUTOMATION.md).
 

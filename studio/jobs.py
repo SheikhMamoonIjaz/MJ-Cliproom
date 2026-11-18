@@ -629,9 +629,24 @@ def clip_changes(job, clip, changes):
         new["music_id"] = track_id
     if "music_volume" in changes:
         volume = float(changes["music_volume"])
-        if not math.isfinite(volume) or not 0 <= volume <= 0.5:
-            raise ValueError("Set background music volume between 0 and 50%.")
+        if not math.isfinite(volume) or not 0 <= volume <= 1:
+            raise ValueError("Set background music volume between 0 and 100%.")
         new["music_volume"] = round(volume, 2)
+    for key in ("music_fade_in", "music_fade_out"):
+        if key in changes:
+            fade = float(changes[key])
+            if not math.isfinite(fade) or not 0 <= fade <= 5:
+                raise ValueError("Fades can be from 0 to 5 seconds.")
+            new[key] = round(fade, 2)
+    if "music_offset" in changes:
+        offset = float(changes["music_offset"])
+        if not math.isfinite(offset) or not 0 <= offset <= 30 * 60:
+            raise ValueError("The music start must be inside the track.")
+        new["music_offset"] = round(offset, 2)
+    if "caption_position" in changes:
+        if changes["caption_position"] not in ("top", "middle", "bottom"):
+            raise ValueError("Put captions at the top, middle, or bottom.")
+        new["caption_position"] = changes["caption_position"]
     if "music_duck" in changes:
         if not isinstance(changes["music_duck"], bool):
             raise ValueError("Choose whether music should lower under the original audio.")

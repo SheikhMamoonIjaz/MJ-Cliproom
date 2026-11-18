@@ -2,7 +2,16 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
-## 0.12.0 beta — 2026-11-18
+## 1.0.0 — 2026-11-18
+
+- Production release. Version labels no longer say beta. Startup logs to the data folder and names MJ Cliproom.
+- Windows `install-mj-cliproom.bat` creates `.venv` and installs the pinned requirements, including OpenCV.
+- The clip editor trims on the waveform, splits and merges cuts, reorders them, sets per-cut speed, and previews the hook and caption position. Undo and redo are in the editor.
+- Layout choices include full frame, stacked, split and crop. Caption style, caption position, hook text and the MJ title tag are edited before the next render. Thumbnails can be redrawn from the editor.
+- Music accepts an owner's mp3, wav, m4a, ogg or flac after they confirm they have the rights. A local folder can be scanned the same way. Each clip sets volume, ducking, fade in, fade out and a start offset.
+- Page layout keeps controls reachable at laptop widths and on a phone. Help text in forms stays visible on a narrow screen. Focus outlines are visible from the keyboard.
+
+## 0.12.0 — 2026-11-18
 
 - A YouTube upload stores its resumable session address and continues that same upload after a crash.
 - Facecam layout uses a face detector when OpenCV is installed, and the busiest corner when it is not.
@@ -19,7 +28,7 @@ User-facing changes to MJ Cliproom are listed here.
   footage still uploads only from an allowlisted, unexpired Authorized source.
 - Post all queues every finished clip of a video. Starting a live session checks that the stream has begun.
 
-## 0.11.0 beta — 2026-11-18
+## 0.11.0 — 2026-11-18
 
 - Added Autopilot for the MJ Plays GTA creator list. It watches those channels (and any campaign source you add),
   records only confirmed English GTA 6 streams, and uploads only after you set the source to Authorized on the
@@ -36,26 +45,26 @@ User-facing changes to MJ Cliproom are listed here.
 - A source file outside its job folder is no longer opened. A partial gameplay scan no longer crashes. A live
   render keeps the buffer file it is reading. Channel lookups no longer follow a redirect off YouTube, Twitch or Kick.
 
-## 0.10.3 beta — 2026-11-16
+## 0.10.3 — 2026-11-16
 
 - Expanded each of the ten AI-ranked clip suggestions into a complete post package: a factual title, a realistic short
   description, and relevant gaming hashtags. Apply or copy the full package, or apply only its title. The prompt uses
   viral-style hooks without inventing events or promising reach; hashtags are topic-specific rather than a live trend feed.
 
-## 0.10.2 beta — 2026-11-16
+## 0.10.2 — 2026-11-16
 
 - Fixed the missing `brain` import that blocked the new AI title suggestions endpoint.
 
-## 0.10.1 beta — 2026-11-16
+## 0.10.1 — 2026-11-16
 
 - Added ten ranked, clip-specific AI title suggestions using the active LLM profile. Apply a title without changing
   the description or hashtags; titles aim for strong viewer interest but cannot guarantee virality.
 - Added `update-mj-cliproom.bat` for Windows. It starts the supervised launcher when needed, asks the app's updater
   to apply a safe fast-forward, leaves the configured storage folder in place, and opens the app after restart.
 
-## 0.10 beta (v0.10.0-beta) — 2026-11-16
+## 0.10.0 — 2026-11-16
 
-- Added a first-run What’s New dialog and a [beta installation and update guide](docs/BETA_0_10.md).
+- Added a first-run What’s New dialog and an [installation and update guide](docs/INSTALL.md).
 - Queue a finished gameplay video with a prompt. Review the clips or, with separate authorization, schedule
   eligible clips for selected YouTube and Instagram accounts. Export clips to review and share manually on TikTok.
 - Added named AI profiles, active model selection, testing, and optional independent backups. A rate-limited

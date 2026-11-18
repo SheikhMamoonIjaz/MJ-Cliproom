@@ -94,13 +94,17 @@ def clean_meta(meta) -> dict:
     attribution = str(meta.get("attribution") or LICENSES[license_id]).strip()[:400]
     if license_id in ("cc-by", "ncs") and len(attribution) < 12:
         raise ValueError("This license needs an attribution line of at least a few words.")
-    return {"license": license_id, "genre": genre, "mood": mood, "attribution": attribution}
+    rights = meta.get("rights")
+    if rights is not True and str(rights).lower() not in ("1", "true", "on", "yes"):
+        raise ValueError("Tick the box to confirm you have the rights to use this track.")
+    return {"license": license_id, "genre": genre, "mood": mood, "attribution": attribution, "rights": True}
 
 
 def _public(row) -> dict:
     return {"id": row["id"], "name": row.get("name") or "Track", "duration": row.get("duration"),
             "size": row.get("size"), "genre": row.get("genre") or "other", "mood": row.get("mood") or "hype",
-            "license": row.get("license") or "owner", "attribution": row.get("attribution") or LICENSES["owner"]}
+            "license": row.get("license") or "owner", "attribution": row.get("attribution") or LICENSES["owner"],
+            "rights": row.get("rights") is True}
 
 
 def list_tracks() -> list:
@@ -145,6 +149,56 @@ def get(track_id: str):
     row = next((row for row in _all() if row["id"] == track_id), None)
     path = _root() / row["file"] if row else None
     return {**row, "path": path} if row and path.is_file() else None
+
+
+def _inside(folder: Path, root: Path) -> bool:
+    try:
+        folder.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def allowed_library(path) -> Path:
+    """A folder the owner may scan: their home, the data folder, or PEAKCUT_MUSIC_DIR."""
+    folder = Path(path).expanduser()
+    if not folder.is_absolute():
+        raise ValueError("Type the full path of the music folder.")
+    folder = folder.resolve()
+    if not folder.is_dir() or folder.is_symlink():
+        raise ValueError("Choose a real music folder, not a link.")
+    roots = [Path.home().resolve(), config.DATA_DIR.resolve()]
+    extra = config.env("PEAKCUT_MUSIC_DIR")
+    if extra:
+        roots.append(Path(extra).expanduser().resolve())
+    if not any(_inside(folder, root) for root in roots):
+        raise ValueError("The music folder has to be inside your home folder, the data folder, or PEAKCUT_MUSIC_DIR.")
+    return folder
+
+
+def scan_folder(path, rights=False) -> dict:
+    """Copy audio files from a local folder into this account's library."""
+    if rights is not True and str(rights).lower() not in ("1", "true", "on", "yes"):
+        raise ValueError("Tick the box to confirm you have the rights to every track in that folder.")
+    folder = allowed_library(path)
+    added, skipped = [], []
+    seen = 0
+    for file in sorted(folder.rglob("*")):
+        if seen >= 200:
+            break
+        if not file.is_file() or file.is_symlink() or file.suffix.lower() not in _EXTENSIONS:
+            continue
+        if len(file.relative_to(folder).parts) > 3:
+            continue
+        seen += 1
+        try:
+            added.append(add(file, file.name, {"license": "owner", "rights": True,
+                                               "attribution": "Added from the owner's music folder."}))
+        except ValueError as exc:
+            skipped.append({"name": file.name[:80], "reason": str(exc)[:160]})
+        if len(added) >= MAX_TRACKS:
+            break
+    return {"added": added, "skipped": skipped[:20]}
 
 
 def add(source: Path, filename: str, meta=None) -> dict:

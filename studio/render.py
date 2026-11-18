@@ -357,6 +357,11 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
+    place = clip.get("caption_position") or "bottom"
+    if place == "top":
+        cap_y = hook_y
+    elif place == "middle":
+        cap_y = (hook_y + cap_y) // 2
     cues = clip.get("caption_cues")
     segments = clip.get("segments") or []
     has_audio = clip.get("has_audio")
@@ -384,6 +389,8 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                           clip.get("crop_x", 0.5), clip.get("crop_y", 0.5), clean,
                           segments, has_audio, clip.get("crop_keyframes") or [], clip.get("music_path"),
                           clip.get("music_volume", 0.30), clip.get("music_duck", True),
+                          clip.get("music_fade_in", 0.4), clip.get("music_fade_out", 0.8),
+                          clip.get("music_offset", 0),
                           clip.get("commentary_path"), clip.get("commentary_volume", 1.0),
                           bool(clip.get("preserve_source_marks")), _facecam_choice(src, start, layout, clip.get("facecam")))
     finally:
@@ -399,10 +406,11 @@ def _cut_inputs(src, start, end, segments, has_audio):
     for i, part in enumerate(segments):
         inputs.extend(["-ss", f"{part['start']:.3f}", "-t", f"{part['end'] - part['start']:.3f}",
                        "-i", str(src)])
-        filters.append(f"[{i}:v]setpts=PTS-STARTPTS[partv{i}]")
+        speed = float(part.get("speed") or 1) or 1
+        filters.append(f"[{i}:v]setpts=(PTS-STARTPTS)/{speed:.3f}[partv{i}]")
         parts.append(f"[partv{i}]")
         if has_audio:
-            filters.append(f"[{i}:a:0]asetpts=PTS-STARTPTS[parta{i}]")
+            filters.append(f"[{i}:a:0]asetpts=PTS-STARTPTS,atempo={speed:.3f}[parta{i}]")
             parts.append(f"[parta{i}]")
     filters.append("".join(parts) + f"concat=n={len(segments)}:v=1:a={int(has_audio)}[edited]"
                    + ("[joined_audio]" if has_audio else ""))
@@ -413,7 +421,8 @@ def _cut_inputs(src, start, end, segments, has_audio):
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
                sidecar, crop_x, crop_y, clean, segments, has_audio, keyframes,
-               music_path=None, music_volume=0.30, music_duck=True, commentary_path=None,
+               music_path=None, music_volume=0.30, music_duck=True, music_fade_in=0.4,
+               music_fade_out=0.8, music_offset=0, commentary_path=None,
                commentary_volume=1.0, preserve_marks=False, facecam="left") -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
@@ -436,11 +445,16 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         audio_duration = max(0.1, end - start)
         music_index = inputs.count("-i")
         inputs.extend(["-stream_loop", "-1", "-i", str(music_file)])
-        fade = min(1.2, audio_duration / 2)
-        fade_out_at = max(0.0, audio_duration - fade)
-        fc += (f";[{music_index}:a:0]volume={max(0.0, min(0.5, float(music_volume))):.3f},"
-               f"atrim=duration={audio_duration:.3f},asetpts=PTS-STARTPTS,"
-               f"afade=t=in:st=0:d={fade:.3f},afade=t=out:st={fade_out_at:.3f}:d={fade:.3f}[musicbed]")
+        fade_in = max(0.0, min(5.0, float(music_fade_in or 0)))
+        fade_out = max(0.0, min(5.0, float(music_fade_out or 0)))
+        offset = max(0.0, float(music_offset or 0))
+        chain = (f"volume={max(0.0, min(1.0, float(music_volume))):.3f},"
+                 f"atrim=start={offset:.3f}:duration={audio_duration:.3f},asetpts=PTS-STARTPTS")
+        if fade_in >= 0.05:
+            chain += f",afade=t=in:st=0:d={min(fade_in, audio_duration / 2):.3f}"
+        if fade_out >= 0.05:
+            chain += f",afade=t=out:st={max(0.0, audio_duration - fade_out):.3f}:d={min(fade_out, audio_duration / 2):.3f}"
+        fc += f";[{music_index}:a:0]{chain}[musicbed]"
         if audio_map:
             if not cut:
                 fc += ";[0:a:0]loudnorm=I=-14:TP=-1.5:LRA=11[sourceaudio]"
