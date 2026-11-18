@@ -160,6 +160,12 @@ For a live stream, add its channel under **Creators → Setup**, then choose **R
 Use the live workspace to monitor the stream and clip the recent buffer. Availability depends on the platform,
 stream privacy and the stream URL being accessible to the machine running MJ Cliproom.
 
+## Autonomous engine
+
+Turn the engine on from Home. It scans on a timer between 20 and 30 minutes, keeps a non-repeating topic list for original series, and can learn from view and retention numbers you record. The chat line answers status, what was posted today, and pause or resume for a creator. Provider keys stay on this computer. `install-engine-task.ps1` registers a Windows task that starts MJ Cliproom at sign-in and starts it again if it stops.
+
+The sixteen Home cards switch tools on or off. A copyright card only warns. It does not stop an upload.
+
 ## Your responsibility
 
 You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.
