@@ -73,7 +73,7 @@ in the data folder and by putting an interrupted YouTube upload back on the queu
 
 Set `PEAKCUT_MAX_LIVE` high enough for the number of simultaneous recordings you choose in the Autopilot page
 (the page allows up to 32). The default ceiling follows the CPU count. One app process should own the data
-folder. Turn Autopilot on only after YouTube is connected and at least one source is allowlisted and Authorized.
+folder. Turn Autopilot on after YouTube is connected. Clips wait for review unless Full auto is on. YouTube stays private by default.
 Install `opencv-python-headless` (listed in requirements) for face detection. Optional `espeak-ng` speaks
 original shorts when you have not uploaded your own voice. Custom YouTube thumbnails need a channel that
 YouTube allows to set them. Original shorts do not use other people's footage. Do not turn that mode on

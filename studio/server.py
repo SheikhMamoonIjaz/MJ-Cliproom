@@ -48,7 +48,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -612,8 +612,8 @@ def _job_or_404(jid: str):
 
 
 def _require_source_rights(job):
-    if job.get("rights_cleared") is not True:
-        raise HTTPException(403, "Confirm that you own or have permission to use this source before clipping, editing, or posting it.")
+    """Recording, clipping and posting no longer wait for a permission checkbox."""
+    return job
 
 
 @app.put("/api/jobs/{jid}/rights")
@@ -767,8 +767,6 @@ def create_from_link(body: dict = Body(...)):
 @app.post("/api/automation")
 def create_automation(body: dict = Body(...)):
     _need_verified()
-    if body.get("rights_cleared") is not True:
-        raise HTTPException(400, "Confirm that you own or have permission to edit this exact source.")
     prompt = body.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 1200:
         raise HTTPException(400, "Enter a clip prompt using 1 to 1,200 characters.")
@@ -777,8 +775,6 @@ def create_automation(body: dict = Body(...)):
     ids = body.get("accounts", [])
     if not isinstance(ids, list) or len(ids) > 20 or any(not isinstance(a, str) for a in ids):
         raise HTTPException(400, "Choose connected YouTube or Instagram accounts for automatic publishing.")
-    if ids and body.get("publish_authorized") is not True:
-        raise HTTPException(400, "Confirm permission to publish and authorize the selected channels.")
     platforms = {(accounts.get(a) or {}).get("platform") for a in ids}
     if platforms - {"youtube", "instagram"}:
         raise HTTPException(400, "Prompt automation can publish to connected YouTube or Instagram accounts. Export clips for manual sharing on TikTok.")
@@ -807,8 +803,6 @@ def stop_auto_post(jid: str):
 
 def _create_link_job(body, automation=None):
     _need_verified()
-    if body.get("rights_cleared") is not True:
-        raise HTTPException(400, "Confirm that you own or have permission to download and edit this source before clipping it.")
     _quota()
     _throttle("newjob:" + ctx.uid(), 30, 600)
     url = str(body.get("url", "")).strip()[:500]
@@ -846,8 +840,6 @@ def _create_link_job(body, automation=None):
 def create_from_file(file: UploadFile = File(...), options: str = Form("{}"), creator: str = Form(""),
                      rights_cleared: str = Form("false")):
     _need_verified()
-    if rights_cleared.lower() != "true":
-        raise HTTPException(400, "Confirm that you own or have permission to edit and publish this video before clipping it.")
     _job_slots()
     name = re.sub(r"[^\w.\- ]", "_", Path(file.filename or "video.mp4").name)[:120]
     ext = Path(name).suffix.lower()
@@ -980,8 +972,6 @@ def upload_status(upid: str):
 @app.post("/api/upload/start")
 def upload_start(body: dict = Body(...)):
     _need_verified()
-    if body.get("rights_cleared") is not True:
-        raise HTTPException(400, "Confirm that you own or have permission to edit and publish this video before clipping it.")
     _job_slots()
     _quota()
     _throttle("upstart:" + ctx.uid(), 30, 600)
@@ -1609,11 +1599,6 @@ def edit_creator(cid: str, body: dict = Body(...)):
     current = creators.get(cid)
     if not current:
         raise HTTPException(404, "No such creator")
-    auto_watch = body.get("auto_watch", current.get("auto_watch"))
-    autopost = body.get("autopost", current.get("autopost"))
-    rights = body.get("rights_cleared", current.get("rights_cleared"))
-    if (auto_watch or autopost) and rights is not True:
-        raise HTTPException(400, "Confirm that you own this channel's content or have permission before enabling automatic recording or posting.")
     try:
         c = creators.update(cid, body)
     except KeyError:
@@ -1622,10 +1607,7 @@ def edit_creator(cid: str, body: dict = Body(...)):
         raise HTTPException(400, str(e))
     s = live.active_for(cid)
     if s:
-        if not c.get("rights_cleared"):
-            s.stop("Rights confirmation withdrawn")
-        else:
-            s.settings = c  # new settings apply to the running recording straight away
+        s.settings = c  # new settings apply to the running recording straight away
     if "channels" in body or "channel" in body:
         profiles.refresh(cid, force=True)
     if body.get("auto_watch") and c.get("auto_watch") and not s:
@@ -2024,9 +2006,6 @@ def add_posts(body: dict = Body(...)):
     job = jobs.get(str(body.get("job")))
     if not job:
         raise HTTPException(404, "No such video")
-    _require_source_rights(job)
-    if job.get("automation") and body.get("publish_authorized") is not True:
-        raise HTTPException(400, "Confirm that you have permission to publish this clip to the selected accounts.")
     clip_arg = body.get("clip")
     clips_arg = body.get("clips")
     if clip_arg == "all" or body.get("all_clips"):

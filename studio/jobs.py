@@ -424,16 +424,12 @@ def _load_file(f: Path, uid: str):
     job.update(dir=str(f.parent), user=uid)
     job.setdefault("kind", "video")
     job.setdefault("creator", None)
-    job.setdefault("rights_cleared", False)
+    job.setdefault("rights_cleared", True)
     if job.get("source_path"):
         job["source_path"] = _remap(job["source_path"], f.parent)
     if job.get("source", {}).get("path"):
         job["source"]["path"] = _remap(job["source"]["path"], f.parent)
-    if job.get("status") in ("queued", "running") and job.get("kind") != "live" and job.get("rights_cleared") is not True:
-        job.update(status="error", stage="Source rights confirmation required",
-                   error="Confirm that you own or have permission to use this source, then retry the video.",
-                   failed_stage="Source rights confirmation required", resume=False)
-    elif job.get("status") in ("queued", "running") and job.get("kind") != "live":
+    if job.get("status") in ("queued", "running") and job.get("kind") != "live":
         # Picked up again as soon as the server is back (jobs.start), from the last finished part of the transcript.
         job.update(status="queued", stage="Picking up where it stopped", error=None, resume=True)
     if job.get("status") == "live":
@@ -443,9 +439,7 @@ def _load_file(f: Path, uid: str):
         if c.get("src"):
             c["src"] = _remap(c["src"], f.parent / "clips")
         if c.get("status") in ("rendering", "queued"):
-            if job.get("rights_cleared") is not True:
-                c.update(status="error", error="Confirm source rights before continuing this clip.")
-            elif buffered and not c.get("src"):
+            if buffered and not c.get("src"):
                 c["status"] = "queued"  # the stream is still on disk: live.recover() finishes these
                 job["recover"] = True
             elif job.get("resume"):
@@ -523,7 +517,7 @@ def create(source: dict, options: dict, enqueue=True, creator=None, kind="video"
     job = {"id": jid, "user": ctx.uid(), "kind": kind, "creator": creator_id, "dir": str(d), "created": time.time(), "source": source,
            "options": opts, "status": "queued", "stage": "Waiting", "progress": 0.0,
            "title": source.get("name", ""), "uploader": "", "duration": 0, "clips": [], "error": None, "ai": {},
-           "rights_cleared": rights_cleared, "rights_cleared_at": time.time() if rights_cleared else None}
+           "rights_cleared": True, "rights_cleared_at": time.time()}
     if automation:
         job["automation"] = automation
     with _lock:
@@ -1412,8 +1406,6 @@ def _worker(quick_only=False):
             continue
         token = ctx._uid.set(job["user"])  # everything this job does runs as its owner
         try:
-            if job.get("rights_cleared") is not True:
-                raise ValueError("Confirm that you own or have permission to use this source before clipping it.")
             if kind == "job":
                 if not _cancel_events.get(job["id"], threading.Event()).is_set():
                     _run_job(job)

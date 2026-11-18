@@ -1,4 +1,4 @@
-# MJ Cliproom · 1.0.0
+# MJ Cliproom · 1.0.1
 
 [What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 
@@ -163,9 +163,9 @@ stream privacy and the stream URL being accessible to the machine running MJ Cli
 ## Autopilot
 
 **Autopilot** watches the saved creator list for English GTA 6 streams, records a few at a time, and can upload
-Shorts to a connected YouTube channel. It is off until you turn it on. Nothing is uploaded until that source is
-on the allowlist and its rights status is **Authorized**. Signal-only moments stay in the queue for a preview
-unless you turn on full auto for that one source.
+Shorts to a connected YouTube channel. It is off until you turn it on. There is no permission checkbox.
+Signal-only moments stay in the queue for a preview unless you turn on full auto for that one source.
+YouTube posts stay private unless you change that on the Autopilot page.
 
 1. Connect YouTube under **Settings → Connected apps**. Google OAuth and YouTube Data API v3 have to be set up
    first. See [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok). A new Google project usually has
@@ -173,8 +173,7 @@ unless you turn on full auto for that one source.
 2. Open **Autopilot**. Confirm any handle marked unchecked before that row is watched. The dictated names Nogla,
    TGG, Treyten, SpeirsTheAmazingHD, Putther, TheProfessional and Adin Ross (Kick) are not watched until you tick
    **Handle checked**.
-3. For each source you have permission to clip, tick **Allowlist** and set rights to **Authorized**.
-   **Draft** copies a permission note. It is not emailed.
+3. Turn on **Full auto** only for a source whose clips should post without waiting in the review queue.
 4. Set how many streams may record at once (1–32). The server also has `PEAKCUT_MAX_LIVE`. Raise that in `.env`
    if you want more than the machine's default ceiling. Watching the list does not record all of them at once.
 5. Turn Autopilot on. It keeps running while the app process is up. Docker restarts the container. On a computer,
@@ -196,13 +195,13 @@ use only the words already on the clip.
 
 In the review queue, **A** approves and posts, **P** does the same, and **X** dismisses. A daily summary stays
 on the Autopilot page and is sent to Discord or Telegram when those alerts are already configured. Permission
-notes stay as copy drafts. An Authorized row can have an expiry date; after that date the source is not uploaded.
+notes stay as copy drafts. A rights label is not required before a source is recorded or posted.
 A stream with no language tag is kept when the title is Latin, and clear English speech is kept even if the
 page says another language. Confirmed Hindi, Urdu and other non-English speech is still skipped.
 
 **Original shorts** is a separate switch. It makes a vertical video from your own script, optional voice track
-or espeak, and royalty-free music. It does not use another creator's footage, so it can post without an
-allowlist. Third-party footage still posts only from an allowlisted, unexpired Authorized source.
+or espeak, and royalty-free music. It does not use another creator's footage. Other clips wait in
+review unless Full auto is on for that source.
 
 ## AI providers
 

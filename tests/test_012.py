@@ -25,12 +25,10 @@ words = [{"w": w} for w in ("the", "and", "you", "just", "game", "yeah")]
 check("a missing language tag keeps a Latin title", autopilot.accept_language("", "GTA 6 night one", None)[0])
 check("Hindi metadata without English speech is skipped", autopilot.accept_language("hi", "GTA 6", None)[0], False)
 check("English speech overrides a wrong language tag", autopilot.accept_language("hi", "GTA 6", words)[0])
-check("an expiry in the past blocks an Authorized source",
-      autopilot.can_publish({"rights": True, "rights_status": "AUTHORIZED", "rights_until": time.time() - 10}), False)
-check("an open expiry still allows the source",
-      autopilot.can_publish({"rights": True, "rights_status": "AUTHORIZED", "rights_until": time.time() + 86400}))
-check("no expiry date keeps the old Authorized rule",
-      autopilot.can_publish({"rights": True, "rights_status": "AUTHORIZED"}))
+check("an expiry date does not block posting",
+      autopilot.can_publish({"rights": True, "rights_status": "AUTHORIZED", "rights_until": time.time() - 10}))
+check("a source with no rights status can still be posted",
+      autopilot.can_publish({"rights": False, "rights_status": "UNKNOWN"}))
 
 loc = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=abc"
 check("a matching YouTube session is kept", accounts.session_location({"location": loc, "size": 20}, 20), loc)

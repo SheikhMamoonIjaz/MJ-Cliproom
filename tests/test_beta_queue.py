@@ -49,16 +49,14 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
         return app.post("/api/automation", headers=origin, json={**request, **extra})
 
     with patch.object(server.media, "check_youtube"), patch.object(server._tools, "missing", return_value=False):
-        assert submit().status_code == 400
-        assert submit(rights_cleared=True).status_code == 400
-        assert submit(rights_cleared=True, publish_authorized=True, accounts=["tt"]).status_code == 400
-        assert submit(rights_cleared=True, publish_authorized=True, options={"mode": "news"}).status_code == 400
-        accepted = submit(rights_cleared=True, publish_authorized=True).json()
-        duplicate = submit(rights_cleared=True, publish_authorized=True).json()
+        assert submit(accounts=["tt"]).status_code == 400
+        assert submit(options={"mode": "news"}).status_code == 400
+        accepted = submit().json()
+        duplicate = submit().json()
     jid = accepted["id"]
     assert duplicate["id"] == jid and accepted["options"]["mode"] == "gameplay"
     assert accepted["automation"]["visibility"] == "private"
-    print("PASS a prompt is saved once, requires editing and destination consent, and defaults to private YouTube")
+    print("PASS a prompt is saved once without a permission checkbox, and defaults to private YouTube")
 
     with ctx.as_user(owner):
         job = jobs.get(jid)
@@ -91,6 +89,6 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
             assert not posting.blocked_until("youtube", "another")
         posting.revoke_prompt_posts(job)
         assert all(p["status"] == "cancelled" for p in posting._mine())
-    assert app.post("/api/posts", headers=origin, json={"job": jid, "clip": "rated", "accounts": ["yt"]}).status_code == 400
+    assert app.post("/api/posts", headers=origin, json={"job": jid, "clip": "rated", "accounts": ["yt"]}).status_code == 200
     print("PASS only scored clips queue, quota waits persist, retry keeps its destination, and revocation stops queued posts")
     db.engine.dispose()
