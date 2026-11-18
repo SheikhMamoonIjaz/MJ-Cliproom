@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 1.0.1</title>
+<title>MJ Cliproom · 1.1.0</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -282,10 +282,11 @@ label.ck input{accent-color:var(--brand);margin:0}
 .chip:hover,.chip:focus-visible{background:#e4ede8;color:var(--text)}
 .chip.on,.pick.open .chip{background:var(--brand-soft);color:var(--brand-ink)}
 .hint{font-size:12px;color:var(--faint);margin-right:6px}
-.composer-bar{flex-wrap:nowrap}
-.composer-bar .grow{display:none}
-.composer-bar .hint{flex:1 1 0;min-width:0;text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-@media (max-width:560px){.composer-bar{flex-wrap:wrap}}
+.composer-bar .grow{flex:1 1 12px}
+.composer-bar .hint{flex:1 1 140px;min-width:0;text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.composer-bar .btn.primary{margin-left:auto;flex:0 0 auto}
+.composer{overflow:visible}
+#linkbar{position:sticky;top:0;z-index:40}
 .composer-opts{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .32s ease,opacity .25s ease}
 .composer-opts.open{grid-template-rows:1fr;opacity:1}
 .composer-opts>.og{min-height:0;overflow:hidden;padding:0 12px;transition:padding .32s ease}
@@ -888,6 +889,7 @@ dialog[open]{animation:fadein .16s ease}
   <main id="main">
     <header class="topbar"><button class="icon-btn menu" data-act="menu" id="menuBtn" aria-label="Open menu"></button>
       <span id="tpic"></span><div class="titles"><h1 id="title"></h1><p id="subtitle"></p></div><nav class="utabs" id="utabs" role="tablist" aria-label="Creator sections"></nav><div class="row" id="actions"></div></header>
+    <div id="linkbar" class="vb" hidden role="status">Reconnecting to MJ Cliproom…</div>
     <div id="vbanner"></div>
     <div id="heroSlot"></div>
     <div class="content" id="view"></div>
@@ -969,11 +971,61 @@ const clock = t => new Date(t * 1000).toLocaleString([], {weekday:"short", hour:
 const when = t => new Date(t * 1000).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
 const opts = (map, val) => Object.entries(map).map(([k, v]) => `<option value="${esc(k)}"${String(k) === String(val) ? " selected" : ""}>${esc(v)}</option>`).join("");
 
-async function api(path, opt) {
-  const r = await fetch(path, opt);
-  if (r.status === 401) { location.href = "/login"; throw new Error("Please sign in."); }
-  if (!r.ok) { let d = r.statusText; try { d = (await r.json()).detail || d; } catch {} throw new Error(typeof d === "string" ? d : "Something went wrong"); }
-  return r.json();
+let linkWatch = false;
+function showLink(on) { const bar = $("#linkbar"); if (bar) bar.hidden = !on; }
+function watchLink() {
+  if (linkWatch) return;
+  linkWatch = true; showLink(true);
+  const again = async () => {
+    try {
+      const r = await fetch("/healthz", {cache:"no-store"});
+      if (r.ok) { linkWatch = false; showLink(false); location.reload(); return; }
+    } catch {}
+    setTimeout(again, 2000);
+  };
+  setTimeout(again, 1500);
+}
+async function api(path, opt = {}, attempt = 0) {
+  const method = String(opt.method || "GET").toUpperCase();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opt.timeout || 25000);
+  try {
+    const r = await fetch(path, {...opt, signal: opt.signal || ctrl.signal});
+    clearTimeout(timer);
+    if (linkWatch) { linkWatch = false; showLink(false); }
+    if (r.status === 401) { location.href = "/login"; throw new Error("Please sign in."); }
+    if (!r.ok) {
+      let d = r.statusText || "Something went wrong";
+      try { d = (await r.json()).detail || d; } catch {}
+      throw new Error(typeof d === "string" ? d : "Something went wrong");
+    }
+    return r.json();
+  } catch (err) {
+    clearTimeout(timer);
+    const down = err instanceof TypeError;
+    const slow = err.name === "AbortError";
+    if (down && method === "GET" && attempt < 2) {
+      showLink(true);
+      await new Promise(res => setTimeout(res, 700 * (attempt + 1)));
+      return api(path, opt, attempt + 1);
+    }
+    if (down) { watchLink(); throw new Error("MJ Cliproom isn't answering. It may be restarting."); }
+    if (slow) throw new Error("That request took too long. Try again in a moment.");
+    throw err;
+  }
+}
+async function copyText(text) {
+  const value = String(text || "");
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(value); return; }
+  } catch {}
+  const area = document.createElement("textarea");
+  area.value = value; area.setAttribute("readonly", "");
+  area.style.position = "fixed"; area.style.left = "-9999px";
+  document.body.append(area); area.select();
+  const ok = document.execCommand("copy");
+  area.remove();
+  if (!ok) throw new Error("Copy didn't work in this browser. Select the text and copy it yourself.");
 }
 const send = (path, body, method = "POST") => api(path, {method, headers:{"Content-Type":"application/json"}, body:JSON.stringify(body ?? {})});
 function toast(msg, kind = "") {
@@ -1173,7 +1225,7 @@ function aiCard() {
     <p class="ai-sub">${k.ready ? esc(k.model || "") : "Clips are picked by loudness until an AI key is added."}</p>
     <div class="ai-stats"><div><b>${(k.today_calls || 0).toLocaleString()}</b><span>AI calls today</span></div>
       <div><b>${fmtK(k.today_tokens)}</b><span>Tokens today</span></div></div>
-    <div class="row">${!k.ready && S.status.user?.is_admin ? `<button class="btn primary" data-act="go" data-v="settings" data-tab="ai">${ic("plus")}Add AI key</button>` : ""}<button class="btn" data-act="go" data-v="usage">View usage ${ic("arrowr")}</button></div></div>`;
+    <div class="row">${!k.ready && S.status.user?.is_admin ? `<button class="btn primary" data-act="go" data-v="settings" data-tab="ai">${ic("plus")}Add a clip-finding key</button>` : ""}<button class="btn" data-act="go" data-v="usage">View usage ${ic("arrowr")}</button></div></div>`;
 }
 const PLAT = {
   youtube: {name: "YouTube", bg: "#FF0000", fg: "#fff", hint: "https://www.youtube.com/@name",
@@ -1272,7 +1324,7 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.0.1</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}Usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.1.0</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1321,20 +1373,23 @@ async function checkNew(first) {
 async function openFeedback(kind = "bug", context = "") {
   const url = S.status?.links?.follow;
   if (!url) return toast(context ? "Copy this message and open an issue on GitHub." : "There's no feedback link on this server.");
-  if (context) { try { await navigator.clipboard.writeText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
+  if (context) { try { await copyText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch (err) { toast(err.message, "bad"); } }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "1.0.1";
+const RELEASE = "1.1.0";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_0_1";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_1_0";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.0.1</h2>
-    <ul><li>Recording, clipping, Autopilot and uploads no longer ask for a permission checkbox.</li>
-    <li>Clips from someone else's stream still wait in the review queue unless you turn on Full auto for that source.</li>
-    <li>YouTube posts stay private until you change that in Autopilot.</li></ul>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.1.0</h2>
+    <ul><li>If the app restarts, the page retries and shows Reconnecting to MJ Cliproom. Copy still works on a plain http address.</li>
+    <li>localhost and 127.0.0.1 on the same port count as the same computer.</li>
+    <li>Home no longer offers Clip replay. The mode menu and Make clips button wrap onto the next line.</li>
+    <li>Settings is grouped: General, creators, Autopilot, posting, music, storage, captions, clip finding and Advanced.</li>
+    <li>Home shows a setup list and quick tools. A channel scan runs in the background.</li>
+    <li>Advanced can show diagnostics, the recent log, export settings, and remove finished source files.</li></ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
     <div class="dlg-foot"><button class="btn primary" autofocus>Got it</button></div></form>`;
@@ -1446,19 +1501,19 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
     (S.status.user?.role === "admin" && S.status.accounts !== false ? `<h4><span>Owner</span></h4><a class="nav-item" href="/admin" title="Admin dashboard" style="text-decoration:none">${ic("shield")}<span class="label">Admin dashboard</span></a>` : ""));
   const st = S.status;
   const k = S.status.ai;
-  put($("#foot"), (k ? `<button class="ai-card ${S.view === "usage" ? "on" : ""}" data-act="go" data-v="usage" title="${k.ready ? `AI: ${esc(k.provider || "ready")}, ${k.today_calls || 0} calls today` : "The AI is not set up"}">
-      <span class="ai-ic">${ic("bolt")}</span><span class="ai-tx"><small>AI</small><b>${k.ready ? esc(k.provider || "Ready") : "Not set up"}</b></span>${k.ready ? `<span class="ai-n">${(k.today_calls || 0).toLocaleString()} today</span>` : ""}</button>` : "") +
+  put($("#foot"), (k ? `<button class="ai-card ${S.view === "usage" ? "on" : ""}" data-act="go" data-v="usage" title="${k.ready ? `Clip finding: ${esc(k.provider || "ready")}, ${k.today_calls || 0} calls today` : "Clip finding is not set up"}">
+      <span class="ai-ic">${ic("bolt")}</span><span class="ai-tx"><small>Clip finding</small><b>${k.ready ? esc(k.provider || "Ready") : "Not set up"}</b></span>${k.ready ? `<span class="ai-n">${(k.today_calls || 0).toLocaleString()} today</span>` : ""}</button>` : "") +
     (S.status.user ? `<div class="me"><button class="me-btn" data-act="acctmenu" aria-haspopup="menu" aria-expanded="false">${meAvatar(S.status.user)}
-      <span class="who">${S.status.accounts === false ? `<b>Settings</b><span>AI key, connected apps</span>` : `<b>${esc(S.status.user.name)}</b><span>${esc(S.status.user.email)}</span>`}</span></button>
+      <span class="who">${S.status.accounts === false ? `<b>Settings</b><span>Keys and connected apps</span>` : `<b>${esc(S.status.user.name)}</b><span>${esc(S.status.user.email)}</span>`}</span></button>
       <button class="icon-btn bell" data-act="bell" title="Notifications" aria-label="Notifications${S.status.unread ? `, ${S.status.unread} new` : ""}" aria-haspopup="dialog">${ic("bell")}${S.status.unread ? `<span class="dotn">${S.status.unread > 9 ? "9+" : S.status.unread}</span>` : ""}</button></div>` : ""));
   const c = creator();
   const recording = S.creators.filter(x => x.live_job).length;
-  let title = {overview:"Overview", library:"Gameplay studio", settings:"Settings", usage:"AI usage", autopilot:"Autopilot"}[S.view] || "", sub = "", act = "";
+  let title = {overview:"Home", library:"Videos", settings:"Settings", usage:"Usage", autopilot:"Autopilot"}[S.view] || "", sub = "", act = "";
   if (S.view === "autopilot") sub = "Watch GTA 6 streams, keep English moments, and upload only what you have authorized.";
-  if (S.view === "usage") sub = "What the AI has been used for.";
+  if (S.view === "usage") sub = "Calls made while finding moments and writing titles.";
   if (S.view === "overview") sub = `${greeting()}. ${S.creators.length} creator${S.creators.length === 1 ? "" : "s"}${recording ? `, ${recording} recording now` : ""}.`;
   if (S.view === "library") sub = "Every video and recording, across all creators.";
-  if (S.view === "settings") sub = (S.status.accounts === false ? "Your AI profiles and connected apps." : "Your profile, security and connected apps.");
+  if (S.view === "settings") sub = "General, creators, autopilot, posting, music, storage and captions.";
   if (S.view === "settings" && st.version) act = `<button class="btn" data-act="whats-new">${esc(st.version)} · What’s new</button>`;
   let pic = "", subHtml = null, tabs = "";
   if (c) {
@@ -1487,10 +1542,10 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
     <button class="btn sm primary" data-act="updhow">${uj.state === "error" ? "Retry update" : up.restart || uj.state === "done" ? "What's new" : "Update now"}</button>${up.restart || uj.state === "done" ? "" : `<button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button>`}</div>` : "";
   const toolBar = S.status.no_ffmpeg ? `<div class="vb" role="alert">${ic("warn")}<span><b>MJ Cliproom can't make clips yet: ffmpeg isn't installed on this computer.</b> Open a terminal, run <code>winget install Gyan.FFmpeg</code> (Mac: <code>brew install ffmpeg</code>, Linux: <code>sudo apt install ffmpeg</code>), then close MJ Cliproom and start it again.</span></div>` : "";
   const rightsBar = !rightsGateReady() ? `<div class="vb" role="alert">${ic("warn")}<span><b>Restart MJ Cliproom to enable clipping and posting.</b> This page is newer than the running app. Close MJ Cliproom completely, start it again, then reload this page.</span></div>` : "";
-  const aiBar = !toolBar && S.status.ai?.problem && me?.is_admin && S.view !== "settings" ? `<div class="vb" role="status">${ic("warn")}<span><b>The AI isn't answering.</b> ${esc(S.status.ai.problem)} Until then, clips are picked by loudness.</span><button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">Open AI settings</button></div>` : "";
+  const aiBar = !toolBar && S.status.ai?.problem && me?.is_admin && S.view !== "settings" ? `<div class="vb" role="status">${ic("warn")}<span><b>Clip finding isn't answering.</b> ${esc(S.status.ai.problem)} Until then, clips are picked by loudness.</span><button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">Open clip finding</button></div>` : "";
   const diskBar = !toolBar && S.status.disk_full && S.view !== "settings" ? `<div class="vb" role="alert">${ic("warn")}<span><b>The drive MJ Cliproom saves to is almost full, so it can't take new videos.</b> Free up space on it, or move MJ Cliproom's folder to a bigger drive.</span>${me?.is_admin ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="storage">Open Storage</button>` : ""}</div>` : "";
   put($("#vbanner"), toolBar ? toolBar : diskBar ? diskBar : rightsBar ? rightsBar : upBar ? upBar : aiBar ? aiBar : me && me.verified === false ? `<div class="vb" role="status">${ic("warn")}<span>Confirm your email to start clipping. We sent a link to <b>${esc(me.email)}</b>.</span><button class="btn sm" data-act="resendverify">Send a new link</button></div>`
-    : kk && kk.ready === false && S.view !== "usage" ? `<div class="vb" role="status">${ic("bolt")}<span>${me?.is_admin ? "Add your AI key to let the AI pick clips and write titles. Until then, clips are picked by loudness." : "The AI isn't set up on this server yet, so clips are picked by loudness."}</span>${me?.is_admin && S.view !== "settings" ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">${ic("plus")}Add AI key</button>` : ""}</div>` : "");
+    : kk && kk.ready === false && S.view !== "usage" ? `<div class="vb" role="status">${ic("bolt")}<span>${me?.is_admin ? "Add a key if you want titles and moments chosen from the words. Until then, clips are picked by loudness." : "No clip-finding key is set on this server yet, so clips are picked by loudness."}</span>${me?.is_admin && S.view !== "settings" ? `<button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">${ic("plus")}Add a clip-finding key</button>` : ""}</div>` : "");
   put($("#tpic"), pic); $("#tpic").classList.toggle("live", !!(c && (c.live_job || liveOn(c).length)));
   put($("#utabs"), tabs); moveInd(); $(".topbar").classList.toggle("tabbed", !!tabs);
   put($("#title"), `<span>${esc(title)}</span>`); put($("#subtitle"), subHtml ?? esc(sub)); put($("#actions"), act);
@@ -1505,7 +1560,7 @@ function pathFor(v, tab) {
 function fromPath(path) {
   const m = path.match(/^\/app\/creators\/([^/]+)(?:\/(setup|activity|clips))?\/?$/);
   if (m) return ["c:" + decodeURIComponent(m[1]), m[2] || "clips"];
-  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage|autopilot))?\/?$/);
+  const st = path.match(/^\/app\/settings(?:\/([a-z0-9-]+))?\/?$/);
   if (st) return ["settings", st[1] || null];
   const k = Object.keys(ROUTES).find(x => ROUTES[x] && path.replace(/\/$/, "") === "/app/" + ROUTES[x]);
   return [k || "library", "clips"];
@@ -1524,8 +1579,8 @@ function go(v, tab, fromHistory) {
   $("#app").classList.remove("open");
   const view = $("#view");
   if (window._gaStop) { window._gaStop(); window._gaStop = null; }
-  $("#heroSlot").innerHTML = v === "overview" ? `<section class="hero"><h2>Clip a replay</h2>
-      <p>Paste a replay link or upload a gameplay recording.</p><div id="add"></div></section>` : "";
+  $("#heroSlot").innerHTML = v === "overview" ? `<section class="hero"><h2>Clip a video</h2>
+      <p>Paste a video link or upload a gameplay recording.</p><div id="add"></div></section>` : "";
   if (v === "overview") view.innerHTML = `<div id="ov"></div>`;
   else if (v === "library") view.innerHTML = `<div id="add"></div><div id="jobs"></div>`;
   else if (v === "settings") view.innerHTML = `<div id="sform"></div>`;
@@ -1557,7 +1612,6 @@ function drawAdd(variant) {
     <div class="att" id="att"><div><div class="att-in" id="attIn"></div></div></div><div id="upRecovery"></div>
     <div class="composer-bar">
       <button type="button" class="chip" data-act="pickfile">${ic("up")}Upload video</button>
-      <button type="button" class="chip" data-act="replays">Replay Picker</button>
       <button type="button" class="chip" data-act="clipsets">Clip Sets</button>
       <button type="button" class="chip" data-act="prompt-queue">Queue with a prompt</button>
       ${c ? "" : picker("o_creator", "File under creator", [{v:"", label:"No creator", icon:"user"}, ...S.creators.map(x => ({v:x.id, label:x.name, img:x.profile?.pic && x.profile.channel === x.channel ? avatarUrl(x) : ""}))], "")}
@@ -2129,7 +2183,8 @@ function drawCreatorForm() {
   box.innerHTML = `<div class="card"><h2>Their stream</h2><p class="help">Where to record from, and whether to start by itself.</p>
       <div class="chans">${channelRows(c)}</div>
       <div class="fields" style="margin-top:14px">
-        <label class="sw span"><input type="checkbox" data-k="auto_watch" ${c.auto_watch ? "checked" : ""}><span>Record automatically when they go live<small>Checks straight away, then every two minutes.</small></span></label></div></div>
+        <label class="sw span"><input type="checkbox" data-k="auto_watch" ${c.auto_watch ? "checked" : ""}><span>Record automatically when they go live<small>Checks straight away, then every two minutes.</small></span></label>
+        <p class="hint span">You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.</p></div></div>
     <div class="card"><h2>How the AI decides</h2><p class="help">Two separate AI checks. The words judge reads only what was said. The reaction judge sees only how loud the streamer got and how busy chat was, never the words.</p>
       <div class="fields">
         <label class="f">Check the live stream every<select data-k="ai_every_min">${opts({1:"1 minute", 2:"2 minutes", 3:"3 minutes", 5:"5 minutes", 10:"10 minutes"}, c.ai_every_min || 3)}</select><small class="sub" id="costhint" style="font-weight:400">${costHint(c.ai_every_min)}</small></label>
@@ -2215,7 +2270,18 @@ function drawOverview() {
   const state = r => r.state === "recording" ? `<span class="pill live"><span class="dot"></span>Recording</span>` : r.state === "waiting" ? `<span class="pill warn">Waiting for live</span>` : `<span class="pill">Idle</span>`;
   const pst = p => p.status === "posted" ? `<span class="pill ok">Posted</span>` : p.status === "failed" ? `<span class="pill bad">Failed</span>` : p.status === "posting" ? `<span class="pill warn">Posting now</span>` : p.status === "cancelled" ? `<span class="pill">Cancelled</span>` : `<span class="pill warn">${clock(Math.max(p.due_at, o.cooldowns?.find(c => c.account === p.account)?.until || 0))}</span>`;
   const steps = nextSteps(o);
-  put(box, `<div class="tiles">
+  const setup = [
+    ["Connect YouTube", !!S.accounts?.some(a => a.platform === "youtube"), "settings", "apps"],
+    ["Add a creator", S.creators.length > 0, "settings", "creators"],
+    ["Choose music", (S.status.music || []).length > 0, "settings", "music"],
+    ["Check storage", true, "settings", "storage"],
+    ["Turn on Autopilot when you are ready", !!(S.auto && S.auto.enabled), "autopilot", ""],
+  ];
+  const done = setup.filter(s => s[1]).length;
+  const guide = `<section class="card"><h2>First-run setup</h2><p class="sub">${done} of ${setup.length} steps done. Nothing here blocks the app.</p>
+    <div class="steps across">${setup.map((s, i) => `<button class="step" data-act="go" data-v="${s[2]}" data-tab="${s[3]}"><span class="n">${s[1] ? "✓" : i + 1}</span><span><b>${esc(s[0])}</b></span></button>`).join("")}</div></section>`;
+  const tools = `<section class="card"><h2>Quick tools</h2><div class="row"><button class="btn sm" data-act="go" data-v="autopilot">Scan channels</button><button class="btn sm" data-act="go" data-v="settings" data-tab="storage">Storage</button><button class="btn sm" data-act="go" data-v="settings" data-tab="tools">Logs and backup</button><button class="btn sm" data-act="go" data-v="settings" data-tab="general">Diagnostics</button></div></section>`;
+  put(box, `${guide}${tools}<div class="tiles">
       <div class="tile"><i>${ic("radio")}</i><b>${o.recording}</b><span>Recording now</span></div>
       <div class="tile"><i>${ic("scissors")}</i><b>${sum("clips_today")}</b><span>Clips today</span></div>
       <div class="tile"><i>${ic("send")}</i><b>${sum("posted_today")}</b><span>Posted today</span></div>
@@ -2270,7 +2336,7 @@ function hbars(rows) {
 }
 function drawUsage() {
   const k = S.usage, box = $("#usage"); if (!k || !box) return;
-  box.innerHTML = `${k.ready ? "" : `<div class="note">${ic("warn")}<span>${S.status.user?.is_admin ? "No AI key is set, so clips are picked by loudness only. Add your key under Settings, AI." : "The AI isn't set up on this server yet, so clips are picked by loudness."}</span></div>`}
+  box.innerHTML = `${k.ready ? "" : `<div class="note">${ic("warn")}<span>${S.status.user?.is_admin ? "No clip-finding key is set, so clips are picked by loudness only. Add a key under Settings, Clip finding." : "No clip-finding key is set on this server yet, so clips are picked by loudness."}</span></div>`}
     <div class="tiles five" style="margin-top:${k.ready ? 0 : 16}px">
       <div class="tile"><i>${ic("bolt")}</i><b>${k.ready ? esc(k.provider || "Ready") : "Not set up"}</b><span>${k.ready && k.model ? esc(k.model) : "AI service"}</span></div>
       <div class="tile"><i>${ic("clock")}</i><b>${(k.today_calls || 0).toLocaleString()}</b><span>AI calls today</span></div>
@@ -2291,12 +2357,17 @@ function drawUsage() {
 /* ============================================================ settings */
 // With sign-in off there is no profile or password to manage. The AI section is for whoever runs the server.
 const setTabs = () => [
-  ...(S.status.user?.is_admin ? [["ai", "AI", "bolt", "Your AI service, model and key"]] : []),
-  ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name, email and how you sign in"],
-                                          ["security", "Security", "lock", "Password and signing out"]]),
-  ["apps", "Connected apps", "plug", "Where your clips get posted"],
-  ["autopilot", "Autopilot", "radio", "GTA 6 live clipping and uploads"],
-  ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos and clips are kept"]] : [])];
+  ["general", "General", "cog", "Version and this computer"],
+  ["creators", "Sources and creators", "users", "Workspaces you record"],
+  ["autopilot", "Autopilot", "radio", "Live clipping and uploads"],
+  ["apps", "YouTube and posting", "plug", "Connected channels"],
+  ["music", "Music", "play", "Tracks in your library"],
+  ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos are kept"]] : []),
+  ["captions", "Captions and branding", "quote", "Spelling fixes and the title tag"],
+  ...(S.status.user?.is_admin ? [["ai", "Clip finding", "bolt", "Optional key for titles and moments"]] : []),
+  ["tools", "Advanced", "sliders", "Logs, backup and cleanup"],
+  ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name and email"],
+                                          ["security", "Security", "lock", "Password and signing out"]])];
 function aiHints() {
   const k = S.aiEdit, sel = $("#ai_provider"); if (!k || !sel) return;
   const pv = k.providers.find(x => x.id === sel.value) || k.providers[0], same = pv.id === k.provider;
@@ -2333,6 +2404,7 @@ function drawAutopilot() {
       <td>${viralBits(q.viral)}${q.preview ? `<a class="btn sm" href="${esc(q.preview)}" target="_blank" rel="noopener">Preview</a> ` : ""}${q.status === "review" ? `<button class="btn sm" data-act="auto-approve" data-id="${esc(q.id)}">Approve & post</button> <button class="btn sm ghost" data-act="auto-dismiss" data-id="${esc(q.id)}">Dismiss</button>` : ""}</td></tr>`).join("");
   box.innerHTML = `<section class="set-sec"><h2>Autopilot</h2>
       <p class="help">Watches the creator list for live GTA 6. A stream counts only when its Twitch or Kick category, or its YouTube title, says GTA 6. GTA 5 is skipped and is never renamed. Finished clips wait in the review queue unless Full auto is on for that source. YouTube posts stay private unless you change that here.</p>
+      <p class="hint">You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.</p>
       <label class="sw"><input type="checkbox" id="auto_on" ${a.enabled ? "checked" : ""}><span>Autopilot is ${a.enabled ? "on" : "off"}<small>${a.recording || 0} recording now. ${a.verified_channels || 0} handles are confirmed. Server live ceiling is ${a.server_live_ceiling}. Keys: A approve, P approve and post, X dismiss.</small></span></label>
       <label class="sw"><input type="checkbox" id="auto_original" ${a.original_mode ? "checked" : ""}><span>Original shorts<small>Your own narration and royalty-free music. No one else's footage, so no creator permission is required.</small></span></label>
       <label class="f">Original topic<input id="auto_topic" value="${esc(a.original_topic || "")}" maxlength="240"></label>
@@ -2384,6 +2456,39 @@ async function drawSettings() {
     <div class="set-body" id="setbody"><div class="set-load">Loading…</div></div></div>`;
   const body = $("#setbody");
   try {
+    if (tab === "general") {
+      body.innerHTML = `<section class="set-sec"><h2>General</h2><p class="help">MJ Cliproom ${esc(S.status.version || RELEASE)} on this computer.</p>
+        <p class="hint">You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.</p>
+        <div class="row"><button class="btn" data-act="showdiag">Diagnostics</button><button class="btn" data-act="showlogs">Recent log</button></div>
+        <pre id="gentext" class="hint" style="white-space:pre-wrap"></pre></section>`;
+      return;
+    }
+    if (tab === "creators") {
+      body.innerHTML = `<section class="set-sec"><h2>Sources and creators</h2><p class="help">Each creator has a workspace for their channel, clips and recording.</p>
+        ${(S.creators || []).map(c => `<div class="row"><b class="grow">${esc(c.name)}</b><button class="btn sm" data-act="go" data-v="c:${esc(c.id)}" data-tab="setup">Open setup</button></div>`).join("") || `<p class="help">No creators yet.</p>`}
+        <button class="btn" data-act="newcreator">New creator</button></section>`;
+      return;
+    }
+    if (tab === "music") {
+      const tracks = S.status.music || [];
+      body.innerHTML = `<section class="set-sec"><h2>Music</h2><p class="help">Tracks you added. Chart songs are still refused.</p>
+        ${tracks.length ? tracks.map(t => `<p>${esc(t.name)} <span class="hint">${esc(t.license || "")}</span></p>`).join("") : `<p class="help">No tracks yet. Add one from a clip.</p>`}</section>`;
+      return;
+    }
+    if (tab === "captions") {
+      body.innerHTML = `<section class="set-sec"><h2>Captions and branding</h2><p class="help">Corrections apply the next time a clip is made. The title tag still says MJ Plays GTA.</p>
+        <label class="f">Heard, then the right spelling<textarea id="glossarydraft" class="caption-draft" rows="6" placeholder="Lost Santos => Los Santos"></textarea></label>
+        <button class="btn" data-act="saveglossary">Save glossary</button></section>`;
+      const area = $("#glossarydraft");
+      if (area) loadCaptionGlossary(area);
+      return;
+    }
+    if (tab === "tools") {
+      body.innerHTML = `<section class="set-sec"><h2>Advanced</h2><p class="help">A backup of autopilot settings, the recent log, and removal of finished source files.</p>
+        <div class="row"><button class="btn" data-act="exportset">Export settings</button><button class="btn" data-act="showlogs">Recent log</button><button class="btn" data-act="cleanupsrc">Remove finished sources</button></div>
+        <pre id="gentext" class="hint" style="white-space:pre-wrap"></pre></section>`;
+      return;
+    }
     if (tab === "autopilot") {
       body.innerHTML = `<div id="auto"><div class="set-load">Loading…</div></div>`;
       return loadAutopilot(true);
@@ -2394,12 +2499,12 @@ async function drawSettings() {
         : data.profiles.find(p => p.id === S.aiProfile) || data;
       k.providers = data.providers;
       S.aiProfile = k.id;
-      body.innerHTML = `<section class="set-sec"><h2>AI</h2><p class="help">MJ Cliproom uses an AI model to pick the moments worth clipping and to write hooks, titles and captions. Use your own key from any of these services. You pay that service directly. Without a key, clips are picked by loudness.</p>
+      body.innerHTML = `<section class="set-sec"><h2>Clip finding</h2><p class="help">An optional model can pick moments and write titles. Use your own key. You pay that service directly. Without a key, clips are picked by loudness.</p>
           <label class="f">Saved profile<select id="ai_profile">${data.profiles.map(p => `<option value="${esc(p.id)}" ${p.id === k.id ? "selected" : ""}>${esc(p.name)}${p.id === data.id ? " (active)" : ""}</option>`).join("")}<option value="new" ${k.id === "new" ? "selected" : ""}>Add a profile…</option></select></label>
           <div class="ai-state">${k.ready ? `<span class="pill ok">${ic("check")}Ready</span><span class="sub">${esc(k.label)} · ${esc(k.models[0] || "")}</span>` : `<span class="pill warn">Not set up</span><span class="sub">Choose a service, paste your key and pick a model.</span>`}</div>
           <div class="ai-form">
             <label class="f">Profile name<input id="ai_name" maxlength="64" value="${esc(k.name)}"></label>
-            <label class="f">AI service<select id="ai_provider">${k.providers.map(x => `<option value="${esc(x.id)}" ${x.id === k.provider ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select></label>
+            <label class="f">Service<select id="ai_provider">${k.providers.map(x => `<option value="${esc(x.id)}" ${x.id === k.provider ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select></label>
             <label class="f">Key<input id="ai_key" type="password" autocomplete="off" spellcheck="false"><span class="hint" id="ai_keyhint"></span></label>
             <label class="f" id="ai_basewrap">Address<input id="ai_base" value="${esc(k.base_url || "")}" spellcheck="false"><span class="hint">Use the OpenAI-compatible address supplied by your provider.</span></label>
             <label class="f">Model<span class="with"><input id="ai_model" list="ai_models" value="${esc(k.models.join(", "))}" spellcheck="false"><button class="btn" type="button" data-act="aimodels">Find models</button></span>
@@ -2770,6 +2875,28 @@ document.addEventListener("click", async e => {
   }
   if (b.tagName === "A") e.preventDefault();
   try {
+    if (a === "showdiag") {
+      const info = await api("/api/diagnostics");
+      const box = $("#gentext"); if (box) box.textContent = Object.entries(info).map(([k, v]) => k + ": " + v).join("\n");
+      return;
+    }
+    if (a === "showlogs") {
+      const info = await api("/api/logs");
+      const box = $("#gentext"); if (box) box.textContent = (info.lines || []).slice(-40).join("\n") || "No log lines yet.";
+      return;
+    }
+    if (a === "exportset") {
+      const info = await api("/api/settings/export");
+      const blob = new Blob([JSON.stringify(info, null, 2)], {type: "application/json"});
+      const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "mj-cliproom-settings.json"; link.click();
+      return;
+    }
+    if (a === "cleanupsrc") {
+      if (!await ask("Remove finished source files?", "Clips that are already made stay. The downloaded source files are deleted.", "Remove sources", true)) return;
+      const info = await send("/api/storage/cleanup", {confirm: true});
+      toast(`Removed ${info.removed} source file${info.removed === 1 ? "" : "s"}.`, "ok");
+      return;
+    }
     if (a === "go") { closePops(); return go(d.v, d.tab); }
     if (a === "auto-save") {
       S.auto = await send("/api/autopilot", autopilotBody(), "PUT");
@@ -2777,8 +2904,17 @@ document.addEventListener("click", async e => {
     }
     if (a === "auto-scan") {
       b.disabled = true;
-      try { S.auto = await send("/api/autopilot/scan", {}); autoDirty = false; drawAutopilot(); toast("Scan finished.", "ok"); }
-      finally { b.disabled = false; }
+      try {
+        await send("/api/autopilot/scan", {});
+        toast("Scanning channels…", "ok");
+        for (let i = 0; i < 40; i++) {
+          await new Promise(res => setTimeout(res, 1500));
+          const scan = await api("/api/autopilot/scan");
+          if (scan.status === "done" && scan.public) { S.auto = scan.public; autoDirty = false; drawAutopilot(); toast("Scan finished.", "ok"); return; }
+          if (scan.status === "error") throw new Error(scan.error || "The scan failed.");
+        }
+        toast("The scan is still running. Open Autopilot again in a minute to see it.", "ok");
+      } finally { b.disabled = false; }
       return;
     }
     if (a === "auto-add") {

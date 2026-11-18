@@ -58,6 +58,8 @@ def main() -> int:
                 ("the new-version notice", ["tests/test_updates.py"]),
                 ("prompt and posting queues", ["tests/test_beta_queue.py"]),
                 ("1.0 editor, music rights and dependencies", ["tests/test_100.py"]),
+                ("1.1 reconnect, diagnostics and settings export", ["tests/test_111.py"]),
+                ("pages only call routes that exist", ["tests/test_routes.py"]),
                 ("autopilot, layouts and royalty-free music", ["tests/test_autopilot.py"]),
                 ("0.12 upload resume, faces, chat, thumbs and original shorts", ["tests/test_012.py"]),
                 ("no limits by default", ["tests/test_limits.py"]),

@@ -48,7 +48,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -111,7 +111,7 @@ class Gate:
 
         if method not in ("GET", "HEAD", "OPTIONS"):
             origin = req.headers.get("origin")
-            if origin and urlparse(origin).netloc != req.headers.get("host") and origin.rstrip("/") != config.PUBLIC_URL:
+            if origin and not _same_browser(origin, req.headers.get("host", "")) and origin.rstrip("/") != config.PUBLIC_URL.rstrip("/"):
                 return await deny(403, "Cross-site requests are not allowed.")
             # Only the upload may be big. Everything else is a small form, and is cut off at 256 KB whatever its
             # headers claim, so nobody can fill the server's memory by posting junk (signed in or not).
@@ -160,7 +160,7 @@ class Gate:
             if method not in ("GET", "HEAD"):
                 # changes must come from our own pages: the browser has to say so, and it has to match
                 origin = (req.headers.get("origin") or "").rstrip("/")
-                if not origin or (urlparse(origin).netloc != req.headers.get("host") and origin != config.PUBLIC_URL):
+                if not origin or (not _same_browser(origin, req.headers.get("host", "")) and origin != config.PUBLIC_URL.rstrip("/")):
                     return await deny(403, "Cross-site requests are not allowed.")
         if not user and not is_open:
             if path == "/app" or path.startswith("/app/"):
@@ -276,6 +276,30 @@ def _ip(request: Request) -> str:
     if named and request.headers.get(named) and _from_cdn(peer):
         return request.headers[named].split(",")[0].strip()[:64]
     return peer
+
+
+def _split_host(value: str):
+    """Host name and port from a Host header or an Origin URL. localhost and 127.0.0.1 count as the same machine."""
+    raw = (value or "").strip().lower()
+    if "://" in raw:
+        parsed = urlparse(raw)
+        name, port = parsed.hostname or "", parsed.port
+    elif raw.startswith("[") and "]" in raw:
+        name, _, rest = raw[1:].partition("]")
+        port = int(rest[1:]) if rest.startswith(":") and rest[1:].isdigit() else None
+    elif raw.count(":") == 1 and raw.rsplit(":", 1)[1].isdigit():
+        name, port_text = raw.rsplit(":", 1)
+        port = int(port_text)
+    else:
+        name, port = raw, None
+    if name in ("localhost", "127.0.0.1", "::1"):
+        name = "loopback"
+    return name, port
+
+
+def _same_browser(origin: str, host: str) -> bool:
+    """True when the page and the request are the same site. Loopback names are interchangeable if the port matches."""
+    return _split_host(origin) == _split_host(host)
 
 
 def _own_address(host: str) -> bool:
@@ -1823,6 +1847,64 @@ def _on_this_computer(request: Request) -> bool:
     return host in ("127.0.0.1", "::1", "localhost") and not config.env("PEAKCUT_TRUST_PROXY")
 
 
+@app.get("/api/diagnostics")
+def diagnostics():
+    """A plain health page for this computer. It never includes keys or tokens."""
+    from . import tools
+    free = 0.0
+    try:
+        import shutil
+        free = round(shutil.disk_usage(config.DATA_DIR).free / 1e9, 1)
+    except OSError:
+        free = 0.0
+    return {"version": VERSION, "ffmpeg": not bool(tools.missing()), "port": config.PORT,
+            "address": config.PUBLIC_URL, "accounts": bool(config.ACCOUNTS),
+            "data": str(config.DATA_DIR.resolve()), "free_gb": free}
+
+
+@app.get("/api/logs")
+def log_tail():
+    path = config.DATA_DIR / "logs" / "studio.log"
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+    except OSError:
+        lines = []
+    return {"lines": lines}
+
+
+@app.get("/api/settings/export")
+def settings_export():
+    state = autopilot.load()
+    return {"version": VERSION, "autopilot": state.get("settings") or {}, "music": music.list_tracks()}
+
+
+@app.post("/api/settings/import")
+def settings_import(body: dict = Body(...)):
+    incoming = body.get("autopilot") if isinstance(body, dict) else None
+    if not isinstance(incoming, dict):
+        raise HTTPException(400, "That file is not an MJ Cliproom settings export.")
+    try:
+        state = autopilot.update_settings(incoming)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "autopilot": autopilot.public(state)}
+
+
+@app.post("/api/storage/cleanup")
+def storage_cleanup(request: Request, body: dict = Body(...)):
+    _admin(request)
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "Confirm that finished source files can be removed.")
+    removed = 0
+    for job in jobs.list_jobs():
+        try:
+            jobs.delete_source(job)
+            removed += 1
+        except ValueError:
+            continue
+    return {"removed": removed}
+
+
 @app.get("/api/storage")
 def storage_get(request: Request):
     from . import storage
@@ -1838,8 +1920,8 @@ def storage_open(request: Request):
         raise HTTPException(400, "The folder can only be opened on the computer PeakCut runs on.")
     try:
         storage.open_folder()
-    except OSError as e:
-        raise HTTPException(500, "Couldn't open the folder: " + safe.friendly(e, 200))
+    except (OSError, ValueError) as e:
+        raise HTTPException(400, str(e) if isinstance(e, ValueError) else "Couldn't open the folder. Copy the path shown on this page.")
     return {"ok": True}
 
 
@@ -1848,8 +1930,11 @@ def storage_pick(request: Request):
     from . import storage
     _admin(request)
     if not _on_this_computer(request):
-        raise HTTPException(400, "Type the folder's path instead: a folder window can only be shown on the computer PeakCut runs on.")
-    return {"path": storage.pick_folder()}
+        raise HTTPException(400, "Type the folder's path instead: a folder window can only be shown on the computer MJ Cliproom runs on.")
+    try:
+        return {"path": storage.pick_folder()}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.put("/api/storage")
@@ -1906,14 +1991,41 @@ def autopilot_draft(body: dict = Body(...)):
     return {"draft": draft, "sent": False}
 
 
+_scan_state = {}
+_scan_guard = threading.Lock()
+
+
 @app.post("/api/autopilot/scan")
 def autopilot_scan():
-    _throttle("autopilot:" + ctx.uid(), 6, 60, "Wait a minute before scanning again.")
-    try:
-        state = autopilot.cycle()
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(503, safe.friendly(e))
-    return autopilot.public(state)
+    """Start a channel scan in the background. The page asks /api/autopilot/scan for progress."""
+    uid = ctx.uid()
+    with _scan_guard:
+        current = _scan_state.get(uid)
+        if current and current.get("status") == "running":
+            return {"status": "running", "started": current.get("started")}
+    _throttle("autopilot:" + uid, 6, 60, "Wait a minute before scanning again.")
+    with _scan_guard:
+        _scan_state[uid] = {"status": "running", "started": time.time()}
+
+    def work():
+        try:
+            with ctx.as_user(uid):
+                state = autopilot.cycle()
+                public = autopilot.public(state)
+            with _scan_guard:
+                _scan_state[uid] = {"status": "done", "public": public}
+        except Exception as exc:  # noqa: BLE001
+            with _scan_guard:
+                _scan_state[uid] = {"status": "error", "error": safe.friendly(exc)}
+
+    threading.Thread(target=work, name="autopilot-scan", daemon=True).start()
+    return {"status": "running"}
+
+
+@app.get("/api/autopilot/scan")
+def autopilot_scan_status():
+    with _scan_guard:
+        return dict(_scan_state.get(ctx.uid()) or {"status": "idle"})
 
 
 @app.post("/api/autopilot/queue/{item_id}/{action}")

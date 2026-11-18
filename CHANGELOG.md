@@ -2,11 +2,23 @@
 
 User-facing changes to MJ Cliproom are listed here.
 
+## 1.1.0 — 2026-11-18
+
+- Pages retry a failed request and show “Reconnecting to MJ Cliproom” until the app answers again. Copy works on a plain http address.
+- `localhost` and `127.0.0.1` on the same port count as the same computer.
+- Home no longer has Clip replay. The mode menu and Make clips button wrap instead of overlapping.
+- Settings is grouped in a left list: General, creators, Autopilot, posting, music, storage, captions, clip finding and Advanced.
+- Home shows a first-run setup list and a quick-tools row. A channel scan starts in the background and the page checks until it finishes.
+- Advanced can show diagnostics, the recent log, export settings, and remove finished source files.
+- On Windows, choosing a storage folder uses the system folder window.
+
 ## 1.0.1 — 2026-11-18
 
 - Removed the permission checkboxes and server checks that blocked recording, clipping, Autopilot and uploads.
   Any saved creator can be recorded and clipped. Signal-only clips still wait in the review queue unless Full auto
   is on for that source. YouTube privacy still defaults to private.
+- Creator Setup and Autopilot show a one-line note that you are responsible for the rights to footage and music
+  you record or upload. It does not ask for a click.
 
 ## 1.0.0 — 2026-11-18
 

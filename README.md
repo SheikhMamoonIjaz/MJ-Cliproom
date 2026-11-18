@@ -1,4 +1,4 @@
-# MJ Cliproom · 1.0.1
+# MJ Cliproom · 1.1.0
 
 [What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 
@@ -159,6 +159,10 @@ The app can improve candidate ranking and metadata, but no AI can promise a clip
 For a live stream, add its channel under **Creators → Setup**, then choose **Record live stream** when it is on air.
 Use the live workspace to monitor the stream and clip the recent buffer. Availability depends on the platform,
 stream privacy and the stream URL being accessible to the machine running MJ Cliproom.
+
+## Your responsibility
+
+You are responsible for having the rights to footage and music you record or upload. Re-uploading other creators' content can lead to copyright claims.
 
 ## Autopilot
 
