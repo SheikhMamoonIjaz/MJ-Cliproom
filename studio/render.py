@@ -342,6 +342,16 @@ def apply_commentary(fc, inputs, audio, audio_map, cut, commentary_path, duratio
     return fc, inputs, ["-map", "[narrated]"]
 
 
+def _facecam_choice(src, start, layout, choice):
+    if choice != "auto" or layout not in ("stack", "split"):
+        return choice or "left"
+    try:
+        from .facecam import sample_corner
+        return sample_corner(src, start) or "left"
+    except Exception:  # noqa: BLE001
+        return "left"
+
+
 def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, src_w: int, src_h: int) -> dict:
     """Render a vertical MP4 and write its cover, ASS track, and optional SRT."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -375,7 +385,7 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                           segments, has_audio, clip.get("crop_keyframes") or [], clip.get("music_path"),
                           clip.get("music_volume", 0.30), clip.get("music_duck", True),
                           clip.get("commentary_path"), clip.get("commentary_volume", 1.0),
-                          bool(clip.get("preserve_source_marks")), clip.get("facecam") or "left")
+                          bool(clip.get("preserve_source_marks")), _facecam_choice(src, start, layout, clip.get("facecam")))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

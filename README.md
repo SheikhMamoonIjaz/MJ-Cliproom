@@ -1,4 +1,4 @@
-# MJ Cliproom · 0.11.0 beta
+# MJ Cliproom · 0.12.0 beta
 
 [What's new](CHANGELOG.md) · [Install or update the beta](docs/BETA_0_10.md)
 
@@ -185,6 +185,24 @@ and a cut that finishes the sentence when the transcript allows it. The descript
 GTA 5 categories and titles are skipped and are never relabelled as GTA 6. Add your own commentary track on the
 Autopilot page if you want a narration over the stream. Background music has to be royalty-free or supplied by
 you. See [YouTube Shorts automation](docs/YOUTUBE_AUTOMATION.md).
+
+A saved YouTube upload session is continued after a restart, so the same video is not posted twice. Facecam
+layout looks for a face when OpenCV is installed (`opencv-python-headless`) and otherwise uses the busiest
+corner. Kick chat is counted the same way as Twitch chat. Each clip card shows the viral-score breakdown.
+Thumbnails are drawn from the busiest moment and can be edited before upload. YouTube receives the wide
+thumbnail when the channel is allowed to set one. A post package offers five titles, three hooks, a description
+with the source credit, hashtags, a pinned comment, and captions for TikTok, Reels, Facebook and X. Those lines
+use only the words already on the clip.
+
+In the review queue, **A** approves and posts, **P** does the same, and **X** dismisses. A daily summary stays
+on the Autopilot page and is sent to Discord or Telegram when those alerts are already configured. Permission
+notes stay as copy drafts. An Authorized row can have an expiry date; after that date the source is not uploaded.
+A stream with no language tag is kept when the title is Latin, and clear English speech is kept even if the
+page says another language. Confirmed Hindi, Urdu and other non-English speech is still skipped.
+
+**Original shorts** is a separate switch. It makes a vertical video from your own script, optional voice track
+or espeak, and royalty-free music. It does not use another creator's footage, so it can post without an
+allowlist. Third-party footage still posts only from an allowlisted, unexpired Authorized source.
 
 ## AI providers
 

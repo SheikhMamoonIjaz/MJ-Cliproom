@@ -233,7 +233,7 @@ with ctx.as_user(user.id):
     direct_post = next(p for p in posting._mine() if p["job"] == "job-12345678" and p["clip"] == "clip05" and p["account"] == accs["youtube"]["id"])
     yt_args = []
     original_youtube_upload = accounts.youtube_upload
-    accounts.youtube_upload = lambda acc, path, title, description, tags, privacy: (yt_args.append((title, description, tags)) or ("yt-direct", "https://www.youtube.com/shorts/yt-direct"))
+    accounts.youtube_upload = lambda acc, path, title, description, tags, privacy, **extra: (yt_args.append((title, description, tags)) or ("yt-direct", "https://www.youtube.com/shorts/yt-direct"))
     posting._post(direct_post)
     accounts.youtube_upload = original_youtube_upload
     check("YouTube receives the edited metadata and hashtag tags",

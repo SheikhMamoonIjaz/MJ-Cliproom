@@ -1,6 +1,7 @@
 """Live sessions: record a stream into a rolling buffer, transcribe as it goes, let the AI pick clips."""
 import collections
 import json
+import os
 import re
 import socket
 import ssl
@@ -60,7 +61,9 @@ def resolve(url: str) -> dict:
         if media.note_refusal(url, e):
             raise NotLive(media.YT_BLOCKED) from e
         raise NotLive(str(e)[-200:]) from e
-    if not info or not info.get("is_live"):
+    if not info or not info.get("is_live") or info.get("live_status") in ("is_upcoming", "post_live", "was_live"):
+        if info and info.get("live_status") == "is_upcoming":
+            raise NotLive("This stream is scheduled and has not started yet.")
         raise NotLive("This channel is not live right now.")
     fmts = info.get("requested_formats") or [info]
     title = info.get("title") or ""
@@ -153,9 +156,13 @@ class Session:
         SESSIONS[self.job["id"]] = self
         threading.Thread(target=ctx.bind(self._ingest), daemon=True).start()
         threading.Thread(target=ctx.bind(self._analyze), daemon=True).start()
-        m = re.match(r"^https?://(?:www\.)?twitch\.tv/([A-Za-z0-9_]+)", self.job["source"]["url"])
+        url = self.job["source"]["url"]
+        m = re.match(r"^https?://(?:www\.)?twitch\.tv/([A-Za-z0-9_]+)", url)
         if m:
             threading.Thread(target=ctx.bind(self._chat), args=(m.group(1).lower(),), daemon=True).start()
+        kick = re.match(r"^https?://(?:www\.)?kick\.com/([A-Za-z0-9_\-]+)", url)
+        if kick:
+            threading.Thread(target=ctx.bind(self._kick_chat), args=(kick.group(1).lower(),), daemon=True).start()
 
     def stop(self, note="Stopped by you"):
         """Instant for the user: the card and the creator show as stopped straight away. Clips already being made
@@ -272,6 +279,62 @@ class Session:
                 pass
             self.chat_on = False
             self.stop_flag.wait(5)
+
+    def _kick_chat(self, slug):
+        """Count Kick chat messages so a busy chat can mark a moment, the same way Twitch chat does."""
+        from . import kickchat
+        while not self.stop_flag.is_set() and not self.ended:
+            try:
+                import json as _json
+                import httpx
+                page = httpx.get(f"https://kick.com/api/v2/channels/{slug}", timeout=15,
+                                 headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+                room = kickchat.chatroom_id(page.json() if page.status_code == 200 else {})
+                if not room:
+                    break
+                raw = socket.create_connection(("ws-us2.pusher.com", 443), timeout=20)
+                sock = ssl.create_default_context().wrap_socket(raw, server_hostname="ws-us2.pusher.com")
+                key = "dGhlIHNhbXBsZSBub25jZQ=="
+                sock.sendall(("GET /app/32cbd69e4b950bf97679?protocol=7&client=js&version=7.6.0&flash=false HTTP/1.1\r\n"
+                              "Host: ws-us2.pusher.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                              f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+                sock.recv(2048)
+                sub = _json.dumps({"event": "pusher:subscribe", "data": {"auth": "", "channel": f"chatrooms.{room}.v2"}}).encode()
+                mask = os.urandom(4)
+                masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(sub))
+                sock.sendall(bytes([0x81, 0x80 | len(sub)]) + mask + masked)
+                sock.settimeout(30)
+                self.chat_on = True
+                buf = b""
+                while not self.stop_flag.is_set() and not self.ended:
+                    try:
+                        chunk = sock.recv(4096)
+                    except socket.timeout:
+                        continue
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while len(buf) >= 2:
+                        length = buf[1] & 127
+                        header = 2
+                        if length == 126:
+                            if len(buf) < 4:
+                                break
+                            length = int.from_bytes(buf[2:4], "big")
+                            header = 4
+                        if len(buf) < header + length:
+                            break
+                        body = buf[header:header + length]
+                        buf = buf[header + length:]
+                        if kickchat.is_chat_message(body):
+                            with self.lock:
+                                self.chat[int(self.samples / SR)] += 1
+                                self.chat_total += 1
+                sock.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.chat_on = False
+            self.stop_flag.wait(8)
 
     def _chat_spike(self, s, e):
         """True if chat was at least 3x busier than usual during (and just after) these seconds."""

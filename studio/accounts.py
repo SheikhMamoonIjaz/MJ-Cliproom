@@ -385,7 +385,32 @@ def _yt_token(acc) -> str:
     return acc["access_token"]
 
 
-def youtube_upload(acc, path: Path, title: str, description: str, tags: list, privacy: str):
+def session_location(resume, size: int) -> str:
+    """A saved YouTube upload address, only when it matches this file and this host."""
+    if not isinstance(resume, dict):
+        return ""
+    loc = str(resume.get("location") or "")
+    try:
+        same = int(resume.get("size") or -1) == int(size)
+    except (TypeError, ValueError):
+        same = False
+    if same and loc.startswith("https://www.googleapis.com/upload/youtube/"):
+        return loc
+    return ""
+
+
+def youtube_thumbnail(acc, video_id: str, image: Path):
+    """Set the custom thumbnail. YouTube may reject this until the channel is allowed to."""
+    token = _yt_token(acc)
+    data = Path(image).read_bytes()
+    _check(httpx.post("https://www.googleapis.com/upload/youtube/v3/thumbnails/set",
+                      params={"videoId": video_id, "uploadType": "media"}, content=data,
+                      headers={"Authorization": f"Bearer {token}", "Content-Type": "image/jpeg"}, timeout=60),
+           "Setting the YouTube thumbnail")
+
+
+def youtube_upload(acc, path: Path, title: str, description: str, tags: list, privacy: str,
+                   resume=None, on_session=None, thumbnail: Path = None):
     clean_title = re.sub(r"[<>]", "", str(title or "")).strip()[:100]
     if not clean_title or clean_title.lower() in ("clip", "untitled clip", "manual clip"):
         raise ValueError("Add a specific clip title before uploading to YouTube.")
@@ -396,21 +421,38 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
                         "tags": clean_tags, "categoryId": "20"},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
     size = path.stat().st_size
-    start = _check(httpx.post("https://www.googleapis.com/upload/youtube/v3/videos",
-                              params={"uploadType": "resumable", "part": "snippet,status"}, json=meta,
-                              headers={"Authorization": f"Bearer {token}", "X-Upload-Content-Type": "video/mp4",
-                                       "X-Upload-Content-Length": str(size)}, timeout=60), "Starting the YouTube upload")
-    location = start.headers.get("Location", "")
-    if not location.startswith("https://www.googleapis.com/upload/youtube/"):
-        raise RuntimeError("YouTube did not return a valid resumable upload address.")
-    offset, done = 0, None
+    location = session_location(resume, size)
+    offset, done = int((resume or {}).get("offset") or 0) if location else 0, None
+    if location:
+        try:
+            probe = httpx.put(location, content=b"", headers={
+                "Authorization": f"Bearer {token}", "Content-Length": "0",
+                "Content-Range": f"bytes */{size}"}, timeout=60)
+        except httpx.RequestError:
+            probe = None
+        if probe is not None and probe.status_code in (200, 201):
+            done = probe.json()
+        elif probe is not None and probe.status_code == 308:
+            offset = max(offset, int(re.search(r"bytes=0-(\d+)", probe.headers.get("Range", "")).group(1)) + 1) if re.search(r"bytes=0-(\d+)", probe.headers.get("Range", "")) else offset
+    if not location and not done:
+        start = _check(httpx.post("https://www.googleapis.com/upload/youtube/v3/videos",
+                                  params={"uploadType": "resumable", "part": "snippet,status"}, json=meta,
+                                  headers={"Authorization": f"Bearer {token}", "X-Upload-Content-Type": "video/mp4",
+                                           "X-Upload-Content-Length": str(size)}, timeout=60), "Starting the YouTube upload")
+        location = start.headers.get("Location", "")
+        if not location.startswith("https://www.googleapis.com/upload/youtube/"):
+            raise RuntimeError("YouTube did not return a valid resumable upload address.")
+        offset = 0
+    if on_session and location:
+        on_session({"location": location, "size": size, "offset": offset})
     chunk_size = 8 * 1024 * 1024  # multiple of Google's 256 KB chunk requirement
 
     def received(response):
         match = re.search(r"bytes=0-(\d+)", response.headers.get("Range", ""))
         return int(match.group(1)) + 1 if match else 0
 
-    with path.open("rb") as f:
+    if not done:
+      with path.open("rb") as f:
         while offset < size:
             f.seek(offset)
             chunk = f.read(min(chunk_size, size - offset))
@@ -433,6 +475,8 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
                     next_offset = received(response)
                     if next_offset > offset:
                         offset, advanced = next_offset, True
+                        if on_session:
+                            on_session({"location": location, "size": size, "offset": offset})
                         break
                 if response is not None and response.status_code < 500:
                     if response.status_code != 308:
@@ -471,6 +515,11 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
                 raise RuntimeError("YouTube reported an invalid upload position.")
     if not done or not done.get("id"):
         raise RuntimeError("YouTube did not confirm that the clip upload finished.")
+    if thumbnail and Path(thumbnail).is_file():
+        try:
+            youtube_thumbnail(acc, done["id"], Path(thumbnail))
+        except Exception:  # noqa: BLE001 - the video is already up if the thumbnail is refused
+            pass
     return done["id"], f"https://www.youtube.com/shorts/{done['id']}"
 
 

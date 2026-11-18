@@ -97,8 +97,12 @@ def _next_slot(account_id, gap_min, gap_max, cap):
 
 
 def settle_interrupted(post):
-    """A restart cut an upload off. Autopilot tries again; a hand-made post waits for a person."""
+    """A restart cut an upload off. A saved YouTube session is continued. Autopilot tries again. A hand-made post waits."""
     if post.get("status") != "posting":
+        return post
+    if post.get("upload_session"):
+        post.update(status="scheduled", due_at=time.time() + 20,
+                    error="The upload will continue from the saved YouTube session.")
         return post
     if post.get("autopilot"):
         tries = int(post.get("tries") or 0) + 1
@@ -232,7 +236,17 @@ def _post(p):
         title, cap = metadata["title"], _caption(metadata, creator)
         if acc["platform"] == "youtube":
             privacy = (job.get("automation", {}).get("visibility", "private") if p.get("automatic") else creator["privacy"])
-            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", metadata["hashtags"], privacy)
+            thumb = Path(job["dir"]) / "clips" / f"{clip['id']}-thumb.jpg"
+            if not thumb.is_file():
+                thumb = None
+
+            def remember(session, post=p):
+                post["upload_session"] = session
+                _save()
+
+            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", metadata["hashtags"], privacy,
+                                               resume=p.get("upload_session"), on_session=remember, thumbnail=thumb)
+            p.pop("upload_session", None)
         elif acc["platform"] == "instagram":
             rid, url = accounts.instagram_upload(acc, path, f"{title}\n\n{cap}", job["id"])
         elif acc["platform"] == "tiktok":

@@ -12,6 +12,7 @@ import re
 import threading
 import time
 import traceback
+from pathlib import Path
 from . import accounts, auth, config, creators, ctx, jobs, live, posting, profiles
 
 RIGHTS_STATUSES = ("AUTHORIZED", "PERMISSION_REQUIRED", "RESTRICTED", "UNKNOWN")
@@ -91,6 +92,9 @@ def default_settings() -> dict:
         "privacy": config.env("PEAKCUT_AUTOPILOT_PRIVACY", "private") if config.env("PEAKCUT_AUTOPILOT_PRIVACY", "private") in ("private", "unlisted", "public") else "private",
         "commentary_id": "",
         "poll_seconds": _bounded_int(config.env("PEAKCUT_AUTOPILOT_POLL", "90"), 30, 600, 90),
+        "original_mode": False,
+        "original_topic": "",
+        "original_per_day": 1,
     }
 
 
@@ -148,6 +152,7 @@ def clean_channel(row: dict) -> dict:
     return {"id": ident, "platform": platform, "name": name or handle or "Channel", "handle": handle,
             "verified_handle": row.get("verified_handle") is True, "rights": row.get("rights") is True,
             "rights_status": status, "full_auto": row.get("full_auto") is True,
+            "rights_until": _expiry(row.get("rights_until")),
             "note": str(row.get("note") or "")[:300]}
 
 
@@ -181,10 +186,16 @@ def clean_settings(data: dict, previous=None) -> dict:
     if "commentary_id" in data:
         base["commentary_id"] = str(data.get("commentary_id") or "")[:32]
     base["language"] = "en"
+    if "original_mode" in data:
+        base["original_mode"] = data.get("original_mode") is True
+    if "original_topic" in data:
+        base["original_topic"] = str(data.get("original_topic") or "")[:240]
+    if "original_per_day" in data:
+        base["original_per_day"] = _bounded_int(data.get("original_per_day"), 0, 4, 1)
     enabled = data.get("enabled") if "enabled" in data else base.get("enabled")
     base["enabled"] = False
     if enabled is True:
-        if not any(can_publish(row) for row in base["channels"]):
+        if not base.get("original_mode") and not any(can_publish(row) for row in base["channels"]):
             raise ValueError("Mark at least one source as allowlisted and Authorized before turning Autopilot on.")
         base["enabled"] = True
     return base
@@ -225,6 +236,15 @@ def save(state):
     ctx.bump()
 
 
+def _expiry(value):
+    if value in (None, "", 0):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def channel_url(row: dict) -> str:
     handle = str(row.get("handle") or "").strip().lstrip("@")
     platform = row.get("platform")
@@ -237,9 +257,21 @@ def channel_url(row: dict) -> str:
     return f"https://www.youtube.com/@{handle}"
 
 
-def can_publish(row: dict) -> bool:
-    """Uploads are allowed only from an allowlisted source the owner marked Authorized."""
-    return bool(row.get("rights")) and row.get("rights_status") == "AUTHORIZED"
+def rights_open(row: dict, now=None) -> bool:
+    """An Authorized source can carry an expiry. No date means it has not expired."""
+    until = row.get("rights_until")
+    if not until:
+        return True
+    now = time.time() if now is None else now
+    try:
+        return float(until) > float(now)
+    except (TypeError, ValueError):
+        return False
+
+
+def can_publish(row: dict, now=None) -> bool:
+    """Uploads of someone else's footage need an allowlist tick, Authorized, and an unexpired date."""
+    return bool(row.get("rights")) and row.get("rights_status") == "AUTHORIZED" and rights_open(row, now)
 
 
 def classify_game(*parts) -> str:
@@ -299,23 +331,21 @@ def speech_language(words) -> str:
 
 
 def accept_language(meta_lang: str, title: str, words) -> tuple:
-    """English only. Unknown speech is not treated as English."""
+    """English only. A missing language tag does not skip a Latin title, and clear English speech wins over a wrong tag."""
     from . import roman
     lang = (meta_lang or "").lower().split("-")[0].split("_")[0]
-    if lang and lang != "en":
-        return False, f"The stream language is {lang}, not English."
     if roman.needs_roman(title or ""):
         return False, "The title is not in a Latin script, so the stream was skipped."
-    if words is None:
-        if lang == "en":
-            return True, "The stream says it is in English."
-        return False, "The language is not confirmed yet."
-    spoken = speech_language(words)
+    spoken = speech_language(words) if words else ""
     if spoken == "en":
         return True, "The speech sounds like English."
+    if lang and lang != "en":
+        return False, f"The stream language is {lang}, not English."
     if spoken == "other":
         return False, "The speech does not sound like English."
-    return False, "There was not enough English speech to be sure."
+    if lang == "en":
+        return True, "The stream says it is in English."
+    return True, "No language tag was found. The Latin title is kept so an English stream is not skipped."
 
 
 def _tokens(text: str) -> set:
@@ -477,7 +507,27 @@ def consider_clip(state, job, clip, now=None) -> dict:
     """Decide whether a finished autopilot clip is uploaded, held for review, or skipped."""
     now = time.time() if now is None else now
     key = f"{job.get('id')}:{clip.get('id')}"
-    if key in state["handled"] or not job.get("autopilot_source"):
+    if key in state["handled"] or not (job.get("autopilot_source") or job.get("original")):
+        return state
+    if job.get("original"):
+        score = viral_score(clip, game="gta6", has_commentary=True, live=False)
+        clip["viral"] = score
+        _cover(job, clip)
+        if not quota_room(state, now):
+            _queue(state, job, clip, "review", "Held: the YouTube quota budget for today is used up.", now, score)
+        else:
+            account_ids = _youtube_ids()
+            if not account_ids:
+                _queue(state, job, clip, "review", "Connect a YouTube channel before this original short can upload.", now, score)
+            else:
+                made = posting.enqueue(job, clip, account_ids, automatic=True, autopilot=True)
+                if made:
+                    reserve_quota(state, now)
+                    item = _queue(state, job, clip, "queued", "Original short queued. It uses no one else's footage.", now, score)
+                    item["post_id"] = made[0]["id"]
+                else:
+                    _queue(state, job, clip, "skipped", "This original short is already queued.", now, score)
+        state["handled"] = (state["handled"] + [key])[-400:]
         return state
     row = next((item for item in state["settings"]["channels"] if channel_url(item) == job.get("autopilot_source")), None)
     text = " ".join(str(clip.get(k) or "") for k in ("title", "hook", "description", "reason"))
@@ -492,6 +542,8 @@ def consider_clip(state, job, clip, now=None) -> dict:
         return state
     score = viral_score(clip, game=game, has_commentary=bool(clip.get("commentary_id")), live=True)
     clip["viral"] = score
+    _cover(job, clip)
+    _pack(job, clip)
     choice = disposition(clip, row or {})
     if choice == "skip":
         _queue(state, job, clip, "skipped", "Rights are not Authorized, so this clip was not uploaded.", now, score)
@@ -518,6 +570,33 @@ def consider_clip(state, job, clip, now=None) -> dict:
     return state
 
 
+def _cover(job, clip):
+    """A styled thumbnail from the busiest second, saved beside the clip."""
+    try:
+        from . import thumbs
+        moment = thumbs.peak_time(job.get("levels") or [], clip.get("start") or 0, clip.get("end") or 0)
+        clip["cover_at"] = moment
+        hook = str(clip.get("hook") or clip.get("title") or "GTA 6")[:80]
+        streamer = str((clip.get("source_credit") or {}).get("name") or "")[:40]
+        folder = Path(job["dir"]) / "clips"
+        thumbs.draw_thumbnail(folder / f"{clip['id']}-thumb.jpg", hook, wide=True, streamer=streamer)
+        thumbs.draw_thumbnail(folder / f"{clip['id']}-cover.jpg", hook, wide=False, streamer=streamer)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _pack(job, clip):
+    """Titles and captions from the words already on the clip. They do not invent a new event."""
+    try:
+        from . import brain
+        spoken = " ".join(str(clip.get(k) or "") for k in ("description", "hook", "title"))
+        credit = clip.get("source_credit") or {}
+        clip["pack"] = brain.viral_pack(spoken, job.get("game") or job.get("title") or "",
+                                         credit.get("name") or "", credit.get("url") or "", clip.get("hook") or "")
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _queue(state, job, clip, status, reason, now, score=None):
     item = {"id": f"{job.get('id')}:{clip.get('id')}", "job": job.get("id"), "clip": clip.get("id"),
             "title": clip.get("title") or clip.get("hook") or "Clip", "status": status, "reason": reason,
@@ -541,7 +620,10 @@ def approve(state, item_id, now=None):
     clip = next((c for c in (job or {}).get("clips", []) if c.get("id") == item["clip"]), None)
     if not job or not clip or clip.get("status") != "done":
         raise ValueError("That clip is no longer ready.")
-    row = next((src for src in state["settings"]["channels"] if channel_url(src) == job.get("autopilot_source")), None)
+    if job.get("original"):
+        row = {"rights": True, "rights_status": "AUTHORIZED"}
+    else:
+        row = next((src for src in state["settings"]["channels"] if channel_url(src) == job.get("autopilot_source")), None)
     if not row or not can_publish(row):
         raise ValueError("Mark this source allowlisted and Authorized before uploading it.")
     if not quota_room(state, now):
@@ -607,7 +689,7 @@ def production_start(state, row, info):
     if classify_game(title) != "gta6" and classify_game(info.get("category") or "") == "gta6":
         title = f"GTA 6 — {title}"[:180]
     shadow = dict(creator)
-    shadow.update(rights_cleared=True, signal_fallback=True, layout="stack", brand=True, facecam="left",
+    shadow.update(rights_cleared=True, signal_fallback=True, layout="stack", brand=True, facecam="auto",
                   allow_parallel=True,
                   commentary_id=state["settings"].get("commentary_id") or "",
                   source_credit={"name": row["name"], "url": url})
@@ -622,14 +704,17 @@ def production_start(state, row, info):
 
 def _language_gate(row, info):
     meta = str(info.get("language") or "")
-    ok, why = accept_language(meta, str(info.get("title") or ""), None)
-    if ok or "not English" in why or "Latin script" in why:
+    title = str(info.get("title") or "")
+    ok, why = accept_language(meta, title, None)
+    if ok or "Latin script" in why:
         return ok, why
     from . import transcribe
     if not transcribe.model_ready() and not transcribe.REMOTE:
-        return False, "The language is not confirmed and the speech model is not ready."
+        return False, why
     words = _sample_words(channel_url(row))
-    return accept_language(meta, str(info.get("title") or ""), words)
+    if not words:
+        return False, why
+    return accept_language(meta, title, words)
 
 
 def _sample_words(url):
@@ -716,6 +801,18 @@ def cycle(record=True):
                          active=_active_urls(), language=_language_gate, record=record)
         if record:
             reconcile(state)
+            maybe_original(state)
+            day = time.strftime("%Y-%m-%d", time.gmtime())
+            if state.get("summary_day") != day:
+                state["summary_day"] = day
+                text = daily_summary(state)
+                try:
+                    from . import alerts
+                    alerts.notify(text.replace("\n", " ")[:300], kind="live")
+                    if alerts.configured():
+                        alerts.send(text)
+                except Exception:  # noqa: BLE001
+                    pass
         save(state)
         return state
     finally:
@@ -729,6 +826,69 @@ def update_settings(patch: dict) -> dict:
         creator = _ensure_creator(state["settings"])
         state["creator_id"] = creator["id"]
     save(state)
+    return state
+
+
+def daily_summary(state, now=None) -> str:
+    """A short in-app and alert summary. It never asks a creator for permission."""
+    now = time.time() if now is None else now
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    queued = [row for row in state.get("queue") or [] if row.get("status") in ("queued", "review")]
+    errors = state.get("errors") or []
+    live_now = [row for row in state.get("streams") or [] if row.get("live")]
+    expired = [row["name"] for row in state["settings"]["channels"] if row.get("rights") and not rights_open(row, now)]
+    lines = [f"MJ Cliproom autopilot summary {day}",
+             f"Live matches: {len(live_now)}. Waiting clips: {len(queued)}. Recent errors: {len(errors[:5])}."]
+    if expired:
+        lines.append("Rights expired: " + ", ".join(expired[:8]))
+    if state["settings"].get("original_mode"):
+        lines.append("Original shorts are on. They do not use anyone else's footage.")
+    return "\n".join(lines)
+
+
+def maybe_original(state, now=None):
+    """Make at most a few original shorts a day when that mode is on."""
+    if not state["settings"].get("original_mode"):
+        return state
+    now = time.time() if now is None else now
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    made = int(state.get("original_day_count") or 0) if state.get("original_day") == day else 0
+    if made >= int(state["settings"].get("original_per_day") or 1):
+        return state
+    from . import original
+    creator = _ensure_creator(state["settings"])
+    state["creator_id"] = creator["id"]
+    text = original.script(state["settings"].get("original_topic") or "")
+    job = jobs.create({"type": "file", "path": "", "name": "MJ Plays GTA original"}, {"mode": "manual", "max_clips": 1},
+                      enqueue=False, creator=creator["id"], rights_cleared=True)
+    job["original"] = True
+    job["autopilot_source"] = "original"
+    job["game"] = "gta6"
+    job["rights_cleared"] = True
+    folder = Path(job["dir"]) / "clips"
+    folder.mkdir(parents=True, exist_ok=True)
+    video = folder / "original.mp4"
+    voice = None
+    if state["settings"].get("commentary_id"):
+        from . import commentary
+        track = commentary.get(state["settings"]["commentary_id"])
+        voice = track["path"] if track else None
+    try:
+        original.build(video, text, voice)
+    except Exception as exc:  # noqa: BLE001
+        state["errors"] = ([{"at": now, "message": f"Original short failed: {exc}"}] + state["errors"])[:30]
+        jobs.save(job)
+        return state
+    clip = {"id": "orig001", "status": "done", "file": "original.mp4", "start": 0, "end": 12, "score": 70,
+            "score_source": "original", "title": "MJ Plays GTA update", "hook": "Original update",
+            "description": text, "hashtags": ["GTA6", "MJPlaysGTA", "Shorts"], "version": 1,
+            "source_credit": {"name": "MJ Plays GTA", "url": "https://www.youtube.com/"}}
+    job["clips"] = [clip]
+    job["status"] = "done"
+    jobs.save(job)
+    consider_clip(state, job, clip, now)
+    state["original_day"] = day
+    state["original_day_count"] = made + 1
     return state
 
 
@@ -746,6 +906,8 @@ def public(state=None) -> dict:
             "commentary": {k: track[k] for k in ("id", "name", "duration")} if track else None,
             "streams": state["streams"][:40], "queue": state["queue"][:40], "errors": state["errors"][:20],
             "drafts": state.get("drafts") or [], "creators": len(creator_names(settings["channels"])),
+            "summary": daily_summary(state), "original_mode": settings.get("original_mode") is True,
+            "original_topic": settings.get("original_topic") or "",
             "recording": len(_active_urls()), "rights_statuses": list(RIGHTS_STATUSES),
             "verified_channels": sum(1 for row in settings["channels"] if row.get("verified_handle") and row.get("handle"))}
 
