@@ -60,7 +60,9 @@ def resolve(url: str) -> dict:
         if media.note_refusal(url, e):
             raise NotLive(media.YT_BLOCKED) from e
         raise NotLive(str(e)[-200:]) from e
-    if not info or not info.get("is_live"):
+    if not info or not info.get("is_live") or info.get("live_status") in ("is_upcoming", "post_live", "was_live"):
+        if info and info.get("live_status") == "is_upcoming":
+            raise NotLive("This stream is scheduled and has not started yet.")
         raise NotLive("This channel is not live right now.")
     fmts = info.get("requested_formats") or [info]
     title = info.get("title") or ""

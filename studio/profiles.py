@@ -229,6 +229,8 @@ def live_now(platform: str, url: str) -> dict:
         out = {"live": True, "viewers": None, "title": _meta(html, "og:title"), "started": None, "embed": vid}
         try:
             i = _ydl_info(base + "/live")
+            if i.get("live_status") in ("is_upcoming", "post_live", "was_live") or (i.get("is_live") is False and not i.get("live_status")):
+                return off
             out.update(viewers=i.get("concurrent_view_count"), title=_no_date(i.get("title")) or out["title"],
                        started=i.get("release_timestamp") or i.get("timestamp"), embed=i.get("id") or vid)
         except Exception:

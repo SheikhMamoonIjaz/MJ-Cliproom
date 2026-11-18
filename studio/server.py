@@ -1623,6 +1623,12 @@ def go_live(cid: str, body: dict = Body(default={})):
     asked = str((body or {}).get("channel") or "")
     url = asked if asked in c["channels"].values() else c["channel"] if c["channel"] in on_air or not on_air else on_air[0]
     try:
+        live.resolve(live.normalize(url))
+    except live.NotLive as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Could not verify live stream: {e}")
+    try:
         return jobs.public(live.start_session(c, url))
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1872,31 +1878,50 @@ def apps_put(request: Request, body: dict = Body(...)):
 @app.post("/api/posts")
 def add_posts(body: dict = Body(...)):
     job = jobs.get(str(body.get("job")))
-    clip = next((c for c in job["clips"] if c["id"] == body.get("clip")), None) if job else None
-    if not clip or clip.get("status") != "done":
-        raise HTTPException(404, "That clip is not ready")
+    if not job:
+        raise HTTPException(404, "No such video or job")
     _require_source_rights(job)
     if job.get("automation") and body.get("publish_authorized") is not True:
         raise HTTPException(400, "Confirm that you have permission to publish this clip to the selected accounts.")
+
+    clip_arg = body.get("clip")
+    clips_arg = body.get("clips")
+    if clip_arg == "all" or body.get("all_clips"):
+        target_clips = [c for c in job["clips"] if c.get("status") == "done"]
+    elif clips_arg and isinstance(clips_arg, list):
+        target_clips = [c for c in job["clips"] if c["id"] in clips_arg and c.get("status") == "done"]
+    else:
+        target_clips = [c for c in job["clips"] if c["id"] == clip_arg and c.get("status") == "done"]
+
+    if not target_clips:
+        raise HTTPException(404, "No finished clips are ready to post")
+
     metadata = body.get("metadata")
-    if metadata is not None:
+    if metadata is not None and len(target_clips) == 1:
         if not isinstance(metadata, dict):
             raise HTTPException(400, "Post text must include a title, description and hashtags.")
         try:
-            jobs.update_metadata(job, clip["id"], metadata)
+            jobs.update_metadata(job, target_clips[0]["id"], metadata)
         except RuntimeError as e:
             raise HTTPException(409, str(e))
         except ValueError as e:
             raise HTTPException(400, str(e))
-    try:
-        made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if not made:
+
+    account_ids = [str(a) for a in body.get("accounts", [])][:20]
+    all_made = []
+    for clip in target_clips:
+        try:
+            made = posting.enqueue(job, clip, account_ids, now=bool(body.get("now")))
+            all_made.extend(made)
+        except ValueError as e:
+            if len(target_clips) == 1:
+                raise HTTPException(400, str(e))
+
+    if not all_made:
         raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
-    return {"queued": len(made), "posts": [{"id": post["id"], "platform": post["platform"],
-                                             "account_name": post["account_name"], "status": post["status"],
-                                             "due_at": post["due_at"]} for post in made]}
+    return {"queued": len(all_made), "posts": [{"id": post["id"], "platform": post["platform"],
+                                                 "account_name": post["account_name"], "status": post["status"],
+                                                 "due_at": post["due_at"]} for post in all_made]}
 
 
 @app.post("/api/posts/{pid}/{action}")

@@ -126,6 +126,7 @@ def info(url: str) -> dict:
         i = ydl.extract_info(url, download=False)
     return {"title": i.get("title") or "", "uploader": i.get("uploader") or i.get("channel") or "",
             "duration": float(i.get("duration") or 0), "is_live": bool(i.get("is_live")),
+            "live_status": i.get("live_status") or ("is_live" if i.get("is_live") else "not_live"),
             "thumbnail": i.get("thumbnail") or "", "kind": i.get("_type") or "video"}
 
 
@@ -241,6 +242,8 @@ def preview(url: str) -> dict:
     i = info(url)
     if i["kind"] != "video" or not i["title"]:
         raise ValueError("That link is a channel or playlist, not a single video.")
+    if i.get("live_status") == "is_upcoming":
+        raise ValueError("This stream is scheduled and has not started yet.")
     thumb = ""
     t = i.get("thumbnail") or ""
     if t.startswith("https://"):
