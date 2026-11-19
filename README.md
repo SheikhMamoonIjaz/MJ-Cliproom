@@ -1,4 +1,4 @@
-# MJ-Cliping · v1.2.1 (24/7 Autonomous AI Stream Clipping & Multi-Platform Production Studio)
+# MJ-Cliping · v1.2.2 (24/7 Autonomous AI Stream Clipping & Multi-Platform Production Studio)
 
 [What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 
@@ -6,7 +6,7 @@
 
 MJ-Cliping is maintained by [Sheikh Mamoon Ijaz](https://github.com/SheikhMamoonIjaz). It is an independent, gaming-first fork of [PeakCut](https://github.com/haziqahmedqasmi/PeakCut). This fork keeps the upstream MIT license and credits; see [CREDITS.md](CREDITS.md).
 
-## Version 1.2.1 Feature Architecture
+## Version 1.2.2 Feature Architecture
 
 ### 1. Automation & Growth (The 4 Core Pillars)
 - **Autopilot Posts & Review Queue:** Dedicated review dashboard for all clips created by 24/7 Autopilot with real-time renderer inspection.

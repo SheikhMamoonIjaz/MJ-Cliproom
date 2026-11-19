@@ -2,6 +2,21 @@
 
 User-facing changes to MJ-Cliping are listed here.
 
+## 1.2.2 — 2026-11-20
+
+- **Clipping Tool & Rendering Pipeline Polish:**
+  - Hardened path resolution in clip collection so missing job directory attributes fall back safely to the data directory without raising null-pointer exceptions.
+  - Video players in the Autopilot Posts review drawer now use `preload="metadata"` for instantaneous card rendering without consuming extra bandwidth.
+  - Enhanced error handling with visual diagnostics on failed YouTube uploads and a 1-click retry button.
+- **Autopilot API Handling & Staggered Scheduling:**
+  - Added true staggered 10-minute intervals (`stagger_index`) in `/api/v12/autopilot-posts/schedule-10m` so bulk scheduling properly spaces out publications (+10m, +20m, +30m, etc.) rather than batching them at the identical second.
+  - Thread-safe user context attachment (`ctx.as_user()`) for immediate publish threads ensuring valid OAuth token access when triggering "⚡ Post Now".
+  - Cancellation now immediately resets scheduling timestamps and live countdown tickers in real time.
+- **In-App Update & Seamless Restart Engine:**
+  - Resolved restart loop when files on disk match the remote commit (`RUNNING != target`), enabling seamless zero-downtime updates from the web UI.
+  - Added direct "Restart now" action button in the update banner when a new version has completed downloading.
+  - Integrated live sync polling for Autopilot Posts so rendered clips and queue updates reflect automatically in the dashboard.
+
 ## 1.2.1 — 2026-11-19
 
 - **Autopilot Posts & Review Queue (Dedicated Section):**

@@ -1489,20 +1489,20 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await copyText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "1.2.1";
+const RELEASE = "1.2.2";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_2_1";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_2_2";
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.2.1</h2>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.2.2</h2>
     <ul>
       <li><b>Autopilot Posts & Review Queue:</b> Dedicated section to review, inspect and manage all clips rendered by Autopilot with zero metadata or caption mistakes.</li>
-      <li><b>1-Click 10-Minute YouTube Auto-Scheduler:</b> 1-click button with live second-by-second countdown automatically uploading clips to YouTube Shorts after 10 minutes.</li>
+      <li><b>1-Click 10-Minute YouTube Auto-Scheduler:</b> 1-click button with live second-by-second countdown automatically uploading clips to YouTube Shorts after 10 minutes with automated staggered intervals.</li>
       <li><b>AI Viral Metadata & Trending Hashtags:</b> High-retention hooks, meta descriptions, and trending gaming hashtags (#GTA6 #Shorts #Gaming #Viral #Trending).</li>
       <li><b>Renderer Technical Readout:</b> Visual inspector displaying 9:16 vertical resolution (1080x1920 @ 60FPS), facecam tracking, LUFS audio normalization, and NVENC GPU pipeline.</li>
-      <li><b>Timed Captions Inspector:</b> Dialogue and audio spike inspector to review subtitle accuracy before publishing.</li>
+      <li><b>Seamless Restarts & Updates:</b> One-click in-app restart engine, live sync polling, and robust clipping pipeline error handling.</li>
     </ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
@@ -2484,7 +2484,7 @@ async function loadAutopilotPosts() {
   } catch (err) {
     const notFound = err.message && err.message.toLowerCase().includes("not found");
     box.innerHTML = `<div class="card" style="padding:24px;text-align:center">
-      <p class="err" style="margin-bottom:12px">${notFound ? "Autopilot Posts is ready on the server, but requires a quick restart to activate v1.2.1." : esc(err.message)}</p>
+      <p class="err" style="margin-bottom:12px">${notFound ? "Autopilot Posts is ready on the server, but requires a quick restart to activate v1.2.2." : esc(err.message)}</p>
       <div style="display:flex;gap:8px;justify-content:center">
         ${notFound ? `<button class="btn sm primary" data-act="restart-app">Restart MJ Cliproom</button>` : ""}
         <button class="btn sm ${notFound ? "" : "primary"}" data-act="load-autoposts">Retry</button>
