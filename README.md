@@ -92,7 +92,7 @@ The first run fetches the speech-recognition model (about 480 MB). The model run
    .\.venv\Scripts\python.exe -m studio.launcher
    ```
 
-5. Open [http://127.0.0.1:8765](http://127.0.0.1:8765) in your web browser.
+5. Open [http://localhost:8765](http://localhost:8765) in your web browser.
 
 ### Install on macOS
 

@@ -35,6 +35,9 @@ User-facing changes to MJ-Cliping are listed here.
   - Live system inspection checking hardware GPU video encoders (NVENC/QSV), local Sherpa-ONNX speech latency (<0.3s), available disk storage, and zero-overlap UI layout integrity.
 - **Desktop Shortcut Installer:**
   - Automated PowerShell installer now generates a 1-click desktop shortcut (`MJ-Cliping.lnk`) pointing to the local studio launcher.
+- **Twitch Live Stream Embed Fix:**
+  - Resolved Twitch embedding restriction where Twitch blocks numerical IP addresses (`127.0.0.1`) under its `parent` security policy.
+  - Added automatic transparent redirect from `127.0.0.1` to `localhost`, dual `parent=localhost` parameters in Twitch player frames, and updated default public URL to `http://localhost:8765`, enabling seamless in-app live stream playback.
 
 ## 1.1.0 — 2026-11-19
 

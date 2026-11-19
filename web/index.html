@@ -930,6 +930,12 @@ dialog[open]{animation:fadein .16s ease}
 <div class="pop menu" id="acctpop" role="menu" hidden></div>
 
 <script>
+// Auto-switch loopback IP (127.0.0.1) to localhost so Twitch embeds and local cross-origin iframes work without domain blocks
+if (location.hostname === "127.0.0.1") {
+  const _u = new URL(location.href);
+  _u.hostname = "localhost";
+  location.replace(_u.href);
+}
 /* ============================================================ helpers */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -1309,7 +1315,10 @@ const avatarUrl = (c, k) => `/api/creators/${encodeURIComponent(c.id)}/avatar?${
 const fmtK = n => (n = Number(n) || 0) >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K" : String(n);
 function playerSrc(k, e) {
   if (!e) return "";
-  if (k === "twitch") return `https://player.twitch.tv/?channel=${encodeURIComponent(e)}&parent=${location.hostname}&muted=true&autoplay=true`;
+  if (k === "twitch") {
+    const parentHost = (location.hostname === "127.0.0.1" || !location.hostname) ? "localhost" : location.hostname;
+    return `https://player.twitch.tv/?channel=${encodeURIComponent(e)}&parent=${encodeURIComponent(parentHost)}&parent=localhost&muted=true&autoplay=true`;
+  }
   if (k === "youtube") return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(e)}?autoplay=1&mute=1&playsinline=1`;
   if (k === "kick") return `https://player.kick.com/${encodeURIComponent(e)}?muted=true&autoplay=true`;
   return "";
@@ -1327,9 +1336,17 @@ function drawStream() {
   if (pl.dataset.src !== src) {           // only swap the player when the stream changes, never on a refresh
     pl.dataset.src = src;
     const ipHost = /^[\d.]+$|^\[/.test(location.hostname);
-    pl.innerHTML = k === "twitch" && ipHost
-      ? `<div class="noembed">${platLogo(k)}<b>Twitch only plays inside sites with a web address</b><span>It will play here once MJ Cliproom is on its domain, or open MJ Cliproom at localhost instead of ${esc(location.hostname)}.</span><a class="btn sm" href="${esc(p.channel)}" target="_blank" rel="noopener">Watch on Twitch ${ic("upright")}</a></div>`
-      : src ? `<iframe src="${src}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="${PLAT[k].name} live stream"></iframe>` : "";
+    if (k === "twitch" && ipHost) {
+      if (location.hostname === "127.0.0.1") {
+        const u = new URL(location.href);
+        u.hostname = "localhost";
+        location.replace(u.href);
+        return;
+      }
+      pl.innerHTML = `<div class="noembed">${platLogo(k)}<b>Twitch requires domain or localhost</b><span>Twitch embed policy does not allow raw IP addresses (${esc(location.hostname)}). Switch to localhost to play stream directly.</span><div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm primary" type="button" onclick="const u=new URL(location.href);u.hostname='localhost';location.replace(u.href)">Switch to localhost</button><a class="btn sm" href="${esc(p.channel)}" target="_blank" rel="noopener">Watch on Twitch ${ic("upright")}</a></div></div>`;
+    } else {
+      pl.innerHTML = src ? `<iframe src="${src}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="${PLAT[k].name} live stream"></iframe>` : "";
+    }
   }
   const stats = [p.viewers != null ? [fmtK(p.viewers), "watching"] : null, p.started ? [since(p.started), "live for"] : null,
                  p.followers ? [p.followers.split(" ")[0], p.followers.split(" ").slice(1).join(" ")] : null].filter(Boolean);
