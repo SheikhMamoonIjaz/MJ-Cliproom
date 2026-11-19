@@ -2980,7 +2980,8 @@ def _collect_autopilot_clips():
             p = posts_by_clip.get(key)
             duration = round(float(c.get("duration") or (c.get("end", 0) - c.get("start", 0))), 1)
             file_name = c.get("file")
-            is_rendered = bool(file_name and (Path(j["dir"]) / "clips" / file_name).is_file())
+            j_dir = Path(j.get("dir") or (config.DATA_DIR / "videos" / jid))
+            is_rendered = bool(file_name and (j_dir / "clips" / file_name).is_file())
 
             words = c.get("fixed_words") or []
             caption_text = " ".join(w.get("w", "") for w in words if isinstance(w, dict)) if words else c.get("description") or ""
@@ -3015,8 +3016,8 @@ def _collect_autopilot_clips():
                     "status": "Render Complete" if is_rendered else "Processing in Queue"
                 },
                 "video_url": f"/media/{jid}/{file_name}" if is_rendered else None,
-                "cover_url": f"/media/{jid}/{cid}-cover.jpg" if (Path(j["dir"]) / "clips" / f"{cid}-cover.jpg").is_file() else None,
-                "thumb_url": f"/media/{jid}/{cid}-thumb.jpg" if (Path(j["dir"]) / "clips" / f"{cid}-thumb.jpg").is_file() else None,
+                "cover_url": f"/media/{jid}/{cid}-cover.jpg" if (j_dir / "clips" / f"{cid}-cover.jpg").is_file() else None,
+                "thumb_url": f"/media/{jid}/{cid}-thumb.jpg" if (j_dir / "clips" / f"{cid}-thumb.jpg").is_file() else None,
                 "captions_count": len(words) if words else len(caption_text.split()),
                 "captions_text": caption_text,
                 "viral_score": c.get("score") or c.get("viral") or 95,
@@ -3158,7 +3159,9 @@ def schedule_autopilot_post_10m(body: dict = Body(...)):
         tags = [t.strip() for t in tags.split() if t.strip()]
     tags = [f"#{t.lstrip('#')}" for t in tags if t]
 
-    due_time = time.time() + 600  # exactly 10 minutes (600 seconds)
+    stagger_idx = int(body.get("stagger_index", 0))
+    delay_sec = int(body.get("delay_seconds") or (stagger_idx * 600 + 600))
+    due_time = time.time() + max(30, delay_sec)
 
     j = jobs.get(jid)
     clip = next((c for c in (j.get("clips", []) if j else []) if c["id"] == cid), None)
@@ -3177,7 +3180,7 @@ def schedule_autopilot_post_10m(body: dict = Body(...)):
     with posting._lock:
         existing = next((p for p in posting._posts if p.get("job") == jid and p.get("clip") == cid), None)
         if existing:
-            existing.update(status="scheduled", due_at=due_time, error=None)
+            existing.update(status="scheduled", due_at=due_time, error=None, user=ctx.uid())
             if title:
                 existing["title"] = title
             if desc:
@@ -3216,14 +3219,14 @@ def schedule_autopilot_post_10m(body: dict = Body(...)):
                 posting._mirror(new_post)
         posting._save()
 
-    _autonomous_log(f"1-Click Schedule: '{title or cid}' queued for auto-upload to YouTube Shorts in 10 minutes.")
+    _autonomous_log(f"1-Click Schedule: '{title or cid}' queued for auto-upload to YouTube Shorts in {round(delay_sec / 60)} minutes.")
     ctx.bump()
     return {
         "ok": True,
         "post_id": post_id,
         "due_at": due_time,
-        "countdown_sec": 600,
-        "message": "Scheduled to upload on YouTube in 10 minutes!"
+        "countdown_sec": delay_sec,
+        "message": f"Scheduled to upload on YouTube in {round(delay_sec / 60)} minutes!"
     }
 
 
@@ -3258,9 +3261,16 @@ def post_autopilot_now(body: dict = Body(...)):
         else:
             target["due_at"] = time.time()
             target["status"] = "scheduled"
+            target["user"] = ctx.uid()
         posting._save()
 
-    threading.Thread(target=posting._post, args=(target,), daemon=True).start()
+    user_id = ctx.uid()
+
+    def _run_post(p, uid):
+        with ctx.as_user(uid):
+            posting._post(p)
+
+    threading.Thread(target=_run_post, args=(target, user_id), daemon=True).start()
     _autonomous_log(f"Immediate publish triggered for post '{target.get('title')}'.")
     ctx.bump()
     return {"ok": True, "message": "Publishing to YouTube Shorts now!"}
@@ -3275,11 +3285,14 @@ def cancel_autopilot_schedule(body: dict = Body(...)):
         target = next((p for p in posting._posts if (pid and p.get("id") == pid) or (p.get("job") == jid and p.get("clip") == cid)), None)
         if target:
             target["status"] = "cancelled"
+            target["due_at"] = None
             target["error"] = "Schedule cancelled by user."
             posting._save()
             j = jobs.get(jid)
             if j:
                 posting._mirror(target)
+    ctx.bump()
+    return {"ok": True, "message": "Schedule cancelled successfully."}
     ctx.bump()
     return {"ok": True, "message": "Schedule cancelled successfully."}
 

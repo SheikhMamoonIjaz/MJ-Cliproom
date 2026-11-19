@@ -2591,7 +2591,7 @@ function renderAutopilotCard(c) {
         <div class="ap-preview">
           <div class="ap-player-box">
             ${c.video_url ? `
-              <video src="${esc(c.video_url)}" controls playsinline poster="${esc(c.thumb_url || '')}"></video>
+              <video src="${esc(c.video_url)}" controls playsinline preload="metadata" poster="${esc(c.thumb_url || '')}"></video>
             ` : `
               <div class="placeholder-916">
                 ${ic("play")}
@@ -2671,6 +2671,16 @@ function renderAutopilotCard(c) {
                   <span style="font-size:13px;color:#047857">Successfully uploaded to YouTube Shorts!</span>
                 </div>
                 ${p.url ? `<a class="btn sm" href="${esc(p.url)}" target="_blank" rel="noopener">View on YouTube ${ic("upright")}</a>` : ""}
+              </div>
+            ` : p?.status === "failed" ? `
+              <div class="countdown-box" style="background:#fef2f2;border-color:#fecaca">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pill danger">Upload Failed</span>
+                  <span style="font-size:13px;color:#b91c1c">${esc(p.error || "Upload failed. Check YouTube settings.")}</span>
+                </div>
+                <button class="btn sm primary" data-act="sched10m" data-jid="${esc(c.jid)}" data-cid="${esc(c.cid)}">
+                  Retry Auto-Upload (10 Min)
+                </button>
               </div>
             ` : `
               <div class="countdown-box">
@@ -3862,6 +3872,7 @@ async function tick() {
     if (got.unread != null) S.status.unread = got.unread;
     if (S.view === "overview") { S.overview = await api("/api/overview"); S.ovAt = Date.now(); }
     if (S.view === "autopilot" && !autoDirty && !document.activeElement?.closest?.("#auto")) loadAutopilot(false);
+    if (S.view === "autopilot_posts" && !document.activeElement?.closest?.(".autopost-card")) loadAutopilotPosts();
     if (creatorId() && !creator()) return go("overview");
     render();
   } catch {}
@@ -4021,13 +4032,13 @@ document.addEventListener("click", async e => {
     if (a === "sched10m") {
       b.disabled = true;
       const jid = d.jid, cid = d.cid;
-      const card = $(`#card-${jid}-${cid}`);
+      const card = document.getElementById(`card-${jid}-${cid}`);
       const title = card?.querySelector(".ap-title-input")?.value;
       const desc = card?.querySelector(".ap-desc-input")?.value;
       const tags = card?.querySelector(".ap-tags-input")?.value;
       try {
-        await send("/api/v12/autopilot-posts/schedule-10m", {jid, cid, title, description: desc, hashtags: tags});
-        toast("Scheduled to auto-upload on YouTube in 10 minutes!", "ok");
+        const res = await send("/api/v12/autopilot-posts/schedule-10m", {jid, cid, title, description: desc, hashtags: tags});
+        toast(res.message || "Scheduled to auto-upload on YouTube in 10 minutes!", "ok");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }
@@ -4059,7 +4070,7 @@ document.addEventListener("click", async e => {
       const old = b.textContent;
       b.textContent = "AI Writing Viral Meta…";
       const jid = d.jid, cid = d.cid;
-      const card = $(`#card-${jid}-${cid}`);
+      const card = document.getElementById(`card-${jid}-${cid}`);
       const currentTitle = card?.querySelector(".ap-title-input")?.value || "";
       try {
         const res = await send("/api/v12/autopilot-posts/ai-viral-meta", {jid, cid, title: currentTitle});
@@ -4082,12 +4093,19 @@ document.addEventListener("click", async e => {
     if (a === "savemeta-ap") {
       b.disabled = true;
       const jid = d.jid, cid = d.cid;
-      const card = $(`#card-${jid}-${cid}`);
+      const card = document.getElementById(`card-${jid}-${cid}`);
       const title = card?.querySelector(".ap-title-input")?.value;
       const desc = card?.querySelector(".ap-desc-input")?.value;
       const tags = card?.querySelector(".ap-tags-input")?.value;
       try {
         await send("/api/v12/autopilot-posts/update-meta", {jid, cid, title, description: desc, hashtags: tags});
+        if (card && tags) {
+          const tagsDiv = card.querySelector(".ap-tags");
+          if (tagsDiv) {
+            const arr = tags.split(/\s+/).filter(Boolean).map(t => t.startsWith("#") ? t : "#" + t);
+            tagsDiv.innerHTML = arr.map(t => `<span class="ap-tag">${esc(t)}</span>`).join("");
+          }
+        }
         toast("Clip metadata saved.", "ok");
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }
@@ -4104,9 +4122,19 @@ document.addEventListener("click", async e => {
       try {
         const data = S.autopilotData?.clips || [];
         const unposted = data.filter(c => !c.scheduled_post || c.scheduled_post.status !== "scheduled");
+        let idx = 0;
         for (const c of unposted) {
-          await send("/api/v12/autopilot-posts/schedule-10m", {jid: c.jid, cid: c.cid, title: c.title, description: c.description, hashtags: c.hashtags});
+          await send("/api/v12/autopilot-posts/schedule-10m", {
+            jid: c.jid, cid: c.cid, title: c.title, description: c.description, hashtags: c.hashtags,
+            stagger_index: idx++
+          });
         }
+        toast(`Scheduled ${unposted.length} clip(s) for YouTube upload with 10-minute stagger intervals!`, "ok");
+        await loadAutopilotPosts();
+      } catch (err) { toast(err.message, "bad"); }
+      finally { b.disabled = false; }
+      return;
+    }
         toast(`Scheduled ${unposted.length} clip(s) for YouTube upload!`, "ok");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
