@@ -24,6 +24,7 @@ CLAUDE.local.md
 *.bat
 !update-mj-cliproom.bat
 !install-mj-cliproom.bat
+!create-desktop-shortcut.bat
 Thumbs.db
 .DS_Store
 

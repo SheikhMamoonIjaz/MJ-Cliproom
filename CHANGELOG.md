@@ -1,6 +1,53 @@
 # Changelog
 
-User-facing changes to MJ Cliproom are listed here.
+User-facing changes to MJ-Cliping are listed here.
+
+## 1.2.0 — 2026-11-19
+
+- **24/7 Autonomous Autopilot & Persistence:**
+  - Background autonomous clipping loop runs continuously every 20–30 minutes, discovering live streams and viral gaming moments.
+  - State persistence saved in `autonomous.json` ensures Autopilot automatically resumes across server restarts or VPS reboots without requiring manual intervention.
+  - **Quota Guard & Multi-Provider AI Failover:** If the primary AI provider (e.g. Gemini) encounters a rate limit (`HTTP 429`) or quota cooldown, Autopilot automatically shifts to secondary providers (e.g. Z.AI GLM / OpenAI) and falls back to signal-based detection (audio loudness dB spikes and facecam motion) so stream capture never halts.
+- **Maximized Daily Quota (10,000+ Clips/Day):**
+  - Removed artificial daily ceilings for both manual video uploads and automated clipping workflows (`DAILY_VIDEO_QUOTA = 10000`).
+- **8 Video Rendering Formats:**
+  - Dedicated interactive modal selector offering 8 rendering configurations:
+    1. Pure 9:16 Fullscreen Vertical (1080x1920)
+    2. 9:16 Stacked Split (Streamer Facecam Top 35% + Gameplay Action Bottom 65%)
+    3. 9:16 Ambient Mirror Background (Blurred 16:9 mirror backing)
+    4. 9:16 Dynamic Auto-Pan & Action Focus (Crosshair tracking)
+    5. 1080x1920 60FPS Ultra HD Render (NVIDIA NVENC GPU acceleration)
+    6. 720x1280 Fast Mobile Speed Export (<5 second turnaround)
+    7. 1:1 Square Multi-Platform Grid (1080x1080 social feeds)
+    8. 4K Vertical UHD Mastering (2160x3840 upscale)
+- **Creator & Channel Management:**
+  - Integrated 30-streamer catalog across Twitch, YouTube, and Kick (Kai Cenat, xQc, IShowSpeed, Jynxzi, CaseOh, Adin Ross, Buddha, summit1g, DarkViperAU, etc.).
+  - 1-Click "Add All to Workspace" syncs all 30 streamer workspaces with pre-configured 9:16 layouts, auto-watch enabled, and custom trigger phrases ("clip that, clip it").
+  - Multi-channel support for simultaneously managing YouTube Shorts, TikTok, Instagram Reels, and Kick Clips.
+- **Content Creation 6 Feature Add-ons:**
+  - **Series Maker:** Automatic episodic series formatting (`Part 1`, `Part 2`, `Part 3`) across clip batches.
+  - **Natural AI Voiceover:** Narration persona presets (Hype, Mystery Lore, Esports Breakdown, Comedy).
+  - **Animated Captions (ASS Presets):** Word-by-word karaoke typography with bold outlines, neon glows, and custom highlight colors.
+  - **Auto-Zoom & Face Focus:** Automatic punch-in on shouting, reactions, and volume spikes.
+  - **Map & Location Overlays:** Mini-map coordinate badges and Vice City location stamps burned directly into clips.
+  - **Copyright & DMCA Risk Scanner:** Proactive audio and transcript scanning detecting licensed radio music and strike hazards.
+- **UI Diagnosis & Health Monitor:**
+  - Live system inspection checking hardware GPU video encoders (NVENC/QSV), local Sherpa-ONNX speech latency (<0.3s), available disk storage, and zero-overlap UI layout integrity.
+- **Desktop Shortcut Installer:**
+  - Automated PowerShell installer now generates a 1-click desktop shortcut (`MJ-Cliping.lnk`) pointing to the local studio launcher.
+
+## 1.1.0 — 2026-11-19
+
+- **Pure 9:16 Vertical Video Enforcement:**
+  - Removed wide 16:9 video layouts in favor of pure 9:16 mobile-first short-form video.
+  - Enhanced streamer facecam auto-detection using OpenCV to lock onto the streamer's reaction box.
+- **Streamlined Minimalist UI/UX:**
+  - Redesigned home interface and workspace controls with zero visual overlap, eliminating clipping option boundary glitches.
+  - Upgraded live preview player supporting real-time stream embedding for Twitch, YouTube, and Kick.
+- **Alarm Dark AI Brain HUD:**
+  - High-contrast visual viral alarm banner, real-time loudness dB meter, live dialogue subtitle ticker, and live AI Brain decision feed.
+- **Fixed Autopilot & Storage Fetch Errors:**
+  - Resolved "failed to fetch" network exceptions on storage and autopilot sync endpoints with resilient error handling.
 
 ## 1.0.1 — 2026-11-18
 

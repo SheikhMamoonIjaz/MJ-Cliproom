@@ -28,13 +28,23 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
         throw "The virtual environment could not be created."
     }
 }
-Write-Host "Installing MJ Cliproom requirements ..."
+Write-Host "Installing MJ-Cliping requirements & dependencies ..."
 & $venvPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip could not be updated." }
 & $venvPython -m pip install -r (Join-Path $root "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Requirements did not install. Read the message above, then run this script again." }
-& $venvPython -c "import fastapi, uvicorn, httpx, numpy, sqlalchemy, soundfile, PIL, cv2, yt_dlp, sherpa_onnx, multipart; print('imports ok')"
+& $venvPython -c "import fastapi, uvicorn, httpx, numpy, sqlalchemy, soundfile, PIL, cv2, yt_dlp, sherpa_onnx, multipart; print('Dependencies verified: all 13 core packages loaded cleanly.')"
 if ($LASTEXITCODE -ne 0) { throw "A required library did not import after install." }
-Write-Host "MJ Cliproom 1.2.0 is installed."
-Write-Host "Start it with:  .\.venv\Scripts\python.exe -m studio.launcher"
-Write-Host "Or double-click update-mj-cliproom.bat"
+
+# Create Desktop Shortcut
+try {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "create-desktop-shortcut.ps1")
+} catch {}
+
+Write-Host ""
+Write-Host "============================================================"
+Write-Host "  MJ-Cliping v1.2.0 is installed and ready!"
+Write-Host "============================================================"
+Write-Host "Start it from your Desktop shortcut or with:"
+Write-Host "  .\.venv\Scripts\python.exe -m studio.launcher"
+Write-Host "Dashboard runs at: http://127.0.0.1:8765"

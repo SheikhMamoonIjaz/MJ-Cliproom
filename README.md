@@ -74,13 +74,16 @@ The first run fetches the speech-recognition model (about 480 MB). The model run
 3. Run the automated installer, or execute the steps manually:
 
    ```powershell
-   # Automated installer
+   # Automated installer (installs packages and creates Desktop shortcut automatically):
    .\install-mj-cliproom.bat
 
    # Or manual PowerShell setup:
    py -3 -m venv .venv
    .\.venv\Scripts\python.exe -m pip install --upgrade pip
    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+   # Create 1-click Desktop Shortcut:
+   .\create-desktop-shortcut.bat
    ```
 
 4. Launch MJ-Cliping:
