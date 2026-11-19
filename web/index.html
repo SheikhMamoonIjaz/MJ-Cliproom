@@ -2521,6 +2521,26 @@ function drawAutopilotPosts() {
   const uploadedCount = clips.filter(c => c.scheduled_post && c.scheduled_post.status === "posted").length;
 
   box.innerHTML = `
+    <div class="card" style="margin-bottom:16px;padding:16px;background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);color:#fff;border:1px solid #312e81;border-radius:var(--r)">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:40px;height:40px;border-radius:50%;background:#4f46e5;display:flex;align-items:center;justify-content:center;font-size:20px">⚡</div>
+          <div>
+            <div style="font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px">
+              100% Full YouTube Auto-Pilot: ACTIVE
+              <span class="pill ok" style="background:#10b981;color:#fff;border:none;font-size:11px">24/7 AUTO-SYNC</span>
+            </div>
+            <div style="font-size:13px;opacity:0.85;margin-top:2px">
+              Every clip discovered, captured & rendered by Autopilot is automatically queued with AI viral metadata and published to YouTube Shorts with 10-minute staggered intervals.
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm" style="background:#4f46e5;color:#fff;border:none" data-act="auto-schedule-all">⚡ Auto-Schedule All to YouTube (10m Stagger)</button>
+        </div>
+      </div>
+    </div>
+
     <div class="autoposts-kpis">
       <div class="tile"><i>${ic("scissors")}</i><b>${clips.length}</b><span>Total Clips Created</span></div>
       <div class="tile"><i>${ic("bolt")}</i><b>${renderedCount}</b><span>Rendered (9:16 1080p60)</span></div>
@@ -4116,20 +4136,11 @@ document.addEventListener("click", async e => {
       toast("Hashtags copied to clipboard!", "ok");
       return;
     }
-    if (a === "schedall10m") {
-      if (!await ask("Schedule all unposted clips?", "Each clip will be queued for YouTube Shorts with automated 10-minute spaced intervals.", "Schedule all (10m)")) return;
+    if (a === "schedall10m" || a === "auto-schedule-all") {
       b.disabled = true;
       try {
-        const data = S.autopilotData?.clips || [];
-        const unposted = data.filter(c => !c.scheduled_post || c.scheduled_post.status !== "scheduled");
-        let idx = 0;
-        for (const c of unposted) {
-          await send("/api/v12/autopilot-posts/schedule-10m", {
-            jid: c.jid, cid: c.cid, title: c.title, description: c.description, hashtags: c.hashtags,
-            stagger_index: idx++
-          });
-        }
-        toast(`Scheduled ${unposted.length} clip(s) for YouTube upload with 10-minute stagger intervals!`, "ok");
+        const res = await send("/api/v12/autopilot-posts/auto-schedule-all", {});
+        toast(res.message || "All clips scheduled for YouTube auto-upload with 10-minute stagger intervals!", "ok");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }

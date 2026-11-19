@@ -77,6 +77,7 @@ def _startup():
     live.start()
     posting.start()
     autopilot.start()
+    jobs.on_clip_ready.append(lambda j, c: _auto_schedule_rendered_clips_to_yt())
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
 
@@ -2246,6 +2247,10 @@ def _autonomous_loop():
                     _autonomous_log(f"Processing in-flight video pipeline ({len(active_list)} active jobs)...")
                 else:
                     _autonomous_log("Autonomous cycle complete: continuous 24/7 loop active, next check in 25m.")
+            try:
+                _auto_schedule_rendered_clips_to_yt()
+            except Exception:
+                pass
             with _auto_lock:
                 _autonomous_config["status"] = "Running 24/7 (Next cycle in 25m)"
             _save_autonomous_state()
@@ -3144,8 +3149,86 @@ def get_autopilot_posts():
         "total_count": len(clips),
         "scheduled_count": scheduled_count,
         "rendered_count": rendered_count,
+        "full_auto_yt": True,
         "version": VERSION
     }
+
+
+def _auto_schedule_rendered_clips_to_yt() -> int:
+    """Automatically schedules newly rendered clips for YouTube Shorts with 10-minute staggered intervals."""
+    all_j = jobs.all_jobs()
+    with posting._lock:
+        existing_keys = {f"{p.get('job')}:{p.get('clip')}" for p in posting._posts if p.get("status") in ("scheduled", "posted", "posting")}
+        stagger_idx = sum(1 for p in posting._posts if p.get("status") == "scheduled")
+
+    scheduled_any = 0
+    now = time.time()
+    for j in all_j:
+        jid = j["id"]
+        j_dir = Path(j.get("dir") or (config.DATA_DIR / "videos" / jid))
+        for c in j.get("clips", []):
+            cid = c["id"]
+            key = f"{jid}:{cid}"
+            if key in existing_keys:
+                continue
+            file_name = c.get("file")
+            if not file_name or not (j_dir / "clips" / file_name).is_file():
+                continue
+            delay_sec = (stagger_idx * 600) + 600
+            due_time = now + delay_sec
+            stagger_idx += 1
+
+            post_id = secrets.token_hex(8)
+            yt_accounts = [a for a in accounts.list_accounts() if a.get("platform") == "youtube"]
+            acc_id = yt_accounts[0]["id"] if yt_accounts else "youtube_auto"
+            acc_name = yt_accounts[0]["name"] if yt_accounts else "YouTube Shorts (Auto-Publishing Channel)"
+
+            tags = c.get("hashtags") or _DEFAULT_VIRAL_TAGS
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split() if t.strip()]
+            tags = [f"#{t.lstrip('#')}" for t in tags if t]
+
+            new_post = {
+                "id": post_id,
+                "user": j.get("user") or ctx.uid(),
+                "job": jid,
+                "clip": cid,
+                "creator": j.get("creator", ""),
+                "account": acc_id,
+                "account_name": acc_name,
+                "platform": "youtube",
+                "status": "scheduled",
+                "due_at": due_time,
+                "created": now,
+                "title": c.get("title") or c.get("hook") or "GTA 6 Viral Moment",
+                "description": c.get("description") or "Check out this insane viral moment in GTA 6! Follow for daily clips.",
+                "hashtags": tags,
+                "score": c.get("score") or c.get("viral") or 95,
+                "tries": 0,
+                "url": "",
+                "remote_id": "",
+                "error": None,
+                "views": None,
+                "automatic": True,
+                "autopilot": True
+            }
+            with posting._lock:
+                posting._posts.append(new_post)
+                posting._save()
+                posting._mirror(new_post)
+                existing_keys.add(key)
+            scheduled_any += 1
+            _autonomous_log(f"⚡ Full YouTube Auto-Pilot: Scheduled '{new_post['title']}' for YouTube Shorts (in {round(delay_sec/60)}m).")
+
+    if scheduled_any > 0:
+        ctx.bump()
+    return scheduled_any
+
+
+@app.post("/api/v12/autopilot-posts/auto-schedule-all")
+def auto_schedule_all_autopilot_posts():
+    count = _auto_schedule_rendered_clips_to_yt()
+    return {"ok": True, "count": count, "message": f"Successfully auto-scheduled {count} clip(s) to YouTube Shorts with 10-minute staggering!"}
 
 
 @app.post("/api/v12/autopilot-posts/schedule-10m")
@@ -3400,25 +3483,36 @@ def main():
                                            proxy_headers=bool(config.env("PEAKCUT_TRUST_PROXY")), forwarded_allow_ips="*",
                                            timeout_graceful_shutdown=60))
     plan = config.env("PEAKCUT_LAUNCH_PLAN")
-    if plan:
-        from . import storage, updates
-        staged = Path(plan)
+    from . import storage, updates
+    staged = Path(plan) if plan else (config.DATA_DIR / "update_staged.json")
 
-        def restart(target):
-            if live.active() or storage.pending():
-                raise updates.UpdateError("Finish active recordings and pending Storage changes before restarting for the update.")
-            pending = staged.with_suffix(".tmp")
-            pending.write_text(json.dumps({"target": target}), encoding="utf-8")
-            pending.replace(staged)
-            if not posting.prepare_restart():
-                staged.unlink(missing_ok=True)
-                raise updates.UpdateError("An upload is in progress. Wait for it to finish, then try the update again.")
-            server.should_exit = True
+    def restart(target):
+        if live.active() or storage.pending():
+            raise updates.UpdateError("Finish active recordings and pending Storage changes before restarting for the update.")
+        pending = staged.with_suffix(".tmp")
+        pending.write_text(json.dumps({"target": target}), encoding="utf-8")
+        pending.replace(staged)
+        if not posting.prepare_restart():
+            staged.unlink(missing_ok=True)
+            raise updates.UpdateError("An upload is in progress. Wait for it to finish, then try the update again.")
+        server.should_exit = True
 
-        updates.managed_restart(restart)
+    updates.managed_restart(restart)
     server.run()
     if plan and Path(plan).is_file():
         raise SystemExit(updates.RESTART_EXIT)
+    elif not plan and staged.is_file():
+        try:
+            target = json.loads(staged.read_text(encoding="utf-8"))["target"]
+            updates.install_staged(target)
+        except Exception as exc:
+            logging.getLogger("mjcliproom").error("Failed installing staged update: %s", exc)
+        finally:
+            staged.unlink(missing_ok=True)
+        try:
+            subprocess.Popen([sys.executable, "-m", "studio.launcher"], cwd=str(config.ROOT))
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

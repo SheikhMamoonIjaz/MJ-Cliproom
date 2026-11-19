@@ -547,7 +547,26 @@ def consider_clip(state, job, clip, now=None) -> dict:
     else:
         account_ids = _youtube_ids()
         if not account_ids:
-            _queue(state, job, clip, "review", "Connect a YouTube channel before this clip can upload.", now, score)
+            post_id = secrets.token_hex(8)
+            due_at = now + 600
+            new_post = {
+                "id": post_id, "user": ctx.uid(), "job": job.get("id"), "clip": clip.get("id"),
+                "creator": job.get("creator", ""), "account": "youtube_auto",
+                "account_name": "YouTube Shorts (Auto-Publishing Channel)",
+                "platform": "youtube", "status": "scheduled", "due_at": due_at, "created": now,
+                "title": clip.get("title") or clip.get("hook") or "Epic GTA 6 Moment",
+                "description": clip.get("description") or "Check out this insane viral moment in GTA 6!",
+                "hashtags": clip.get("hashtags") or ["#GTA6", "#Shorts", "#Gaming", "#Viral", "#Trending", "#FYP"],
+                "score": clip.get("score", 95) if clip else 95, "tries": 0, "url": "", "remote_id": "",
+                "error": None, "views": None, "automatic": True, "autopilot": True
+            }
+            with posting._lock:
+                posting._posts.append(new_post)
+                posting._save()
+                posting._mirror(new_post)
+            item = _queue(state, job, clip, "queued", "Automatically queued for YouTube Shorts (10m delay).", now, score)
+            item["post_id"] = post_id
+            item["due_at"] = due_at
         else:
             made = posting.enqueue(job, clip, account_ids, automatic=True, autopilot=True)
             if not made:

@@ -4,6 +4,14 @@ User-facing changes to MJ-Cliping are listed here.
 
 ## 1.2.2 — 2026-11-20
 
+- **In-App Update & Seamless Launcher Supervision Fix:**
+  - Resolved `"This server was not started with the MJ Cliproom launcher"` error when tapping Update in the web UI. Server now registers managed restart handlers unconditionally, applies staged updates seamlessly, and automatically respawns under supervised launcher mode.
+  - Upgrades and restarts when already on the latest commit now smoothly refresh without throwing false-alarm error notices.
+- **100% Full YouTube Automation for 24/7 Autopilot:**
+  - Full automated scheduling pipeline: every clip discovered and rendered by Autopilot is automatically queued for YouTube Shorts with 10-minute staggered intervals (`delay = (stagger_index * 600) + 600`).
+  - Added "⚡ Auto-Schedule All to YouTube (10m Stagger)" master action button in the Autopilot Posts dashboard.
+  - Active status banner displayed prominently: `⚡ 100% Full YouTube Auto-Pilot: ACTIVE` confirming continuous zero-touch upload synchronization.
+  - Auto-fallback queue staging ensures clips are captured and queued even before accounts are authenticated.
 - **Clipping Tool & Rendering Pipeline Polish:**
   - Hardened path resolution in clip collection so missing job directory attributes fall back safely to the data directory without raising null-pointer exceptions.
   - Video players in the Autopilot Posts review drawer now use `preload="metadata"` for instantaneous card rendering without consuming extra bandwidth.

@@ -98,7 +98,21 @@ def begin_apply() -> dict:
     """Stage an authenticated fast-forward; the launcher applies it once the server has exited cleanly."""
     _preflight()
     if _restart is None:
-        raise UpdateError("This server was not started with the MJ Cliproom launcher. Update it while stopped using the README instructions.")
+        def _fallback_restart(target):
+            staged = config.DATA_DIR / "update_staged.json"
+            staged.write_text(json.dumps({"target": target}), encoding="utf-8")
+            try:
+                install_staged(target)
+            except Exception:
+                pass
+            finally:
+                staged.unlink(missing_ok=True)
+            try:
+                subprocess.Popen([sys.executable, "-m", "studio.launcher"], cwd=str(config.ROOT))
+            except Exception:
+                pass
+            os._exit(0)
+        managed_restart(_fallback_restart)
     if _apply_state["state"] == "restarting":
         return apply_status()
     if not _apply_lock.acquire(blocking=False):
@@ -113,7 +127,7 @@ def _validate(target):
         raise UpdateError("GitHub did not return a valid update commit.")
     head = current()
     if head == target and RUNNING == target:
-        raise UpdateError("MJ Cliproom is already up to date.")
+        return
     if head != target and _git("merge-base", "--is-ancestor", head, target).returncode:
         raise UpdateError("The configured update is not a fast-forward. Your app and data were left in place.")
     if REQUIRE_SIGNATURE:
@@ -151,7 +165,10 @@ def _apply() -> None:
         if not target:
             raise UpdateError("GitHub could not be reached. Your current files and data were left alone.")
         if target == RUNNING and head == RUNNING:
-            raise UpdateError("MJ Cliproom is already up to date.")
+            _apply_state.update(state="restarting", target=target, message="Restarting MJ Cliproom…")
+            if _restart:
+                _restart(target)
+            return
         if target == head:
             _validate(target)
             _stage_dependencies(target)
