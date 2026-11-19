@@ -4135,12 +4135,6 @@ document.addEventListener("click", async e => {
       finally { b.disabled = false; }
       return;
     }
-        toast(`Scheduled ${unposted.length} clip(s) for YouTube upload!`, "ok");
-        await loadAutopilotPosts();
-      } catch (err) { toast(err.message, "bad"); }
-      finally { b.disabled = false; }
-      return;
-    }
     if (a === "filter-ap") {
       _apFilter = d.f || "all";
       drawAutopilotPosts();
