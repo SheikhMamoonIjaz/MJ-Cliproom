@@ -172,6 +172,7 @@ UPLOAD_PART_MB = max(5, int(env("PEAKCUT_UPLOAD_PART_MB", "40")))
 # The most videos that may ever run at once. How many actually run is decided by how busy the machine is (load.py).
 JOB_WORKERS = int(env("PEAKCUT_JOB_WORKERS") or max(2, os.cpu_count() or 4))
 MAX_ACTIVE_JOBS_PER_USER = int(_limit("PEAKCUT_MAX_JOBS_PER_USER", "5"))    # videos sent and worked on at once
+DAILY_VIDEO_QUOTA = int(env("PEAKCUT_DAILY_VIDEO_QUOTA", "10000"))              # maximized daily video quota (10,000+ videos/day)
 MAX_LIVE_TOTAL = int(env("PEAKCUT_MAX_LIVE") or max(4, 2 * (os.cpu_count() or 4)))   # ceiling; real load decides below it
 MAX_LIVE_PER_USER = int(_limit("PEAKCUT_MAX_LIVE_PER_USER"))     # streams one person records at once
 MAX_VIDEO_HOURS = _limit("PEAKCUT_MAX_VIDEO_HOURS")              # longest video (or chosen part of one) that is processed
@@ -236,3 +237,9 @@ def _read_google_client() -> tuple:
 # ---------------------------------------------------------------- video
 MAX_SOURCE_HEIGHT = 1080
 OUT_W, OUT_H, OUT_FPS = 1080, 1920, 30
+
+# ---------------------------------------------------------------- v1.2.0 production features
+GPU_RENDER = env("PEAKCUT_GPU_RENDER", "auto").strip().lower()  # auto, nvenc, qsv, cpu
+VPS_MODE = env("PEAKCUT_VPS_MODE", "0") == "1"                  # 24/7 cloud VPS autonomous daemon
+BACKUPS_DIR = DATA_DIR / "backups"
+BACKUPS_DIR.mkdir(parents=True, exist_ok=True)

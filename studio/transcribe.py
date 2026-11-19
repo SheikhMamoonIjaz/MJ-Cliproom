@@ -206,7 +206,7 @@ def transcribe(audio: np.ndarray, on_progress=None) -> list:
     todo = []
     for a, b in _chunks(audio):
         seg = audio[a:b].astype(np.float32) / 32768.0
-        if len(seg) < 4800 or float(np.sqrt((seg ** 2).mean())) < 0.003:
+        if len(seg) < 4800 or float(np.sqrt((seg ** 2).mean())) < 0.001:
             continue  # silence: skip, saves time and avoids made-up words
         todo.append((a, b, seg))
     remote = _remote_ok()

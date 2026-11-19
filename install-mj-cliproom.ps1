@@ -35,6 +35,6 @@ if ($LASTEXITCODE -ne 0) { throw "pip could not be updated." }
 if ($LASTEXITCODE -ne 0) { throw "Requirements did not install. Read the message above, then run this script again." }
 & $venvPython -c "import fastapi, uvicorn, httpx, numpy, sqlalchemy, soundfile, PIL, cv2, yt_dlp, sherpa_onnx, multipart; print('imports ok')"
 if ($LASTEXITCODE -ne 0) { throw "A required library did not import after install." }
-Write-Host "MJ Cliproom 1.0.0 is installed."
+Write-Host "MJ Cliproom 1.2.0 is installed."
 Write-Host "Start it with:  .\.venv\Scripts\python.exe -m studio.launcher"
 Write-Host "Or double-click update-mj-cliproom.bat"

@@ -1,78 +1,136 @@
-# MJ Cliproom · 1.0.1
+# MJ-Cliping · v1.2.0 (24/7 Autonomous AI Stream Clipping & Multi-Platform Production Studio)
 
 [What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 
-**A gaming-focused video clipping studio for gameplay recordings and finished streams.** Find strong moments, shape
-them into vertical clips, add captions and motion graphics, then export videos ready for Shorts, Reels or TikTok.
+**A high-performance gaming video clipping studio for gameplay recordings, streams, and 24/7 autonomous short-form creation.** Find viral moments, shape them into pure 9:16 vertical clips, add animated captions, and export videos ready for YouTube Shorts, Instagram Reels, or TikTok with zero manual bottlenecks.
 
-MJ Cliproom is maintained by [Sheikh Mamoon Ijaz](https://github.com/SheikhMamoonIjaz). It is an independent,
-gaming-first fork of [PeakCut](https://github.com/haziqahmedqasmi/PeakCut). This fork keeps the upstream MIT
-license and credits; see [CREDITS.md](CREDITS.md).
+MJ-Cliping is maintained by [Sheikh Mamoon Ijaz](https://github.com/SheikhMamoonIjaz). It is an independent, gaming-first fork of [PeakCut](https://github.com/haziqahmedqasmi/PeakCut). This fork keeps the upstream MIT license and credits; see [CREDITS.md](CREDITS.md).
 
-## Features
+## Version 1.2.0 Feature Architecture
 
-- Scan gameplay recordings and finished VODs for moments worth clipping, or make cuts by hand.
-- Record supported live streams and clip highlights while a stream is running.
-- Trim one or more ranges, reorder cuts, and animate the vertical crop between keyframes.
-- Export vertical clips with timed captions, hook text, a motion title tag and an optional MJ watermark.
-- Review titles, descriptions and hashtags; edit captions and save recurring spelling fixes in a glossary.
-- Generate three grounded Shorts or full-video title/description drafts with the selected LLM. When YouTube is
-  connected, current popular gaming-video titles can inform phrasing without copying them.
-- Rank Gameplay candidates with picture/audio activity and, when speech recognition and an LLM are available,
-  transcript context. Signal-only picks are kept out of automatic posting until a person reviews them.
-- Add your own licensed instrumental background tracks, set their mix level, and duck them under the video's audio.
-- Group selected clips into Clip Sets and export them together with subtitle files.
-- Connect supported social accounts for scheduled or automatic posting. Platform app setup and review can be required;
-  see [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok).
-- See download and render progress with time estimates. If a download fails, **Retry download** resumes from the
-  saved partial file when the source allows it.
-- Run it locally without an account, or self-host it with accounts enabled. Bring your own AI key; highlight
-  selection still works without AI using audio and visual signals.
+### 1. Automation & Growth (The 4 Core Pillars)
+- **Trend Radar:** Real-time viral topic detection, curiosity hooks, and high-growth hashtags for GTA 6 and top gaming titles.
+- **Daily Compilation Video:** 1-click ffmpeg concat demuxer stitching daily top-performing clips into a master highlight recap.
+- **Multi-Platform Posting:** Automated tailored caption, hashtag, and aspect ratio formatting for YouTube Shorts, TikTok, and Instagram Reels.
+- **24/7 Smart Autopilot:** Continuous background clipping loop scanning live streams every 20–30 minutes with failover guard and auto-persistence across restarts.
+
+### 2. The 8 Video Rendering Formats
+1. **Pure 9:16 Fullscreen Vertical (1080x1920):** Direct full-bleed vertical crop optimized for viral mobile retention.
+2. **9:16 Stacked Split (Facecam + Gameplay):** Streamer facecam on top 35%, gameplay action on bottom 65%.
+3. **9:16 Ambient Mirror Background:** Original 16:9 gameplay center-framed over a real-time blurred ambient mirror.
+4. **9:16 Dynamic Auto-Pan & Action Focus:** Intelligent motion and crosshair tracking for fast-paced shooters.
+5. **1080x1920 60FPS Ultra HD Render:** High-bitrate 60fps export utilizing NVIDIA NVENC GPU acceleration.
+6. **720x1280 Fast Mobile Speed Export:** Lightweight ultra-fast render exported in under 5 seconds for instant turnaround.
+7. **1:1 Square Multi-Platform Grid (1080x1080):** Social feed format tailored for Instagram and X feeds.
+8. **4K Vertical UHD Mastering (2160x3840):** Ultra-crisp 4K vertical upscale for studio-grade channel archives.
+
+### 3. Creator & Channel Management (The 4 Pillars)
+- **Multi-Channel Support:** Manage multiple linked channels across YouTube Shorts, TikTok, Instagram Reels, and Kick.
+- **Streamer Catalog & 1-Click Sync:** Integrated directory of 30+ top streamers (Kai Cenat, xQc, IShowSpeed, Jynxzi, CaseOh, Adin Ross, etc.) with 1-click workspace sync.
+- **Creator Rights & Permission Allowlist:** Streamer rights status tracking, DMCA safe verification, and automated safe-list filters.
+- **Auto-Posting Queue & Publishing Schedule:** Automated release queue with configurable intervals (15–20 minutes) and manual approval locks.
+
+### 4. Content Creation Add-ons (The 6 Add-ons)
+- **Series Maker:** Automatic episodic series formatting (`Part 1`, `Part 2`, `Part 3`) across clip batches.
+- **Natural AI Voiceover Prompts:** Narration personas (Hype, Mystery Lore, Esports Breakdown, Comedy) for short-form intros.
+- **Animated Captions (ASS Presets):** Word-by-word karaoke typography with bold outlines, neon glows, and custom highlight colors.
+- **Auto-Zoom & Face Focus Effects:** Automated camera zoom punch-ins on shouting, reactions, and intense moments.
+- **Map & Location Overlays:** Mini-map coordinate badges and Vice City location stamps burned directly into clips.
+- **Copyright & DMCA Risk Scanner:** Proactive audio and transcript scanning detecting licensed radio music and strike hazards.
+
+### 5. UI Diagnosis & Analytics
+- **Analytics Dashboard:** Visual tracking for total clips created, platform breakdown, viral potential scores, and average render speeds.
+- **Mobile Approval Dashboard:** Mobile-friendly remote swipe interface for rapid 1-tap Approve, Reject, or Star review.
+- **UI Diagnosis & Health Monitor:** Real-time hardware GPU encoder status, Sherpa-ONNX local speech latency check, free disk space, and layout integrity audit.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.10 or newer (Python 3.12 or 3.13 recommended)
 - Git
-- FFmpeg and FFprobe on your PATH
-- An AI service key is optional. Without one, highlight selection uses the built-in non-AI signals.
+- FFmpeg and FFprobe on your PATH (with NVENC support recommended for GPU rendering)
+- An AI service key (Google Gemini, Z.AI GLM, Grok, OpenAI, or local Ollama) is optional. Without one, highlight selection uses built-in audio-visual signals.
 
-The first run fetches the speech-recognition model (about 480 MB). The model runs on your machine; if AI is enabled,
-the transcript and video metadata used for clip selection may be sent to the provider you choose.
+The first run fetches the speech-recognition model (about 480 MB). The model runs locally on your machine.
 
-## Install on Windows
+## Quick Start / Installation
 
-1. Install Python 3.10+ and Git. During Python setup, enable the option to add Python to PATH.
-2. Open PowerShell and install FFmpeg:
+### Install on Windows (Recommended)
+
+1. Open PowerShell and install FFmpeg:
 
    ```powershell
    winget install --id Gyan.FFmpeg -e
    ```
 
-   Close and reopen PowerShell after installation so FFmpeg is on PATH.
+   Close and reopen PowerShell after installation so FFmpeg is on your PATH.
 
-3. Clone the repository and enter its folder:
+2. Clone the repository and enter the directory:
 
    ```powershell
-   git clone https://github.com/SheikhMamoonIjaz/MJ-Cliproom.git
-   cd MJ-Cliproom
+   git clone https://github.com/SheikhMamoonIjaz/MJ-Cliping.git
+   cd MJ-Cliping
    ```
 
-4. Create and activate a virtual environment, then install the requirements:
+3. Run the automated installer, or execute the steps manually:
 
    ```powershell
+   # Automated installer
+   .\install-mj-cliproom.bat
+
+   # Or manual PowerShell setup:
    py -3 -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
+   .\.venv\Scripts\python.exe -m pip install --upgrade pip
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
-   If PowerShell blocks activation, use the venv interpreter directly:
-   `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` and
-   `.\.venv\Scripts\python.exe -m studio.launcher`.
-
-5. Start MJ Cliproom:
+4. Launch MJ-Cliping:
 
    ```powershell
+   .\.venv\Scripts\python.exe -m studio.launcher
+   ```
+
+5. Open [http://127.0.0.1:8765](http://127.0.0.1:8765) in your web browser.
+
+### Install on macOS
+
+```bash
+# 1. Install prerequisites via Homebrew
+brew install python git ffmpeg
+
+# 2. Clone repository
+git clone https://github.com/SheikhMamoonIjaz/MJ-Cliproom.git
+cd MJ-Cliproom
+
+# 3. Create virtual environment and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Start studio server
+python -m studio.launcher
+```
+
+### Install on Linux (Ubuntu / Debian)
+
+```bash
+# 1. Install system dependencies
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip ffmpeg
+
+# 2. Clone repository
+git clone https://github.com/SheikhMamoonIjaz/MJ-Cliproom.git
+cd MJ-Cliproom
+
+# 3. Set up environment and install Python packages
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Start studio server
+python -m studio.launcher
+```
    python -m studio.launcher
    ```
 

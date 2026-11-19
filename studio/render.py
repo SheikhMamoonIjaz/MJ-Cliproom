@@ -78,10 +78,9 @@ def install_fonts():
             shutil.copyfile(f, config.FONTS_DIR / f.name)
 
 
-LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill",
-           "crop": "Fill the screen (centre crop)",
-           "stack": "Gameplay on top, facecam below",
-           "split": "Facecam on top, gameplay below"}
+LAYOUTS = {"crop": "Fill the screen (9:16)",
+           "split": "Streamer face on top, gameplay below",
+           "stack": "Gameplay on top, streamer face below"}
 
 
 def _ts(t):
@@ -138,6 +137,8 @@ def split_filter(layout: str, facecam: str = "left") -> str:
 
 def geometry(src_w, src_h, layout):
     """Where the video sits in the 1080x1920 frame, and where hook and captions go."""
+    if layout in ("blur", "zoom"):
+        layout = "crop"
     if layout in ("stack", "split"):
         return layout, 1220 if layout == "stack" else 1280, 150, 980 if layout == "split" else 620
     if src_h >= src_w and layout != "crop":
@@ -197,7 +198,7 @@ def _brand_events(dur: float) -> list:
 
 
 def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, cues=None, motion="none",
-              watermark=False, brand=False) -> str:
+              watermark=False, brand=False, map_overlay=None) -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
@@ -210,7 +211,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{st['font']},{st['size']},&H00{st['base']},&H00{st['base']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{st['outline']},0,5,0,0,0,1
+Style: Cap,{st['font']},{st['size']},&H00{st['base']},&H00{st['base']},&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,{st['outline']},2,5,0,0,0,1
 Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
 
 [Events]
@@ -223,6 +224,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if watermark:
         ev.append(f"Dialogue: 5,0:00:00.00,{_ts(dur)},Cap,,0,0,0,,"
                   r"{\an7\pos(76,174)\fs62\b1\bord4\c&HD7F1FF&\3c&H3A3312&\alpha&H20&}MJ")
+    if map_overlay:
+        loc = _clean(map_overlay) if isinstance(map_overlay, str) and map_overlay.strip() else "Vice City"
+        ev.append(f"Dialogue: 4,0:00:00.00,{_ts(dur)},Cap,,0,0,0,,"
+                  f"{{\\an7\\pos(64,180)\\fs42\\b1\\bord3\\c&H00FFFFFF&\\3c&H00000000&\\shad2}}📍 {loc}")
     f = _Font.get(st["font"])
     if cues is not None:
         for cue in cues:
@@ -305,7 +310,7 @@ def _filter(layout, fg_h, crop_x=0.5, crop_y=0.5, keyframes=(), preserve_marks=F
                 f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v0];")
     x = f"x='(iw-ow)*({_crop_expression(keyframes, 'x', crop_x)})'"
     y = f"y='(ih-oh)*({_crop_expression(keyframes, 'y', crop_y)})'"
-    if layout == "crop":
+    if layout in ("crop", "blur", "zoom"):
         return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}:{x}:{y},setsar=1[v0];"
     return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
@@ -378,7 +383,8 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                     clip.get("style", "bounce"), clip.get("highlight_words", []), hook_y, cap_y,
                     [] if clean else cues, "none" if clean else clip.get("motion", "none"),
                     watermark=not clean and clip.get("watermark", False),
-                    brand=not clean and bool(clip.get("brand") or clip.get("motion") == "highlight"))
+                    brand=not clean and bool(clip.get("brand") or clip.get("motion") == "highlight"),
+                    map_overlay=clip.get("map_overlay"))
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
@@ -476,7 +482,10 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
             "-filter_complex", fc, "-map", "[v0]" if clean else "[v]", *audio,
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
     encoders = []
-    if _qsv_ok is not False:
+    # GPU Rendering: NVENC (NVIDIA), QSV (Intel), CPU (libx264 fallback)
+    if config.GPU_RENDER in ("auto", "nvenc", "cuda"):
+        encoders.append(("nvenc", ["yuv420p", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]))
+    if config.GPU_RENDER in ("auto", "qsv") and _qsv_ok is not False:
         encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))
     encoders.append(("x264", ["yuv420p", "-c:v", "libx264", "-crf", "21", "-preset", "veryfast"]))
     err = None
@@ -504,3 +513,34 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         srt_path.unlink(missing_ok=True)
     return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout, "duration": round(end - start, 3),
             "subtitle": srt_path.name if sidecar else None}
+
+
+def stitch_compilation(clip_paths: list[Path], out_path: Path) -> dict:
+    """Stitches multiple vertical 9:16 clips into a single compilation video."""
+    valid = [p for p in clip_paths if p.exists() and p.stat().st_size > 0]
+    if not valid:
+        raise ValueError("No valid clips provided for compilation")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    list_file = out_path.parent / f"_concat_{out_path.stem}.txt"
+    try:
+        content = "\n".join(f"file '{p.resolve().as_posix()}'" for p in valid)
+        list_file.write_text(content, encoding="utf-8")
+        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+               "-i", str(list_file), "-c", "copy", str(out_path)]
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", creationflags=NO_WINDOW, timeout=300)
+        if p.returncode != 0:
+            # Re-encode fallback if stream copy fails
+            reenc = ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                     "-i", str(list_file), "-c:v", "libx264", "-crf", "22", "-preset", "veryfast",
+                     "-c:a", "aac", "-b:a", "160k", str(out_path)]
+            subprocess.run(reenc, check=True, capture_output=True, timeout=300, creationflags=NO_WINDOW)
+        cover_path = out_path.with_suffix(".jpg")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "1.0", "-i", str(out_path),
+                        "-frames:v", "1", "-q:v", "3", str(cover_path)],
+                       capture_output=True, creationflags=NO_WINDOW)
+        return {"file": out_path.name, "cover": cover_path.name if cover_path.exists() else None,
+                "count": len(valid), "size": out_path.stat().st_size}
+    finally:
+        list_file.unlink(missing_ok=True)
+

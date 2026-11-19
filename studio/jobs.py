@@ -110,7 +110,7 @@ _cancel_events: dict = {}
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
-DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
+DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "crop", "quality": 720,
             "range_start": None, "range_end": None, "mode": "news", "motion": "none", "watermark": False,
             "ai_post_text": False}
 
@@ -130,6 +130,8 @@ def clean_options(options) -> dict:
         elif k == "style":
             v = v if v in render.STYLES else DEFAULTS["style"]
         elif k == "layout":
+            if v in ("blur", "zoom"):
+                v = "crop"
             v = v if v in render.LAYOUTS else DEFAULTS["layout"]
         elif k == "mode":
             if v not in ("news", "gameplay", "manual"):
@@ -809,6 +811,38 @@ def retry(job):
             raise ValueError("Wait for the current clip render to finish.")
         job.update(status="queued", stage="Retrying video", error=None, failed_stage=None, resume=True)
         enqueue(job)
+
+
+def regenerate(job, options=None):
+    """Re-run clip discovery and rendering with updated prompts and layout."""
+    with _lock:
+        if job.get("kind") != "video":
+            raise ValueError("Only videos can be regenerated.")
+        if job["status"] in ("queued", "running") or any(c.get("status") in ("queued", "rendering") for c in job.get("clips", [])):
+            raise ValueError("Wait for the current video or clips to finish before regenerating.")
+        if options and isinstance(options, dict):
+            job["options"].update(clean_options(options))
+        job["clips"] = []
+        job.update(status="queued", stage="Regenerating clips", error=None, failed_stage=None, resume=False)
+        save(job)
+        enqueue(job)
+    return job
+
+
+def regenerate_all():
+    """Regenerate all completed or stopped videos for the current user."""
+    with _lock:
+        all_jobs = list_jobs()
+        started = []
+        for job in all_jobs:
+            if job.get("kind") == "video" and job.get("status") in ("done", "error"):
+                if not any(c.get("status") in ("queued", "rendering") for c in job.get("clips", [])):
+                    job["clips"] = []
+                    job.update(status="queued", stage="Regenerating clips", error=None, failed_stage=None, resume=False)
+                    save(job)
+                    enqueue(job)
+                    started.append(job["id"])
+        return started
 
 
 def read_words(job):

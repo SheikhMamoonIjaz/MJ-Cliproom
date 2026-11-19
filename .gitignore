@@ -17,6 +17,7 @@ storage.json
 
 # ---- this computer only
 .claude/
+.agents/
 CLAUDE.local.md
 .vscode/
 .idea/

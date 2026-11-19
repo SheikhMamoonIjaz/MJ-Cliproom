@@ -121,8 +121,11 @@ def service(profile):
 
 def attempts():
     primary = current()
+    all_profiles = _profiles()
     seen = set()
-    for p in [primary, *(p for p in _profiles() if p.get("fallback"))]:
+    # Priority order: primary profile -> explicit fallback profiles -> any other configured ready profiles
+    ordered = [primary] + [p for p in all_profiles if p.get("fallback") and p["id"] != primary["id"]] + [p for p in all_profiles if p["id"] != primary["id"] and not p.get("fallback")]
+    for p in ordered:
         if p["provider"] not in PROVIDERS:
             continue
         family = service(p)
@@ -135,9 +138,10 @@ def attempts():
             yield p
 
 
-def cooling() -> bool:
+def cooling(profile=None) -> bool:
     with _lock:
-        return _cooldowns.get(service(current()), 0) > time.time()
+        target = profile or current()
+        return _cooldowns.get(service(target), 0) > time.time()
 
 
 def retry_delay(headers, default):
