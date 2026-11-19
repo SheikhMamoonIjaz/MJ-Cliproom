@@ -1,4 +1,4 @@
-# MJ-Cliping · v1.2.0 (24/7 Autonomous AI Stream Clipping & Multi-Platform Production Studio)
+# MJ-Cliping · v1.2.1 (24/7 Autonomous AI Stream Clipping & Multi-Platform Production Studio)
 
 [What's new](CHANGELOG.md) · [Install or update](docs/INSTALL.md)
 
@@ -6,9 +6,12 @@
 
 MJ-Cliping is maintained by [Sheikh Mamoon Ijaz](https://github.com/SheikhMamoonIjaz). It is an independent, gaming-first fork of [PeakCut](https://github.com/haziqahmedqasmi/PeakCut). This fork keeps the upstream MIT license and credits; see [CREDITS.md](CREDITS.md).
 
-## Version 1.2.0 Feature Architecture
+## Version 1.2.1 Feature Architecture
 
 ### 1. Automation & Growth (The 4 Core Pillars)
+- **Autopilot Posts & Review Queue:** Dedicated review dashboard for all clips created by 24/7 Autopilot with real-time renderer inspection.
+- **1-Click 10-Minute YouTube Auto-Scheduler:** Instant 1-click scheduling with a live ticking second-by-second countdown automatically uploading to YouTube Shorts in 10 minutes.
+- **AI Viral Metadata & Trending Hashtags:** Generates high-retention titles, meta descriptions, and viral gaming tags (`#GTA6 #Shorts #Gaming #Viral #Trending #GTAGameplay #TwitchClips`).
 - **Trend Radar:** Real-time viral topic detection, curiosity hooks, and high-growth hashtags for GTA 6 and top gaming titles.
 - **Daily Compilation Video:** 1-click ffmpeg concat demuxer stitching daily top-performing clips into a master highlight recap.
 - **Multi-Platform Posting:** Automated tailored caption, hashtag, and aspect ratio formatting for YouTube Shorts, TikTok, and Instagram Reels.

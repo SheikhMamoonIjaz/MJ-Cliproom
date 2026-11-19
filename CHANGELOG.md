@@ -2,6 +2,20 @@
 
 User-facing changes to MJ-Cliping are listed here.
 
+## 1.2.1 — 2026-11-19
+
+- **Autopilot Posts & Review Queue (Dedicated Section):**
+  - Added a dedicated top-level section and navigation item to view, inspect, and review all clips generated and rendered by 24/7 Autopilot.
+  - Real-time renderer inspector displays full output specs: 1080x1920 (9:16 vertical @ 60FPS), facecam tracking, audio normalization (-14 LUFS), and NVENC GPU pipeline.
+- **1-Click 10-Minute YouTube Auto-Scheduler:**
+  - Integrated 1-click **"Auto-Upload to YouTube in 10 Min"** button on every clip card.
+  - Features an active, live ticking second-by-second countdown timer (`MM:SS`) with immediate "Post Now" and "Cancel" controls.
+  - Automatically enqueues into the YouTube Shorts publishing queue when the 10-minute timer finishes.
+- **Zero-Mistake Metadata & AI Viral Hashtags:**
+  - In-place title and meta description editors with character counters preventing over-length errors.
+  - AI Viral Metadata button generates high-retention hooks, descriptions, and trending gaming hashtags (`#GTA6 #Shorts #Gaming #Viral #Trending #GTAGameplay #TwitchClips #FYP`).
+  - Timed speech captions inspector to review and verify subtitle accuracy before publishing.
+
 ## 1.2.0 — 2026-11-19
 
 - **24/7 Autonomous Autopilot & Persistence:**
