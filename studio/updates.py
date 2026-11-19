@@ -112,9 +112,9 @@ def _validate(target):
     if not re.fullmatch(r"[0-9a-f]{40}", target or ""):
         raise UpdateError("GitHub did not return a valid update commit.")
     head = current()
-    if head == target:
+    if head == target and RUNNING == target:
         raise UpdateError("MJ Cliproom is already up to date.")
-    if _git("merge-base", "--is-ancestor", head, target).returncode:
+    if head != target and _git("merge-base", "--is-ancestor", head, target).returncode:
         raise UpdateError("The configured update is not a fast-forward. Your app and data were left in place.")
     if REQUIRE_SIGNATURE:
         key_format = _git("config", "--get", "gpg.format").stdout.strip().casefold()
@@ -145,10 +145,19 @@ def _validate(target):
 def _apply() -> None:
     try:
         target = newest()
+        head = current()
+        if not target:
+            target = head
         if not target:
             raise UpdateError("GitHub could not be reached. Your current files and data were left alone.")
-        if target == current():
+        if target == RUNNING and head == RUNNING:
             raise UpdateError("MJ Cliproom is already up to date.")
+        if target == head:
+            _validate(target)
+            _stage_dependencies(target)
+            _apply_state.update(state="restarting", target=target, message="Restarting MJ Cliproom…")
+            _restart(target)
+            return
         _apply_state.update(message="Downloading and checking the update…", latest=target[:7])
         fetched = _git("fetch", "--no-tags", "origin", BRANCH, timeout=180)
         if fetched.returncode:
@@ -208,14 +217,17 @@ def _stage_dependencies(target):
 def install_staged(target):
     _preflight()
     _validate(target)
-    fetched = _git("rev-parse", "FETCH_HEAD")
-    if fetched.returncode or fetched.stdout.strip() != target:
-        raise UpdateError("The staged commit changed. Your checkout was left in place.")
-    _stage_dependencies(target)
-    _preflight()
-    r = _git("-c", "submodule.recurse=false", "merge", "--ff-only", "--no-overwrite-ignore", target, timeout=180)
-    if r.returncode or current() != target:
-        raise UpdateError("Git could not apply the fast-forward. Check the app folder before retrying.")
+    if current() != target:
+        fetched = _git("rev-parse", "FETCH_HEAD")
+        if fetched.returncode or fetched.stdout.strip() != target:
+            raise UpdateError("The staged commit changed. Your checkout was left in place.")
+        _stage_dependencies(target)
+        _preflight()
+        r = _git("-c", "submodule.recurse=false", "merge", "--ff-only", "--no-overwrite-ignore", target, timeout=180)
+        if r.returncode or current() != target:
+            raise UpdateError("Git could not apply the fast-forward. Check the app folder before retrying.")
+    else:
+        _stage_dependencies(target)
 
 
 def _launcher_install():

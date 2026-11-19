@@ -7,6 +7,6 @@ $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = Join-Path $root ".venv\Scripts\python.exe"
 $Shortcut.Arguments = "-m studio.launcher"
 $Shortcut.WorkingDirectory = $root
-$Shortcut.Description = "MJ-Cliping v1.2.0 - 24/7 Autonomous AI Shorts Studio"
+$Shortcut.Description = "MJ-Cliping v1.2.1 - 24/7 Autonomous AI Shorts Studio"
 $Shortcut.Save()
 Write-Host "Desktop shortcut created: $ShortcutPath"

@@ -1557,7 +1557,7 @@ function updateHow() {
     ${job.message ? `<p role="status">${esc(job.message)}</p>` : ""}
     ${up.notes.length ? `<ul>${up.notes.map(n => `<li>${esc(n.title)} <small>${esc(n.date)}</small></li>`).join("")}</ul>` : ""}
     <p><a class="lnk" href="${esc(up.url)}" target="_blank" rel="noopener">Review changes</a> · <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Manual update guide</a></p>
-    <div class="dlg-foot"><button class="btn" value="later">Later</button><button type="button" class="btn primary" data-act="update-now" ${busy || up.restart ? "disabled" : ""}>Install and restart</button></div></form>`;
+    <div class="dlg-foot"><button class="btn" value="later">Later</button><button type="button" class="btn primary" data-act="update-now" ${busy ? "disabled" : ""}>${up.restart ? "Restart now" : "Install and restart"}</button></div></form>`;
   d.onclose = null;
   d.showModal();
 }
@@ -1653,7 +1653,7 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   const uj = S.status.update_job || {};
   const upBar = ["running", "restarting"].includes(uj.state) ? `<div class="vb" role="status">${ic("up")}<span><b>Updating MJ Cliproom.</b> ${esc(uj.message || "Your data and saved jobs are safe.")}</span></div>`
     : up && (up.latest !== upSeen || up.restart) ? `<div class="vb" role="status">${ic("up")}<span>${uj.state === "error" ? `<b>Update needs attention.</b> ${esc(uj.message || "Retry the update.")}` : up.restart || uj.state === "done" ? "<b>The new version is downloaded.</b> Restart MJ Cliproom to use it; your data and saved jobs stay in place." : `A new version of MJ Cliproom is out${up.behind ? `: <b>${up.behind} update${up.behind === 1 ? "" : "s"}</b> since yours` : ""}.`}</span>
-    <button class="btn sm primary" data-act="updhow">${uj.state === "error" ? "Retry update" : up.restart || uj.state === "done" ? "What's new" : "Update now"}</button>${up.restart || uj.state === "done" ? "" : `<button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button>`}</div>` : "";
+    ${up.restart || uj.state === "done" ? `<button class="btn sm primary" data-act="restart-app">Restart now</button><button class="btn sm ghost" data-act="whats-new">What's new</button>` : `<button class="btn sm primary" data-act="updhow">${uj.state === "error" ? "Retry update" : "Update now"}</button><button class="btn sm ghost" data-act="updlater" aria-label="Hide until the next version">Later</button>`}</div>` : "";
   const toolBar = S.status.no_ffmpeg ? `<div class="vb" role="alert">${ic("warn")}<span><b>MJ Cliproom can't make clips yet: ffmpeg isn't installed on this computer.</b> Open a terminal, run <code>winget install Gyan.FFmpeg</code> (Mac: <code>brew install ffmpeg</code>, Linux: <code>sudo apt install ffmpeg</code>), then close MJ Cliproom and start it again.</span></div>` : "";
   const rightsBar = !rightsGateReady() ? `<div class="vb" role="alert">${ic("warn")}<span><b>Restart MJ Cliproom to enable clipping and posting.</b> This page is newer than the running app. Close MJ Cliproom completely, start it again, then reload this page.</span></div>` : "";
   const aiBar = !toolBar && S.status.ai?.problem && me?.is_admin && S.view !== "settings" ? `<div class="vb" role="status">${ic("warn")}<span><b>The AI isn't answering.</b> ${esc(S.status.ai.problem)} Until then, clips are picked by loudness.</span><button class="btn sm primary" data-act="go" data-v="settings" data-tab="ai">Open AI settings</button></div>` : "";
@@ -2482,7 +2482,14 @@ async function loadAutopilotPosts() {
     drawShell();
     drawAutopilotPosts();
   } catch (err) {
-    box.innerHTML = `<div class="card" style="padding:20px;text-align:center"><p class="err">${esc(err.message)}</p><button class="btn sm primary" data-act="load-autoposts">Retry</button></div>`;
+    const notFound = err.message && err.message.toLowerCase().includes("not found");
+    box.innerHTML = `<div class="card" style="padding:24px;text-align:center">
+      <p class="err" style="margin-bottom:12px">${notFound ? "Autopilot Posts is ready on the server, but requires a quick restart to activate v1.2.1." : esc(err.message)}</p>
+      <div style="display:flex;gap:8px;justify-content:center">
+        ${notFound ? `<button class="btn sm primary" data-act="restart-app">Restart MJ Cliproom</button>` : ""}
+        <button class="btn sm ${notFound ? "" : "primary"}" data-act="load-autoposts">Retry</button>
+      </div>
+    </div>`;
   }
 }
 
@@ -4332,6 +4339,17 @@ document.addEventListener("click", async e => {
     if (a === "tour") return startTour();
     if (a === "settab") { e.preventDefault(); S.stab = d.k; remember("settings", d.k); return drawSettings(); }
     if (a === "updhow") return updateHow();
+    if (a === "restart-app") {
+      b.disabled = true; b.textContent = "Restarting…";
+      try {
+        const previous = await api("/healthz", {cache:"no-store"});
+        S.status.update_job = await send("/api/update", {});
+        $("#releasedlg")?.close(); drawShell();
+        toast("Restarting MJ Cliproom to activate the new version…", "ok");
+        watchUpdate(previous);
+      } catch (err) { b.disabled = false; b.textContent = "Restart now"; toast(err.message, "bad"); }
+      return;
+    }
     if (a === "update-now") {
       if (!rightsGateReady()) return toast("Restart MJ Cliproom before updating this server.", "bad");
       b.disabled = true; b.textContent = "Starting…";

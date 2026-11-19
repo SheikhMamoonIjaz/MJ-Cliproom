@@ -29,11 +29,13 @@ def main():
             while True:
                 python = runtime_python()
                 result = run(python, "studio.server")
-                if result != UPDATE_EXIT or not plan.is_file():
+                if not plan.is_file() and result != UPDATE_EXIT:
                     return result
                 # If installation fails, restart the working checkout and display the error to the browser.
-                failed = run(python, "studio.updates", str(plan)) != 0
-                plan.unlink(missing_ok=True)
+                failed = False
+                if plan.is_file():
+                    failed = run(python, "studio.updates", str(plan)) != 0
+                    plan.unlink(missing_ok=True)
                 env["PEAKCUT_UPDATE_INSTALL_FAILED"] = "1" if failed else ""
         except KeyboardInterrupt:
             return 130
