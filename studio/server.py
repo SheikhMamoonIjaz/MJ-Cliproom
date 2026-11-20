@@ -50,7 +50,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -1165,76 +1165,63 @@ def clip_captions(jid: str, cid: str):
     return {"cues": jobs.editable_captions(job, clip), "edited": clip.get("caption_cues") is not None}
 
 
-@app.post("/api/jobs/{jid}/clips/{cid}/metadata")
-def clip_metadata(jid: str, cid: str, body: dict = Body(...)):
-    job = _job_or_404(jid)
-    clip = next((item for item in job["clips"] if item["id"] == cid), None)
-    if not clip:
-        raise HTTPException(404, "No such clip")
-    video_format = str(body.get("format") or "short")
-    if video_format not in ("short", "long"):
-        raise HTTPException(400, "Choose Shorts or long-form metadata.")
-    _throttle("metadata:" + ctx.uid(), 12, 600, "Wait a few minutes before requesting more metadata drafts.")
-    cues = jobs.editable_captions(job, clip)
-    transcript = " ".join(cue.get("text", "") for cue in cues)
-    full_words = jobs.read_words(job) if video_format == "long" else []
-    full_transcript = " ".join(str(word.get("w", "")) for word in full_words)
-    if len(full_transcript) > 9000 and full_words:
-        # Sample across the complete VOD instead of letting the opening minutes fill the prompt.
-        sections, count = [], 24
-        budget = 350
-        for index in range(count):
-            lo = round(index * len(full_words) / count)
-            hi = round((index + 1) * len(full_words) / count)
-            words = [str(word.get("w", "")).strip() for word in full_words[lo:hi]
-                     if str(word.get("w", "")).strip()]
-            excerpt = " ".join(words)
-            if len(excerpt) > budget:
-                excerpt = excerpt[:budget].rsplit(" ", 1)[0]
-            if excerpt:
-                sections.append(f"[video section {index + 1}] {excerpt}")
-        full_transcript = " ".join(sections)[:9000]
-    try:
-        clip_index = next(i for i, item in enumerate(job.get("clips", []), 1) if item.get("id") == clip["id"])
-    except StopIteration:
-        clip_index = 1
-    usage.set_context(job.get("creator"), job.get("title") or "")
-    try:
-        return brain.generate_metadata(video_format, job.get("title") or clip.get("title", ""),
-                                       job.get("uploader") or "", transcript, full_transcript, (), clip_index)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, _ai_error(e) or "The AI could not write metadata. Try another model or try again.")
+def _source_transcript(job):
+    words = jobs.read_words(job)
+    if not words:
+        return ""
+    # Take excerpts from across the source so a long replay does not only contribute its intro.
+    count = min(24, len(words))
+    excerpts = []
+    for index in range(count):
+        first, stop = index * len(words) // count, (index + 1) * len(words) // count
+        excerpt = " ".join(str(word.get("w", "")) for word in words[first:min(stop, first + 100)])
+        excerpts.append(excerpt[:350].rsplit(" ", 1)[0] if len(excerpt) > 350 else excerpt)
+    return " ".join(excerpts)
 
 
-def _research_clip_post_ideas(job, clip, region, count=10):
+def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="short", notes=""):
     from . import youtube_research
 
-    cues = jobs.editable_captions(job, clip)
-    transcript = " ".join(cue.get("text", "") for cue in cues)
+    if video_format not in ("short", "long"):
+        raise HTTPException(400, "Choose Shorts or full-video metadata.")
+    if not isinstance(notes, str) or len(notes) > 1000:
+        raise HTTPException(400, "Keep the scene notes under 1,000 characters.")
+    if video_format == "long":
+        transcript = _source_transcript(job)
+    else:
+        cues = jobs.editable_captions(job, clip)
+        transcript = " ".join(cue.get("text", "") for cue in cues)
     source = job.get("title") or ""
     uploader = job.get("uploader") or ""
+    if not brain._post_text(transcript, source, uploader) and not brain._post_text(notes, source, uploader):
+        raise HTTPException(422, "No captions are available for this content. Add a short note about what happens, then try again.")
     usage.set_context(job.get("creator"), source)
     try:
-        research = youtube_research.for_clip(source, uploader, transcript, region)
-        drafts = brain.generate_title_ideas(source, uploader, transcript, clip.get("hook") or "",
-                                            references=research["sources"], count=count)
-        return {**drafts, "research": research}
+        research = youtube_research.for_clip(source, uploader, notes.strip() + " " + transcript[:2200], region)
+        drafts = brain.generate_title_ideas(
+            source, uploader, transcript, clip.get("hook") or "",
+            references=research["sources"], count=count, video_format=video_format, notes=notes)
+        return {**drafts, "format": video_format, "research": research}
     except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, _ai_error(e) or "The AI could not write post options. Check Settings → AI and try again.")
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(502, _ai_error(e) or "The AI could not write post options. Check Settings → AI and try again.") from e
 
 
+@app.post("/api/jobs/{jid}/clips/{cid}/metadata")
 @app.post("/api/jobs/{jid}/clips/{cid}/titles")
 def clip_title_ideas(jid: str, cid: str, body: dict | None = Body(None)):
     job = _job_or_404(jid)
     clip = next((item for item in job["clips"] if item["id"] == cid), None)
     if not clip:
         raise HTTPException(404, "No such clip")
-    _throttle("titles:" + ctx.uid(), 12, 600, "Wait a few minutes before asking for more post options.")
-    return _research_clip_post_ideas(job, clip, (body or {}).get("region", "US"))
+    body = body or {}
+    count = body.get("count", 10)
+    if type(count) is not int or not 1 <= count <= 10:
+        raise HTTPException(400, "Choose a draft count from 1 to 10.")
+    _throttle("titles:" + ctx.uid(), 12, 600, "Wait a few minutes before requesting more post options.")
+    return _research_clip_post_ideas(job, clip, body.get("region", "US"), count=count,
+                                     video_format=body.get("format") or "short", notes=body.get("notes", ""))
 
 
 @app.put("/api/jobs/{jid}/clips/{cid}/metadata")
@@ -2024,17 +2011,11 @@ def autopilot_commentary_clear():
 
 
 @app.post("/api/jobs/{jid}/clips/{cid}/package")
-def clip_package(jid: str, cid: str):
-    job = _job_or_404(jid)
-    clip = next((c for c in job["clips"] if c["id"] == cid), None)
-    if not clip:
-        raise HTTPException(404, "No such clip")
-    from . import brain
-    words = " ".join(w.get("w", "") for w in (clip.get("fixed_words") or []) if isinstance(w, dict))
-    credit = clip.get("source_credit") or {}
-    pack = brain.viral_pack(words or clip.get("description") or "", job.get("game") or job.get("title") or "",
-                            credit.get("name") or "", credit.get("url") or "", clip.get("hook") or "")
-    return pack
+def clip_package(jid: str, cid: str, body: dict | None = Body(None)):
+    result = clip_title_ideas(jid, cid, body)
+    best = result["ideas"][0]
+    return {**result, "titles": [idea["title"] for idea in result["ideas"]],
+            "description": best["description"], "hashtags": best["hashtags"]}
 
 
 @app.post("/api/jobs/{jid}/clips/{cid}/thumb")
@@ -2551,28 +2532,29 @@ def add_channel(body: dict = Body(...)):
 
 @app.post("/api/v12/multi-platform")
 def multi_platform_format(body: dict = Body(...)):
-    title = str(body.get("title") or "Epic GTA 6 Moment").strip()
-    tags = body.get("tags") or ["#GTA6", "#Gaming", "#Shorts", "#Viral"]
-    tag_str = " ".join(t if t.startswith("#") else f"#{t}" for t in tags)
+    title = brain._text(body.get("title"), 100)
+    if not title:
+        raise HTTPException(400, "Enter the clip title to format your post text.")
+    description = brain._post_description(body.get("description"))
+    values = body.get("tags")
+    tags = [re.sub(r"[^\w]", "", value)[:30] for value in values[:20] if isinstance(value, str)] if isinstance(values, list) else []
+    tag_str = " ".join("#" + tag for tag in dict.fromkeys(tags) if tag)
+    caption = "\n\n".join(text for text in (title, description, tag_str) if text)
 
     return {
         "youtube_shorts": {
-            "title": f"{title[:75]} {tag_str}"[:100],
-            "description": f"{title}\n\nSubscribe for daily GTA 6 clips and hidden locations!\n\n{tag_str}",
+            "title": title,
+            "description": "\n\n".join(text for text in (description, tag_str) if text),
             "aspect_ratio": "9:16 Vertical",
-            "max_duration": 60,
-            "status": "Ready to Post"
+            "max_duration": 180,
         },
         "tiktok": {
-            "caption": f"{title} 🔥 {tag_str} #fyp #foryou #trending"[:2200],
-            "sound_suggestion": "Trending Gaming Drill Beat",
+            "caption": caption[:2200],
             "aspect_ratio": "9:16 Full Screen",
-            "status": "Ready to Post"
         },
         "instagram_reels": {
-            "caption": f"{title}\n.\n.\n{tag_str} #reels #gamingreels",
+            "caption": caption[:2200],
             "aspect_ratio": "9:16 Vertical Cover",
-            "status": "Ready to Post"
         }
     }
 
@@ -2951,9 +2933,6 @@ def switch_ai_provider(request: Request, body: dict = Body(...)):
 
 
 # ================================================================ Autopilot Posts & Review Queue
-_DEFAULT_VIRAL_TAGS = ["#GTA6", "#Shorts", "#Gaming", "#Viral", "#Trending", "#GTAGameplay", "#TwitchClips", "#FYP"]
-
-
 def _collect_autopilot_clips():
     """List this user's clips, using the file and queue state from this installation."""
     posts = {}
@@ -2973,8 +2952,12 @@ def _collect_autopilot_clips():
             except (ValueError, OSError):
                 path = None
             description = jobs.post_metadata(job, clip)
-            words = clip.get("fixed_words") or []
-            transcript = " ".join(word.get("w", "") for word in words if isinstance(word, dict))
+            cues = clip.get("caption_cues")
+            if cues is None:
+                words = clip.get("fixed_words") or []
+                transcript = " ".join(word.get("w", "") for word in words if isinstance(word, dict))
+            else:
+                transcript = " ".join(cue.get("text", "") for cue in cues if isinstance(cue, dict))
             post = posts.get((jid, cid))
             due_at = post.get("due_at") if post else None
             width, height = clip.get("output_width"), clip.get("output_height")
@@ -2992,13 +2975,13 @@ def _collect_autopilot_clips():
                 "video_url": f"/media/{jid}/{path.name}" if path else None,
                 "cover_url": f"/media/{jid}/{cid}-cover.jpg" if (folder / f"{cid}-cover.jpg").is_file() else None,
                 "thumb_url": f"/media/{jid}/{cid}-thumb.jpg" if (folder / f"{cid}-thumb.jpg").is_file() else None,
-                "captions_count": len(words), "captions_text": transcript,
+                "captions_count": len(transcript.split()), "captions_text": transcript,
                 "viral_score": clip.get("score") or 0,
                 "streamer": (clip.get("source_credit") or {}).get("name") or job.get("uploader") or "",
                 "source_url": (clip.get("source_credit") or {}).get("url") or job.get("source", {}).get("url") or "",
                 "created_at": clip.get("created") or job.get("created") or 0,
                 "scheduled_post": ({
-                    **{key: post.get(key) for key in ("id", "status", "due_at", "platform", "account_name", "url", "error")},
+                    **{key: post.get(key) for key in ("id", "status", "due_at", "platform", "account_name", "url", "error", "batch")},
                     "countdown_sec": max(0, int(due_at - time.time())) if due_at and post["status"] == "scheduled" else None,
                 } if post else None),
             })
@@ -3011,7 +2994,8 @@ def get_autopilot_posts():
     return {"clips": clips, "total_count": len(clips), "version": VERSION,
             "scheduled_count": sum(1 for c in clips if (c.get("scheduled_post") or {}).get("status") == "scheduled"),
             "rendered_count": sum(bool(c["video_url"]) for c in clips),
-            "full_auto_yt": bool(autopilot.load()["settings"].get("enabled"))}
+            "full_auto_yt": bool(autopilot.load()["settings"].get("enabled")),
+            "posting_paused": accounts.settings()["paused"]}
 
 
 @app.post("/api/v12/autopilot-posts/auto-schedule-all")

@@ -1,4 +1,4 @@
-# Install and update MJ-Cliping 1.3.0
+# Install and update MJ-Cliping 1.3.1
 
 ## Requirements
 

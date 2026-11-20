@@ -2,6 +2,14 @@
 
 User-facing changes to MJ-Cliping are listed here.
 
+## 1.3.1 — 2026-11-20
+
+- Unified the clip editor's AI title, description and hashtag generator. It shows provider errors, verifies the supporting
+  excerpt against the clip or scene notes, and keeps completed drafts if the provider stops mid-request.
+- Added scene notes for footage with sparse or missing captions. Full-video drafts use excerpts from across the replay.
+- Kept metadata editing available after source cleanup. Corrected paused queue labels and counts for unassigned clips,
+  and removed canned descriptions, hashtags, and sound recommendations from the platform formatter.
+
 ## 1.3.0 — 2026-11-20
 
 - Added Light, Dark, and System themes in **Settings → Appearance**. The browser remembers your selection.

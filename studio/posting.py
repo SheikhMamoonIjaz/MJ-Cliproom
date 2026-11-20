@@ -378,7 +378,7 @@ def _post(p):
                 post["upload_session"] = session
                 _save()
 
-            shorts_caption = cap if p.get("shorts") and any(h.casefold() == "shorts" for h in metadata["hashtags"]) else cap + "\n\n#Shorts"
+            shorts_caption = cap if any(h.casefold() == "shorts" for h in metadata["hashtags"]) else cap + "\n\n#Shorts"
             rid, url = accounts.youtube_upload(acc, path, title, shorts_caption, metadata["hashtags"], privacy,
                                                resume=p.get("upload_session"), on_session=remember, thumbnail=thumb)
             p.pop("upload_session", None)
@@ -643,6 +643,7 @@ def overview() -> dict:
             views[_day(p["posted_at"])] += p["views"] or 0
     daily = [{"day": d, "clips": made[d], "posted": posted[d], "views": views[d]} for d in days]
     return {"paused": accounts.settings()["paused"], "creators": rows, "posts": show, "daily": daily,
+            "post_counts": {"waiting": len(queue), "failed": sum(p["status"] == "failed" for p in _posts)},
             "cooldowns": [{"account": a["id"], "name": a["name"], "until": until}
                           for a in accounts.list_accounts()
                           if (until := blocked_until(a["platform"], a["id"])) > time.time()],

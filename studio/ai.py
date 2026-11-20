@@ -123,8 +123,7 @@ def attempts():
     primary = current()
     all_profiles = _profiles()
     seen = set()
-    # Priority order: primary profile -> explicit fallback profiles -> any other configured ready profiles
-    ordered = [primary] + [p for p in all_profiles if p.get("fallback") and p["id"] != primary["id"]] + [p for p in all_profiles if p["id"] != primary["id"] and not p.get("fallback")]
+    ordered = [primary] + [p for p in all_profiles if p.get("fallback") and p["id"] != primary["id"]]
     for p in ordered:
         if p["provider"] not in PROVIDERS:
             continue

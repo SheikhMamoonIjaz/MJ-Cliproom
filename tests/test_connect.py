@@ -237,7 +237,7 @@ with ctx.as_user(user.id):
     posting._post(direct_post)
     accounts.youtube_upload = original_youtube_upload
     check("YouTube receives the edited metadata and hashtag tags",
-          yt_args[0], ("IShowSpeed escapes the cops", "A wild GTA chase ends in a close escape.\n\n#GTA5 #Gaming #Shorts\n\n#Shorts", ["GTA5", "Gaming", "Shorts"]))
+          yt_args[0], ("IShowSpeed escapes the cops", "A wild GTA chase ends in a close escape.\n\n#GTA5 #Gaming #Shorts", ["GTA5", "Gaming", "Shorts"]))
 
 # ---- posting
 with ctx.as_user(user.id):

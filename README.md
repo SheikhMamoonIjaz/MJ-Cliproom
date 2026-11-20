@@ -1,4 +1,4 @@
-# MJ-Cliping · 1.3.0
+# MJ-Cliping · 1.3.1
 
 MJ-Cliping is a local gaming clip editor and YouTube Shorts scheduler. Import a recording or supported replay, pick a highlight, edit its captions and crop, then review and publish from the same workspace.
 

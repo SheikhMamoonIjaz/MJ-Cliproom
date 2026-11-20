@@ -222,11 +222,29 @@ def run_editor(client, root):
     assert all("iShowSpeed" not in (item["title"] + item["description"])
                and not re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", item["title"] + item["description"])
                for item in drafts)
-    with patch.object(brain, "ask_ai", side_effect=RuntimeError("provider unavailable")):
-        local_ideas = brain.generate_metadata("short", legacy_job["title"], "iShowSpeed", "", clip_index=1)
-    assert len(local_ideas["ideas"]) == 3 and local_ideas["model"] == "Built-in drafts"
-    assert all("iShowSpeed" not in idea["title"] + idea["description"] for idea in local_ideas["ideas"])
     print("PASS optional AI drafts preserve the source game tag and deterministic fallback")
+
+    from studio import youtube_research
+    metadata_path = f"/api/jobs/{gameplay_id}/clips/{highlight['id']}"
+    notes = "The driver takes the final turn and avoids the barrier."
+    fixture = {"title": "The Final Turn Changes the Race", "description": ("Close racing at the final corner. " * 48).strip(),
+               "hashtags": ["GTARacing", "RacingClips", "FinalTurn"], "evidence": "avoids the barrier"}
+    research = {"status": "researched", "sources": [{"title": "Racing the last corner"}]}
+    with patch.object(jobs, "editable_captions", return_value=[]), \
+            patch.object(youtube_research, "for_clip", return_value=research):
+        assert client.post(metadata_path + "/metadata", json={"count": 1}).status_code == 422
+        with patch.object(brain, "ask_ai", side_effect=RuntimeError("provider unavailable")):
+            for suffix in ("/metadata", "/titles", "/package"):
+                error = client.post(metadata_path + suffix, json={"count": 1, "notes": notes})
+                assert error.status_code == 502 and "provider unavailable" in error.json()["detail"], error.text
+        fabricated = {**fixture, "title": "The Driver Won", "evidence": "wins the championship"}
+        with patch.object(brain, "ask_ai", side_effect=[([fabricated, fixture], "test-model", 4),
+                                                      RuntimeError("provider unavailable")]):
+            result = client.post(metadata_path + "/metadata", json={"count": 2, "notes": notes}).json()
+            assert result["count"] == 1 and result["warning"] and result["model"] == "test-model", result
+            assert result["ideas"][0]["title"] == fixture["title"] and result["ideas"][0]["hashtags"] == fixture["hashtags"]
+            assert len(result["ideas"][0]["description"]) >= 1500
+    print("PASS all AI post routes expose provider errors and retain genuine drafts with supporting scene notes")
 
     scan_job = {"options": {"max_clips": 2, "min_len": 5, "max_len": 20}}
     bounds = []
