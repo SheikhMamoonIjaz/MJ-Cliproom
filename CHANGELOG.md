@@ -7,6 +7,7 @@ User-facing changes to MJ-Cliping are listed here.
 - Added AI provider failover that skips profiles in cooldown and promotes a successful, opted-in independent backup for later requests.
 - Added clip-specific, original title and description generation against existing channel copy. Metadata saves and YouTube scheduling reject repeated titles or descriptions.
 - Added a dashboard action to regenerate unique copy for waiting clips and a batch action that reuses scheduled rows, verifies each file is vertical 9:16 and schedules accepted clips in ten-minute slots.
+- Reduced batch metadata prompt size, avoids redundant research calls, paces requests and pauses when all configured providers are cooling down.
 - Cached the Autopilot Posts review data briefly to reduce repeated file and queue reads.
 - Reordered Settings so AI, connected accounts, Autopilot, appearance and storage are easier to reach.
 - Kept uploads private by default. Platform quotas, failed clip renders and rights checks still apply.

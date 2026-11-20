@@ -1184,7 +1184,8 @@ def _source_transcript(job):
     return " ".join(excerpts)
 
 
-def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="short", notes="", avoid=None):
+def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="short", notes="", avoid=None,
+                              include_research=True):
     from . import youtube_research
 
     if video_format not in ("short", "long"):
@@ -1202,7 +1203,9 @@ def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="shor
         raise HTTPException(422, "No captions are available for this content. Add a short note about what happens, then try again.")
     usage.set_context(job.get("creator"), source)
     try:
-        research = youtube_research.for_clip(source, uploader, notes.strip() + " " + transcript[:2200], region)
+        research = (youtube_research.for_clip(source, uploader, notes.strip() + " " + transcript[:2200], region)
+                    if include_research else {"status": "not_requested", "region": region,
+                                              "query": "", "sources": [], "message": "Batch metadata uses the clip transcript directly."})
         drafts = brain.generate_title_ideas(
             source, uploader, transcript, clip.get("hook") or "",
             references=research["sources"], count=count, video_format=video_format, notes=notes,
@@ -3051,14 +3054,16 @@ def _metadata_history(exclude=None):
 def _run_unique_metadata(uid, task_id, items, region):
     with ctx.as_user(uid):
         history = _metadata_history()
-        for item in items:
+        waiting_provider = False
+        for index, item in enumerate(items):
             jid, cid = item["job"], item["clip"]
             try:
                 job = jobs.get(jid)
                 clip = next((row for row in job["clips"] if row["id"] == cid), None) if job else None
                 if not clip:
                     raise ValueError("This clip is no longer available.")
-                result = _research_clip_post_ideas(job, clip, region, count=1, avoid=history)
+                result = _research_clip_post_ideas(job, clip, region, count=1, avoid=history,
+                                                   include_research=False)
                 idea = result["ideas"][0]
                 title_key, description_key = brain._words_key(idea["title"]), brain._words_key(idea["description"])
                 if any(title_key == brain._words_key(row.get("title")) or
@@ -3085,6 +3090,8 @@ def _run_unique_metadata(uid, task_id, items, region):
                     if state.get("id") == task_id:
                         state["completed"] += 1
                         state["updated_at"] = time.time()
+                if index + 1 < len(items):
+                    time.sleep(15)
             except Exception as exc:  # noqa: BLE001
                 with _UNIQUE_META_LOCK:
                     state = _UNIQUE_META_TASKS.get(uid, {})
@@ -3092,10 +3099,14 @@ def _run_unique_metadata(uid, task_id, items, region):
                         state["completed"] += 1
                         state["errors"].append({"job": jid, "clip": cid, "message": safe.friendly(exc, 240)})
                         state["updated_at"] = time.time()
+                if isinstance(exc, RuntimeError) and not ai.can_answer():
+                    waiting_provider = True
+                    break
         with _UNIQUE_META_LOCK:
             state = _UNIQUE_META_TASKS.get(uid, {})
             if state.get("id") == task_id:
-                state["status"] = "complete_with_errors" if state["errors"] else "complete"
+                state["status"] = ("waiting_provider" if waiting_provider else
+                                    "complete_with_errors" if state["errors"] else "complete")
                 state["updated_at"] = time.time()
 
 

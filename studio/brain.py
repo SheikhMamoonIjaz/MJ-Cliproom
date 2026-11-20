@@ -580,7 +580,9 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
     if not (clip or notes):
         raise ValueError("Add captions or a note about what happens before generating post text.")
     context = f" {_words_key(clip)} {_words_key(notes)} "
-    avoid_rows = [row for row in avoid if isinstance(row, dict)][:120]
+    # Keep the prompt modest for providers with tight free-tier token windows.
+    # The save and queue paths still compare against the complete channel history.
+    avoid_rows = [row for row in avoid if isinstance(row, dict)][-24:]
     avoid_titles = {_words_key(_safe(row.get("title"), 100)) for row in avoid_rows if row.get("title")}
     avoid_descriptions = {_words_key(_safe(row.get("description"), 4000)) for row in avoid_rows
                           if row.get("description")}
