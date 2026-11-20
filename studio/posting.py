@@ -212,6 +212,8 @@ def youtube_batch(items, account_id="", visibility=None, delay=0):
                     if isinstance(overrides.get("hashtags"), str):
                         overrides["hashtags"] = overrides["hashtags"].replace(",", " ").split()
                 meta = jobs.post_metadata(job, clip, overrides)
+                if len(meta["description"]) < 1500:
+                    raise ValueError("Write a clip-specific description of at least 1,500 characters before queueing this Short.")
                 title_key, description_key = _text_key(meta["title"]), _text_key(meta["description"])
                 if not title_key or not description_key or title_key in used_titles or description_key in used_descriptions:
                     raise ValueError("This channel already has that title or description. Generate fresh post text first.")
@@ -292,6 +294,8 @@ def schedule_youtube_batch(items, account_id="", visibility="private"):
                 if spec["width"] * 16 != spec["height"] * 9 or spec["duration"] > 180:
                     raise ValueError("Re-make this clip as a 9:16 Short of three minutes or less before scheduling.")
                 metadata = jobs.post_metadata(job, clip, item.get("metadata"))
+                if len(metadata["description"]) < 1500:
+                    raise ValueError("Write a clip-specific description of at least 1,500 characters before scheduling this Short.")
                 title_key, description_key = _text_key(metadata["title"]), _text_key(metadata["description"])
                 if not title_key or not description_key or title_key in used_titles or description_key in used_descriptions:
                     raise ValueError("This channel already has that title or description. Generate fresh post text first.")

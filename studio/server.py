@@ -1240,6 +1240,8 @@ def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
     if not clip:
         raise HTTPException(404, "No such clip")
     proposed = jobs.post_metadata(job, clip, body)
+    if len(proposed["description"]) < 1500:
+        raise HTTPException(400, "Write a clip-specific description of at least 1,500 characters before saving.")
     title_key = brain._words_key(proposed["title"])
     description_key = brain._words_key(proposed["description"])
     for row in _metadata_history(exclude=(jid, cid)):

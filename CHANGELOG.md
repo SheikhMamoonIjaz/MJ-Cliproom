@@ -9,6 +9,7 @@ User-facing changes to MJ-Cliping are listed here.
 - Added a dashboard action to regenerate unique copy for waiting clips and a batch action that reuses scheduled rows, verifies each file is vertical 9:16 and schedules accepted clips in ten-minute slots.
 - Reduced batch metadata prompt size, avoids redundant research calls, paces requests and pauses the batch when all configured providers are cooling down.
 - Kept stream names, source links and timestamps out of YouTube descriptions; source details remain available in the clip record.
+- Prevented short, reused or duplicate copy from being saved or queued for YouTube Shorts; descriptions must be at least 1,500 characters.
 - Cached the Autopilot Posts review data briefly to reduce repeated file and queue reads.
 - Reordered Settings so AI, connected accounts, Autopilot, appearance and storage are easier to reach.
 - Kept uploads private by default. Platform quotas, failed clip renders and rights checks still apply.

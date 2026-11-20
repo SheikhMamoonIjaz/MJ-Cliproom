@@ -100,7 +100,12 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
         job["clips"].extend({"id": cid, "file": "ok.mp4", "status": "done", "title": f"GTA racing: {cid}"}
                             for cid in ("first", "second", "now"))
         posting._limits.clear()
-    batch = [{"job": jid, "clip": cid} for cid in ("second", "missing", "first")]
+    def post_text(cid):
+        return {"title": f"{cid.title()} GTA race highlight",
+                "description": (f"{cid} GTA racing gameplay: a distinct moment with a different decision and outcome. " * 28),
+                "hashtags": ["GTA6", "Shorts"]}
+
+    batch = [{"job": jid, "clip": cid, "metadata": post_text(cid)} for cid in ("second", "missing", "first")]
     endpoint = "/api/posts/youtube"
     requested = {"account": "yt", "clips": batch}
     result = app.post(endpoint, headers=origin, json=requested).json()
@@ -109,7 +114,9 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
     assert second["due_at"] - first["due_at"] == 600 and result["skipped"][0]["clip"] == "missing"
     assert app.post(endpoint, headers=origin, json=requested).json()["queued"] == 0
     assert app.post(endpoint, headers=origin, json={**requested, "account": "ig"}).status_code == 400
-    assert app.post(endpoint, headers=origin, json={**requested, "clips": batch * 67}).status_code == 400
+    oversized = app.post(endpoint, headers=origin, json={**requested,
+                           "clips": [{"job": jid, "clip": "missing"}] * 201})
+    assert oversized.status_code == 400
     sent = app.post(endpoint, headers=origin, json={
         "account": "yt", "clips": [{"job": jid, "clip": "now", "metadata": {
             "title": "The last corner", "description": "Close racing. " * 120, "hashtags": "#GTA5 #Shorts"}}]

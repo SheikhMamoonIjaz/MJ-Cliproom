@@ -4174,8 +4174,11 @@ document.addEventListener("click", async e => {
           b.textContent = `Writing copy · ${state.completed}/${state.total}`;
         } while (state.status === "running");
         const done = state.completed - (state.errors || []).length;
-        toast(`${done} clip(s) now have unique titles and descriptions.${state.errors?.length ? ` ${state.errors.length} need review.` : ""}`,
-          state.errors?.length ? "bad" : "ok");
+        const remaining = Math.max(0, state.total - state.completed);
+        const message = state.status === "waiting_provider"
+          ? `Generated unique copy for ${done} of ${state.total}. No AI provider is available now; check Settings → AI and retry later. ${remaining} clip(s) remain.`
+          : `${done} of ${state.total} clip(s) now have unique titles and descriptions.${state.errors?.length ? ` ${state.errors.length} need review.` : ""}`;
+        toast(message, state.status === "complete" ? "ok" : "bad");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; b.textContent = oldLabel; }
