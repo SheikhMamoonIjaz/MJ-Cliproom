@@ -22,6 +22,7 @@ CLAUDE.local.md
 .vscode/
 .idea/
 *.bat
+!Start-MJ-Cliproom.bat
 !update-mj-cliproom.bat
 !install-mj-cliproom.bat
 !create-desktop-shortcut.bat

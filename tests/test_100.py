@@ -21,7 +21,8 @@ def check(name, got, want=True):
         fails.append(name)
 
 
-check("the release version has no beta label", server.VERSION in ("1.0.1", "1.1.0", "1.2.0", "1.2.1", "1.2.2"))
+check("the release version has three numeric parts", len(server.VERSION.split(".")) == 3
+      and all(part.isdecimal() for part in server.VERSION.split(".")))
 rows = editor.validate_segments([{"start": 0, "end": 10, "speed": 2}], 20)
 check("double speed halves the cut length", editor.cut_length(rows), 5.0)
 parts = editor.split_segments([{"start": 0, "end": 10}], 4)

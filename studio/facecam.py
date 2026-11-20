@@ -34,26 +34,49 @@ def detect_faces(gray):
     return [(int(x), int(y), int(w), int(h)) for x, y, w, h in boxes]
 
 
-def sample_corner(src, second: float):
-    """One grayscale frame, then a face or the busiest side. None when the frame cannot be read."""
+def _frame(src, second: float):
+    """Read a small grayscale frame with padding to keep its aspect ratio."""
     try:
         import numpy as np
         from .media import NO_WINDOW
         import subprocess
         raw = subprocess.run(
             ["ffmpeg", "-v", "error", "-ss", f"{max(0, float(second)):.2f}", "-i", str(src),
-             "-frames:v", "1", "-vf", "scale=160:90", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"],
+             "-frames:v", "1", "-vf", "scale=320:180:force_original_aspect_ratio=decrease,"
+             "pad=320:180:(ow-iw)/2:(oh-ih)/2", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"],
             capture_output=True, timeout=20, creationflags=NO_WINDOW).stdout
-        if len(raw) < 160 * 90:
+        if len(raw) < 320 * 180:
             return None
-        gray = np.frombuffer(raw[:160 * 90], dtype=np.uint8).reshape(90, 160)
+        return np.frombuffer(raw[:320 * 180], dtype=np.uint8).reshape(180, 320)
     except Exception:  # noqa: BLE001
+        return None
+
+
+def sample_corner(src, second: float):
+    """Return the face side or busiest side when a frame is available."""
+    gray = _frame(src, second)
+    if gray is None:
         return None
     corners = {}
     height, width = gray.shape
     for name, x0, x1 in (("left", 0, width // 3), ("center", width // 3, 2 * width // 3), ("right", 2 * width // 3, width)):
         corners[name] = float(gray[:, x0:x1].std())
     return pick_facecam(gray, corners)
+
+
+def find_center(src, second, width, height):
+    """Locate a face in the recording and return its center in source coordinates."""
+    if width <= 0 or height <= 0:
+        return None
+    frame = _frame(src, second)
+    boxes = detect_faces(frame) if frame is not None else []
+    if not boxes:
+        return None
+    x, y, w, h = max(boxes, key=lambda box: box[2] * box[3])
+    scale = min(320 / width, 180 / height)
+    cx = (x + w / 2 - (320 - width * scale) / 2) / (width * scale)
+    cy = (y + h / 2 - (180 - height * scale) / 2) / (height * scale)
+    return max(0, min(1, cx)), max(0, min(1, cy))
 
 
 def pick_facecam(gray, corners=None) -> str:

@@ -341,6 +341,8 @@ def _check(r, what):
             data = {}
         platform = "instagram" if "Instagram" in what else "youtube" if "YouTube" in what else ""
         _check_limit(r.status_code, data, getattr(r, "headers", {}), platform)
+        if what in ("Starting the YouTube upload", "Uploading to YouTube", "Checking the YouTube upload") and r.status_code in (401, 403):
+            raise ValueError(f"{what} failed ({r.status_code}). Reconnect the channel and check its upload permissions.")
         raise RuntimeError(f"{what} failed ({r.status_code}). Check the connection and app permissions.")
     return r
 
@@ -373,16 +375,35 @@ def _youtube_finish(code: str) -> dict:
 
 
 def _yt_token(acc) -> str:
-    if acc.get("expires", 0) > time.time():
+    if acc.get("expires", 0) > time.time() and acc.get("access_token"):
         return acc["access_token"]
     cid, secret = app_keys("google")
-    tok = _check(httpx.post("https://oauth2.googleapis.com/token", data={
+    if not cid or not secret or not acc.get("refresh_token"):
+        raise ValueError("Reconnect this YouTube channel in Settings → Connected Apps before uploading.")
+    response = httpx.post("https://oauth2.googleapis.com/token", data={
         "client_id": cid, "client_secret": secret,
-        "refresh_token": acc["refresh_token"], "grant_type": "refresh_token"}, timeout=30),
-        "Refreshing the YouTube sign-in").json()
+        "refresh_token": acc["refresh_token"], "grant_type": "refresh_token"}, timeout=30)
+    if response.status_code in (400, 401, 403):
+        raise ValueError("Google could not refresh access to this channel. Reconnect it in Settings → Connected Apps, then retry.")
+    tok = _check(response, "Refreshing the YouTube sign-in").json()
     acc.update(access_token=tok["access_token"], expires=time.time() + tok.get("expires_in", 3600) - 60)
     _put(acc)
     return acc["access_token"]
+
+
+def check_youtube(aid: str) -> dict:
+    acc = get(aid)
+    if not acc or acc["platform"] != "youtube":
+        raise ValueError("Connect the YouTube channel in Settings → Connected apps.")
+    token = _yt_token(acc)
+    response = _check(httpx.get(
+        "https://www.googleapis.com/youtube/v3/channels",
+        params={"part": "snippet", "mine": "true", "fields": "items(id,snippet/title)"},
+        headers={"Authorization": f"Bearer {token}"}, timeout=15), "Checking the YouTube connection")
+    channel = next((row for row in response.json().get("items", []) if aid == "yt_" + row.get("id", "")), None)
+    if not channel:
+        raise ValueError("The Google sign-in does not match this channel. Reconnect the intended YouTube channel.")
+    return {"name": channel.get("snippet", {}).get("title") or acc["name"]}
 
 
 def session_location(resume, size: int) -> str:
@@ -417,23 +438,40 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
     token = _yt_token(acc)
     clean_tags = list(dict.fromkeys(re.sub(r"[^\w]", "", str(tag).lstrip("#"))[:30]
                                     for tag in tags if str(tag).strip()))[:15]
-    meta = {"snippet": {"title": clean_title, "description": re.sub(r"[<>]", "", str(description or ""))[:4900],
+    clean_description = re.sub(r"[<>]", "", str(description or "")).encode("utf-8")[:5000].decode("utf-8", "ignore")
+    meta = {"snippet": {"title": clean_title, "description": clean_description,
                         "tags": clean_tags, "categoryId": "20"},
             "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False}}
-    size = path.stat().st_size
+    file_stat = path.stat()
+    size = file_stat.st_size
     location = session_location(resume, size)
+    if resume and (not location or resume.get("modified_ns", file_stat.st_mtime_ns) != file_stat.st_mtime_ns):
+        raise ValueError("The saved upload no longer matches this clip. Check your YouTube channel for the earlier upload.")
     offset, done = int((resume or {}).get("offset") or 0) if location else 0, None
+
+    def received(response):
+        match = re.search(r"bytes=0-(\d+)", response.headers.get("Range", ""))
+        return int(match.group(1)) + 1 if match else 0
+
+    def remember_upload():
+        if on_session:
+            on_session({"location": location, "size": size, "offset": offset, "modified_ns": file_stat.st_mtime_ns})
+
     if location:
         try:
             probe = httpx.put(location, content=b"", headers={
                 "Authorization": f"Bearer {token}", "Content-Length": "0",
                 "Content-Range": f"bytes */{size}"}, timeout=60)
-        except httpx.RequestError:
-            probe = None
-        if probe is not None and probe.status_code in (200, 201):
+        except httpx.RequestError as exc:
+            raise RuntimeError("YouTube did not respond to the resume check. The saved upload will be kept.") from exc
+        if probe.status_code in (200, 201):
             done = probe.json()
-        elif probe is not None and probe.status_code == 308:
-            offset = max(offset, int(re.search(r"bytes=0-(\d+)", probe.headers.get("Range", "")).group(1)) + 1) if re.search(r"bytes=0-(\d+)", probe.headers.get("Range", "")) else offset
+        elif probe.status_code == 308:
+            offset = received(probe)
+        elif probe.status_code in (404, 410):
+            raise ValueError("The saved YouTube upload expired. Check your channel to see whether it finished.")
+        else:
+            _check(probe, "Checking the YouTube upload")
     if not location and not done:
         start = _check(httpx.post("https://www.googleapis.com/upload/youtube/v3/videos",
                                   params={"uploadType": "resumable", "part": "snippet,status"}, json=meta,
@@ -443,13 +481,8 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
         if not location.startswith("https://www.googleapis.com/upload/youtube/"):
             raise RuntimeError("YouTube did not return a valid resumable upload address.")
         offset = 0
-    if on_session and location:
-        on_session({"location": location, "size": size, "offset": offset})
+    remember_upload()
     chunk_size = 8 * 1024 * 1024  # multiple of Google's 256 KB chunk requirement
-
-    def received(response):
-        match = re.search(r"bytes=0-(\d+)", response.headers.get("Range", ""))
-        return int(match.group(1)) + 1 if match else 0
 
     if not done:
       with path.open("rb") as f:
@@ -475,8 +508,7 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
                     next_offset = received(response)
                     if next_offset > offset:
                         offset, advanced = next_offset, True
-                        if on_session:
-                            on_session({"location": location, "size": size, "offset": offset})
+                        remember_upload()
                         break
                 if response is not None and response.status_code < 500:
                     if response.status_code != 308:
@@ -498,6 +530,7 @@ def youtube_upload(acc, path: Path, title: str, description: str, tags: list, pr
                     next_offset = received(status)
                     if next_offset > offset:
                         offset, advanced = next_offset, True
+                        remember_upload()
                         break
                 if status.status_code < 500:
                     if status.status_code != 308:

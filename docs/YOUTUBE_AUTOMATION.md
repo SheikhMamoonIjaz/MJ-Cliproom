@@ -1,120 +1,38 @@
-# YouTube Shorts automation
+# YouTube Shorts setup, research and posting
 
-MJ Cliproom can find gameplay moments, render Shorts, and post or schedule qualifying clips to a connected YouTube
-channel. Auto-posting is off until you turn it on for a creator workspace.
+## 1. Connect your channel
 
-## 1. Set up Google and YouTube
+1. In Google Cloud, enable **YouTube Data API v3** for the project. Configure **Google Auth Platform** and create an OAuth client of type **Web application**. Add your Google account as a test user if the app is external and still in Testing.
+2. In MJ-Cliping, open **Settings → Connected apps → YouTube → Set up**. Copy the callback URL it displays into the client's authorized redirect URIs. Use the same host, port, and path, including the difference between `localhost` and `127.0.0.1`.
+3. Enter that client's ID and secret in the YouTube setup panel, then choose **Continue with Google**. Select the Google account that owns or manages the intended YouTube channel and grant the requested read and upload scopes.
+4. Check the connected channel name. Start with the **Private** visibility setting for one authorized clip, then check the resulting upload in YouTube Studio.
 
-1. In Google Cloud, create a project and enable **YouTube Data API v3**. In **Google Auth Platform**,
-   configure Branding, Audience and Data Access. For an external app in Testing, add your account
-   as a test user. Create a **Web application** OAuth client. Copy the exact authorized redirect URI
-   shown in **Settings → Connected apps → YouTube → Set up**, including host, port and callback path.
-   For local port 8766 it is **http://127.0.0.1:8766/oauth/youtube/callback**. Open the app at that same
-   address. Use HTTPS for a deployed instance.
-2. Paste the OAuth client ID and secret into the server's YouTube setup panel. Do not put client secrets in this
-   repository or in a video description. Google may require OAuth verification before other accounts can connect.
-3. Open **Settings → Connected apps → YouTube → Continue with Google**. Choose the Google account that owns or
-   manages the channel, review the requested YouTube access, and approve it.
-4. Open the target creator workspace's **Setup** and tick the connected YouTube channel. A Google account can own
-   more than one channel; choose the exact channel you want to publish to. For the first live check,
-   select **Private** and post one clip you are authorized to publish. Verify it in YouTube Studio
-   before turning on automatic posting.
+An OAuth token can expire or be revoked. If a queued post reports an authorization problem, reconnect the channel and retry that queue entry. If Google shows **Error 403: access_denied** on its consent screen, check the OAuth app's Audience and test-user list. See [Google's web server OAuth guide](https://developers.google.com/identity/protocols/oauth2/web-server) and [token expiration guidance](https://developers.google.com/identity/protocols/oauth2#expiration).
 
-The first-party setup uses Google's OAuth web-server flow with offline access so the queue can refresh a token while
-the app runs. YouTube API quota, OAuth verification, account restrictions, and channel eligibility are controlled by
-Google. YouTube refresh tokens for an external app in Testing can expire after seven days; reconnect
-or complete the applicable publishing and verification steps. See [Google's token expiration
-guidance](https://developers.google.com/identity/protocols/oauth2/#expiration) and
-[Google's OAuth web-server guide](https://developers.google.com/identity/protocols/oauth2/web-server)
-and [YouTube's video upload API](https://developers.google.com/youtube/data/guides/using_resumable_upload_protocol).
+## 2. Research clip metadata
 
-## 2. Make a batch of gameplay clips
+Save and test an active LLM in **Settings → AI**. YouTube search uses a connected account or the optional `PEAKCUT_YOUTUBE_RESEARCH_KEY` in `.env`. Restrict a research key to YouTube Data API v3 and store it locally. A research key supplies search results. Uploads use the connected channel's OAuth grant.
 
-1. Open **All videos**, paste a finished stream link or choose a local recording. Tick the ownership or permission
-   confirmation shown under **Make clips** before processing. If this is an older job, confirm its rights from the
-   video card first.
-2. Choose **Gameplay** mode and set **How many** to `10`. Set the clip length range you want, then select **Make
-   clips**.
-3. Let the source scan and render finish. Review the clip cards and open each clip to edit its title, description,
-   crop, captions, watermark, or instrumental music.
-4. Use the clip's **Post** action to publish one clip now, or **Add to queue** to schedule it.
+Open a rendered clip, choose a search region, and click **Research and generate 10 options**. MJ-Cliping asks the model for a topic phrase and uses it to find recent gaming videos from the past 30 days. Review its displayed source links. The LLM uses the results to inform keywords and uses the clip captions and context to write each title, description and set of relevant hashtags.
 
-The picker ranks candidates using available gameplay signals and transcript context. It cannot guarantee that a
-moment is the best one, or that a clip will get views. Review the result before publishing, especially when speech
-recognition is incomplete.
+Each complete AI description has at least 1,500 characters. Apply all the post text or use a candidate's title alone and keep editing. If YouTube search is unavailable, check the search status shown in the editor. The LLM can draft from the clip alone when search returns no references. Verify names, scores, quotes and claims before posting.
 
-## 3. Turn on automatic posting
+## 3. Post one clip or schedule a batch
 
-In the creator workspace's **Setup → Posting**:
+- **Single clip:** Open the clip and select its YouTube destination and visibility. Choose **Post to YouTube** to start the upload through the app's queue.
+- **Batch:** Select up to 200 finished clips, choose the YouTube destination and visibility, and schedule the selection. The worker starts the first eligible clip when due and spaces successful uploads at least 10 minutes apart within the batch.
+- **Visibility:** Private is the initial choice. Choose **Unlisted** or **Public** explicitly for the intended audience. Google can apply additional restrictions to uploads from an unverified API project. See [the upload API documentation](https://developers.google.com/youtube/v3/docs/videos/insert).
 
-1. Tick the YouTube channel.
-2. Turn on **Post new clips automatically** and confirm the warning. Eligible gameplay clips must have an AI-plus-
-   activity score and meet **Only auto-post clips scoring at least**. Signal-only fallback picks stay out of the
-   automatic queue for human review.
-3. Set **Minimum minutes between posts** and **Maximum minutes between posts**. For one Short every 15–20 minutes,
-   enter `15` and `20`.
-4. **Local daily limit per account** defaults to `0` (unlimited) for new workspaces. Existing settings
-   are preserved. A channel upload limit pauses that channel, and a project API quota pauses all its
-   YouTube posts. The queue honors the cooldown and keeps the original account and credentials.
-5. Choose the YouTube visibility setting. Check the queue and history in the app; cancel a queued post or retry a
-   failed one from there.
+Review channel, clip, title, captions, audio, and visibility before queuing. Use footage and music you own or have permission to republish. For a tournament, see the [review checklist](TOURNAMENT_WORKFLOW.md).
 
-For creator live recording, first open **Setup → Their stream** and confirm that you own the channel's content or
-have permission to record and edit it. The server checks this before live recording, source processing, manual posting,
-and automatic posting. Older jobs without a saved confirmation pause and need an explicit confirmation before retry.
+The Shorts uploader accepts finished 9:16 clips up to three minutes long. Trim or re-render an older clip before retrying if the queue reports a format mismatch.
 
-The first eligible clip can be queued immediately. Later clips for the same account get a randomized gap in the
-configured range. The local queue worker checks for due posts about every 15 seconds. It runs only while MJ Cliproom's
-server process, computer, and internet connection are available; sleep, shutdown, or closing the server pauses the
-queue. For around-the-clock posting, run the app on an always-on server and secure its public HTTPS address and
-OAuth secrets.
+## 4. Review the queue and limits
 
-Uploads use YouTube's resumable protocol. A failed upload is retried up to two more times with increasing delay;
-after that, the post appears as failed and can be retried from the queue. If the Google connection expires or is
-revoked, reconnect the channel in **Settings → Connected apps** before retrying.
+Keep MJ-Cliping running, the computer awake, and its network connection available when uploads are due. Check the queue for scheduled, uploading, posted, and failed entries. Open the returned video link after a successful upload. If a post fails, read the queue error, correct the cause, and retry the existing entry. Where an upload might already have reached YouTube, check the destination channel before scheduling the same clip again.
 
-You can publish immediately with **Post now**, or keep the app running and queue clips at the creator's configured
-interval (for example, 15–20 minutes). The queue and its history are saved in MJ Cliproom's data folder. Use **Update
-now** when an update is available; the launcher keeps that folder, applies the update while the server is stopped,
-and reloads the page after the new version starts. Partial source downloads and unfinished jobs resume when saved files and
-the source platform allow it. Check **Settings → Storage** to see or change the folder used for uploads and media.
+A 200-clip batch can extend over multiple days. A single queue using a 10-minute interval has a theoretical maximum of 144 slots per 24 hours, before upload time, delays, and quota. Google currently lists separate default project limits of 100 `videos.insert` calls and 100 `search.list` calls per day. The limits reset at midnight Pacific Time. Channel-specific upload limits and local settings can reduce throughput further. For more API capacity, review your quota in Google Cloud and follow Google's extension process. See [quota costs and limits](https://developers.google.com/youtube/v3/determine_quota_cost) and [quota and compliance audits](https://developers.google.com/youtube/v3/guides/quota_and_compliance_audits).
 
-## 4. Autopilot
+## 5. Add music
 
-Open **Autopilot** after YouTube is connected. The watch list is the saved creator list, plus any campaign
-source you add there. Confirm the handle, tick **Allowlist**, and set rights to **Authorized** before that
-channel can be recorded or uploaded. **Draft** only copies a permission note. It does not send email.
-
-GTA 5 streams are ignored. Non-English streams are ignored. Signal-only clips stay in the queue with a preview
-until you approve them. Full auto, per source, is the switch that uploads those without a click. The gap you
-set is how long a finished clip waits, so you can open the preview before it goes out.
-
-YouTube's quota, OAuth testing limits and the server's `PEAKCUT_MAX_LIVE` ceiling still apply. See
-[DEPLOY.md](../DEPLOY.md#autopilot).
-
-## 5. Add background music carefully
-
-Open a clip and choose **Instrumental background music**. Upload an audio-only instrumental you own or are licensed
-to use. New music mixes start at 30%, duck beneath the streamer's speech and other prominent source audio, and use
-fades and a peak limiter so the streamer and gameplay remain clear. Adjust the track level and listen to the rendered
-clip before posting.
-
-The app does not fetch YouTube Shorts catalogue tracks or detect lyrics automatically. Add music from YouTube's
-Shorts catalogue inside YouTube's own creation tools, or use audio you have separately licensed. YouTube warns that
-copyright-protected music added outside its creation tools can receive a Content ID claim or be removed; see
-[YouTube's Shorts audio guidance](https://support.google.com/youtube/answer/16215842).
-
-## Rights and channel eligibility
-
-Only download, edit, and publish streams, gameplay, camera footage, and music that you own or are authorized to use,
-or that qualify for a copyright exception in your jurisdiction. The fact that other channels clip a streamer, that a
-clip is short, that the streamer is credited, or that music/cropping was added does not guarantee permission or avoid
-a Content ID claim. YouTube's reused-content monetization rules are separate from copyright and can apply even when
-you have permission. See [YouTube copyright tips](https://support.google.com/youtube/answer/12361994) and
-[channel monetization policies](https://support.google.com/youtube/answer/1311392).
-
-The rights checkbox records your own confirmation; PeakCut cannot verify ownership or grant permission on your
-behalf. If you are unsure whether a streamer's VOD, gameplay footage, or music is cleared, do not auto-post it.
-
-MJ Cliproom cannot promise that a video is copyright-safe, monetizable, or viral. Auto-post only content you have
-cleared for publication, and add your own commentary or other substantive creative contribution when appropriate.
+Use an instrumental file you own or are licensed to use, set its volume, and listen to the rendered clip before posting. When you want a song from YouTube's licensed Shorts catalog, add it in YouTube's own creation tools. See [YouTube's Shorts audio guidance](https://support.google.com/youtube/answer/16215842).

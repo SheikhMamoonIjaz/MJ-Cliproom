@@ -17,7 +17,7 @@ foreach ($dp in $desktopPaths) {
     $shortcut = $WshShell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $startBat
     $shortcut.WorkingDirectory = $root
-    $shortcut.Description = "MJ-Cliping v1.2.2 - 24/7 Autonomous AI Shorts Studio"
+    $shortcut.Description = "Launch MJ Cliproom"
     $shortcut.Save()
     Write-Host "Desktop shortcut created: $shortcutPath"
 
@@ -26,7 +26,7 @@ foreach ($dp in $desktopPaths) {
     $startServer = $WshShell.CreateShortcut($startServerPath)
     $startServer.TargetPath = $startBat
     $startServer.WorkingDirectory = $root
-    $startServer.Description = "Start MJ Cliproom v1.2.2 - 24/7 AI Shorts Studio"
+    $startServer.Description = "Start the local MJ Cliproom server"
     $startServer.Save()
 
     # 3. Modern Supervised Updater Shortcut
@@ -36,10 +36,6 @@ foreach ($dp in $desktopPaths) {
     $updater.WorkingDirectory = $root
     $updater.Description = "Update MJ Cliproom to the latest release"
     $updater.Save()
-
-    # 4. Direct batch launcher on desktop
-    $desktopBat = Join-Path $dp "Start-MJ-Cliproom.bat"
-    Copy-Item -Path $startBat -Destination $desktopBat -Force
 
     # Clean up obsolete beta 0.10 shortcut name if present
     $oldBeta = Join-Path $dp "MJ Cliproom Beta 0.10 - Start Server.lnk"

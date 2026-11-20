@@ -1,8 +1,8 @@
 /* Source timeline and timed captions. Uses the app's existing API and session. */
 const clipPresets = {
   action: {layout: "crop", style: "clean", captions: "burn"},
-  gameplay: {layout: "blur", style: "clean", captions: "burn"},
-  clean: {layout: "blur", style: "clean", captions: "clean"},
+  gameplay: {layout: "auto", style: "clean", captions: "burn"},
+  clean: {layout: "crop", style: "clean", captions: "clean"},
 };
 
 function getEditorStorage(key, fallback) {
@@ -66,7 +66,7 @@ function openSourceEditor(job, clip) {
           <label class="f">Drag start <input name="inPoint" type="range" min="0" max="${duration}" step="0.001" value="${clip?.start ?? 0}"></label>
           <label class="f">Drag end <input name="outPoint" type="range" min="0" max="${duration}" step="0.001" value="${clip?.end ?? length}"></label>
           <div class="layout-picks" role="radiogroup" aria-label="Layout">
-            ${[["blur", "Full"], ["stack", "Stacked"], ["split", "Split"], ["crop", "Crop"]].map(([id, label]) =>
+            ${[["auto", "Auto facecam"], ["stack", "Facecam below"], ["crop", "Full-screen"]].map(([id, label]) =>
               `<button type="button" class="btn sm" data-layout="${id}" aria-pressed="false">${label}</button>`).join("")}
           </div>
           <div class="two">
@@ -208,12 +208,12 @@ function openSourceEditor(job, clip) {
   function drawCrop() {
     const sw = video.videoWidth;
     const sh = video.videoHeight;
-    const layout = sh >= sw ? "crop" : el("layout").value;
+    const layout = el("layout").value;
     crop.hidden = !sw;
     if (!sw) return;
     const bounds = video.getBoundingClientRect();
     const scale = Math.min(bounds.width / sw, bounds.height / sh);
-    const aspect = layout === "crop" ? 9 / 16 : layout === "zoom" ? 1080 / 1000 : sw / sh;
+    const aspect = layout === "stack" ? 1080 / 1040 : 9 / 16;
     const w = Math.min(sw, sh * aspect);
     const h = Math.min(sh, sw / aspect);
     crop.style.left = (bounds.width - sw * scale) / 2 + (sw - w) * scale * Number(el("crop_x").value) + "px";

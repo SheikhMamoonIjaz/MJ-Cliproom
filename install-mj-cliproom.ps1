@@ -43,7 +43,7 @@ try {
 
 Write-Host ""
 Write-Host "============================================================"
-Write-Host "  MJ-Cliping v1.2.0 is installed and ready!"
+Write-Host "  MJ Cliproom is installed and ready!"
 Write-Host "============================================================"
 Write-Host "Start it from your Desktop shortcut or with:"
 Write-Host "  .\.venv\Scripts\python.exe -m studio.launcher"

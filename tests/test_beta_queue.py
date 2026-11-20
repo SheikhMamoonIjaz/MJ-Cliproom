@@ -63,6 +63,9 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
         job["status"] = "done"
         job["clips"] = [{"id": "rated", "status": "done", "score": 95, "file": "ok.mp4", "score_source": "ai_and_signals"},
                         {"id": "signal", "status": "done", "score": 98, "file": "review.mp4", "score_source": "signals"}]
+        folder = Path(job["dir"]) / "clips"
+        folder.mkdir(exist_ok=True)
+        (folder / "ok.mp4").write_bytes(b"mock upload")
         posting._reconcile_prompt_posts()
         posting._reconcile_prompt_posts()
         rows = posting.overview()["posts"]
@@ -91,4 +94,38 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
         assert all(p["status"] == "cancelled" for p in posting._mine())
     assert app.post("/api/posts", headers=origin, json={"job": jid, "clip": "rated", "accounts": ["yt"]}).status_code == 200
     print("PASS only scored clips queue, quota waits persist, retry keeps its destination, and revocation stops queued posts")
+
+    with ctx.as_user(owner):
+        job = jobs.get(jid)
+        job["clips"].extend({"id": cid, "file": "ok.mp4", "status": "done", "title": f"GTA racing: {cid}"}
+                            for cid in ("first", "second", "now"))
+        posting._limits.clear()
+    batch = [{"job": jid, "clip": cid} for cid in ("second", "missing", "first")]
+    endpoint = "/api/posts/youtube"
+    requested = {"account": "yt", "clips": batch}
+    result = app.post(endpoint, headers=origin, json=requested).json()
+    assert [p["clip"] for p in result["posts"]] == ["second", "first"]
+    first, second = result["posts"]
+    assert second["due_at"] - first["due_at"] == 600 and result["skipped"][0]["clip"] == "missing"
+    assert app.post(endpoint, headers=origin, json=requested).json()["queued"] == 0
+    assert app.post(endpoint, headers=origin, json={**requested, "account": "ig"}).status_code == 400
+    assert app.post(endpoint, headers=origin, json={**requested, "clips": batch * 67}).status_code == 400
+    sent = app.post(endpoint, headers=origin, json={
+        "account": "yt", "clips": [{"job": jid, "clip": "now", "metadata": {
+            "title": "The last corner", "description": "Close racing. " * 120, "hashtags": "#GTA5 #Shorts"}}]
+    }).json()
+    assert sent["queued"] == 1 and abs(sent["posts"][0]["due_at"] - time.time()) < 2
+    with ctx.as_user(owner):
+        single = next(p for p in posting._mine() if p["id"] == sent["posts"][0]["id"])
+        with patch.object(posting.media, "probe", return_value={"width": 1080, "height": 1920, "duration": 30}), \
+                patch.object(accounts, "youtube_upload", return_value=("remote", "https://www.youtube.com/shorts/remote")) as upload:
+            posting._post(single)
+        assert single["status"] == "posted" and upload.call_args.args[5] == "private"
+        assert len(upload.call_args.args[3]) >= 1500 and upload.call_args.args[3].count("#Shorts") == 1
+        earlier = next(p for p in posting._mine() if p["id"] == first["id"])
+        later = next(p for p in posting._mine() if p["id"] == second["id"])
+        earlier["due_at"] = later["due_at"] + 90
+        assert posting._space_batch(earlier) == [later]
+        assert later["due_at"] == earlier["due_at"] + 600
+    print("PASS direct and ordered YouTube batches, missing clips, duplicates, visibility, metadata and delayed slots")
     db.engine.dispose()

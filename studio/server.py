@@ -16,6 +16,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
+import httpx
 import sqlalchemy as sa
 import uvicorn
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -49,7 +50,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.2.2"
+VERSION = "1.3.0"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 
 
@@ -77,7 +78,6 @@ def _startup():
     live.start()
     posting.start()
     autopilot.start()
-    jobs.on_clip_ready.append(lambda j, c: _auto_schedule_rendered_clips_to_yt())
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
 
@@ -580,7 +580,7 @@ def status(request: Request):
     return {"version": VERSION, "commit": updates.RUNNING, "rights_gate_version": 1, "user": auth.public(me_), "update": updates.latest() if me_.is_admin else None,
             "update_job": updates.apply_status() if me_.is_admin else None,
             "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
-            "tour": not accounts.settings()["tour_done"],
+            "tour": not accounts.settings()["tour_done"], "posting_paused": accounts.settings()["paused"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER, "daily_quota": config.DAILY_VIDEO_QUOTA,
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS,
             "music": music.list_tracks()}
@@ -1208,24 +1208,33 @@ def clip_metadata(jid: str, cid: str, body: dict = Body(...)):
         raise HTTPException(502, _ai_error(e) or "The AI could not write metadata. Try another model or try again.")
 
 
+def _research_clip_post_ideas(job, clip, region, count=10):
+    from . import youtube_research
+
+    cues = jobs.editable_captions(job, clip)
+    transcript = " ".join(cue.get("text", "") for cue in cues)
+    source = job.get("title") or ""
+    uploader = job.get("uploader") or ""
+    usage.set_context(job.get("creator"), source)
+    try:
+        research = youtube_research.for_clip(source, uploader, transcript, region)
+        drafts = brain.generate_title_ideas(source, uploader, transcript, clip.get("hook") or "",
+                                            references=research["sources"], count=count)
+        return {**drafts, "research": research}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, _ai_error(e) or "The AI could not write post options. Check Settings → AI and try again.")
+
+
 @app.post("/api/jobs/{jid}/clips/{cid}/titles")
-def clip_title_ideas(jid: str, cid: str):
+def clip_title_ideas(jid: str, cid: str, body: dict | None = Body(None)):
     job = _job_or_404(jid)
     clip = next((item for item in job["clips"] if item["id"] == cid), None)
     if not clip:
         raise HTTPException(404, "No such clip")
-    _throttle("titles:" + ctx.uid(), 12, 600, "Wait a few minutes before asking for more title ideas.")
-    cues = jobs.editable_captions(job, clip)
-    transcript = " ".join(cue.get("text", "") for cue in cues)
-    usage.set_context(job.get("creator"), job.get("title") or "")
-    try:
-        return brain.generate_title_ideas(job.get("title") or clip.get("title", ""),
-                                          job.get("uploader") or "", transcript,
-                                          clip.get("hook") or "")
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, _ai_error(e) or "The AI could not write title ideas. Check Settings, AI, and try again.")
+    _throttle("titles:" + ctx.uid(), 12, 600, "Wait a few minutes before asking for more post options.")
+    return _research_clip_post_ideas(job, clip, (body or {}).get("region", "US"))
 
 
 @app.put("/api/jobs/{jid}/clips/{cid}/metadata")
@@ -1794,6 +1803,17 @@ def list_accounts():
     return accounts.list_accounts()
 
 
+@app.post("/api/accounts/{aid}/check-youtube")
+def check_youtube_connection(aid: str):
+    _throttle("check-youtube:" + ctx.uid(), 6, 60)
+    try:
+        return accounts.check_youtube(aid)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(502, "YouTube could not verify this channel. Check the connection or reconnect it.") from exc
+
+
 @app.delete("/api/accounts/{aid}")
 def remove_account(aid: str):
     accounts.remove(aid)
@@ -2077,6 +2097,23 @@ def add_posts(body: dict = Body(...)):
                                                  "due_at": post["due_at"]} for post in all_made]}
 
 
+def _queue_youtube(body, delay=0):
+    _throttle("youtube-queue:" + ctx.uid(), 30, 60, "Wait a moment before queuing more YouTube posts.")
+    try:
+        rows, skipped = posting.youtube_batch(body.get("clips"), str(body.get("account") or ""),
+                                              body.get("visibility"), delay=delay)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"queued": len(rows), "posts": [
+        {key: row.get(key) for key in ("id", "job", "clip", "platform", "account_name", "status", "due_at")}
+        for row in rows], "skipped": skipped}
+
+
+@app.post("/api/posts/youtube")
+def queue_youtube_posts(body: dict = Body(...)):
+    return _queue_youtube(body)
+
+
 @app.post("/api/posts/{pid}/{action}")
 def post_action(pid: str, action: str):
     try:
@@ -2247,10 +2284,6 @@ def _autonomous_loop():
                     _autonomous_log(f"Processing in-flight video pipeline ({len(active_list)} active jobs)...")
                 else:
                     _autonomous_log("Autonomous cycle complete: continuous 24/7 loop active, next check in 25m.")
-            try:
-                _auto_schedule_rendered_clips_to_yt()
-            except Exception:
-                pass
             with _auto_lock:
                 _autonomous_config["status"] = "Running 24/7 (Next cycle in 25m)"
             _save_autonomous_state()
@@ -2307,58 +2340,10 @@ def get_v12_features():
 
 
 @app.get("/api/v12/trends")
-def get_trends():
-    return {
-        "category": "GTA 6 & High-Engagement Gaming",
-        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "trends": [
-            {
-                "id": "t1",
-                "topic": "GTA 6 Vice City Hidden Locations & Submerged Tunnel",
-                "viral_score": 99,
-                "growth": "+340%",
-                "tags": ["#GTA6", "#ViceCity", "#GTA6Secrets", "#GamingClips", "#MapSecrets"],
-                "hook": "Nobody realized Rockstar hid THIS spot in Vice City...",
-                "style": "Mystery / Discovery"
-            },
-            {
-                "id": "t2",
-                "topic": "Lucia & Jason Police Escape AI Mechanics",
-                "viral_score": 96,
-                "growth": "+280%",
-                "tags": ["#GTA6Gameplay", "#RockstarGames", "#GTA6Leak", "#PoliceChase"],
-                "hook": "Wait until you see how the new GTA 6 police AI responds...",
-                "style": "Action / Gameplay"
-            },
-            {
-                "id": "t3",
-                "topic": "Crazy Streamer Jump Scares & Fails",
-                "viral_score": 94,
-                "growth": "+210%",
-                "tags": ["#GamingFails", "#StreamerReactions", "#FunnyMoments", "#TwitchClips"],
-                "hook": "He thought he was completely safe until THIS happened!",
-                "style": "Humor / Reaction"
-            },
-            {
-                "id": "t4",
-                "topic": "Vice Beach Supercar Speed Glitch & Stunts",
-                "viral_score": 91,
-                "growth": "+195%",
-                "tags": ["#GTA6Stunts", "#ViceBeach", "#GamingShorts", "#ViralClips"],
-                "hook": "This physics glitch launches you across the entire map!",
-                "style": "Stunt / Exploit"
-            },
-            {
-                "id": "t5",
-                "topic": "Secret Underwater Lab Easter Egg",
-                "viral_score": 88,
-                "growth": "+160%",
-                "tags": ["#EasterEgg", "#GTAEasterEggs", "#SecretLocation"],
-                "hook": "You need a submarine to find this hidden Easter egg...",
-                "style": "Lore / Easter Egg"
-            }
-        ]
-    }
+def get_trends(region: str = "US"):
+    from . import youtube_research
+    _throttle("youtube-topics:" + ctx.uid(), 12, 600)
+    return youtube_research.for_clip("GTA 6", "", "", region, infer_topic=False)
 
 
 @app.post("/api/v12/compilation")
@@ -2933,34 +2918,36 @@ def set_autonomous_status(body: dict = Body(...)):
 
 
 @app.get("/api/v12/ai-providers")
-def get_ai_providers():
-    cur = ai.current()
-    all_p = ai._profiles()
+def get_ai_providers(request: Request):
+    _admin(request)
+    cur = ai.public()
+    all_p = cur["profiles"]
+    configured = {p["provider"] for p in all_p if p["ready"]}
     return {
         "active_profile": cur.get("id"),
         "active_provider": cur.get("provider"),
         "profiles": all_p,
         "available_providers": [
-            {"id": "gemini", "name": "Google Gemini (2.5 Flash / 3.x)", "configured": bool(cur.get("key") or config.ai_key())},
-            {"id": "zai", "name": "Z.AI GLM (GLM-4.7 / GLM-4)", "configured": True},
-            {"id": "openai", "name": "OpenAI (GPT-4o)", "configured": False}
+            {"id": p["id"], "name": p["label"], "configured": p["id"] in configured}
+            for p in cur["providers"]
         ]
     }
 
 
 @app.post("/api/v12/ai-providers/switch")
-def switch_ai_provider(body: dict = Body(...)):
+def switch_ai_provider(request: Request, body: dict = Body(...)):
+    _admin(request)
     target_id = str(body.get("profile_id") or body.get("provider") or "").lower()
-    all_p = ai._profiles()
+    all_p = ai.public()["profiles"]
     match = next((p for p in all_p if p.get("id") == target_id or p.get("provider") == target_id), None)
-    if match:
-        ai.manage(match["id"], "active")
-    else:
-        key_val = body.get("key")
-        ai.save(provider=target_id, models=body.get("models") or [ai.PROVIDERS.get(target_id, ("", "", "", "", "gemini-2.5-flash"))[4]],
-                base_url=body.get("base_url") or "", key=key_val, profile_id=target_id, name=target_id.upper())
+    if not match or not match["ready"]:
+        raise HTTPException(400, "Set up this model profile in Settings → AI before switching to it.")
+    try:
+        current = ai.manage(match["id"], "activate")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     ctx.bump()
-    return {"ok": True, "current": ai.current()}
+    return {"ok": True, "current": current}
 
 
 # ================================================================ Autopilot Posts & Review Queue
@@ -2968,489 +2955,150 @@ _DEFAULT_VIRAL_TAGS = ["#GTA6", "#Shorts", "#Gaming", "#Viral", "#Trending", "#G
 
 
 def _collect_autopilot_clips():
-    """Gathers clips across all jobs with render engine details and live posting schedule."""
-    all_j = jobs.all_jobs()
-    posts_by_clip = {}
+    """List this user's clips, using the file and queue state from this installation."""
+    posts = {}
     with posting._lock:
-        for p in posting._posts:
-            key = f"{p.get('job')}:{p.get('clip')}"
-            posts_by_clip[key] = p
+        for post in posting._mine():
+            if post["platform"] == "youtube" and post.get("account") != "youtube_auto":
+                posts[(post["job"], post["clip"])] = dict(post)
 
-    clips_list = []
-    for j in all_j:
-        jid = j["id"]
-        for c in j.get("clips", []):
-            cid = c["id"]
-            key = f"{jid}:{cid}"
-            p = posts_by_clip.get(key)
-            duration = round(float(c.get("duration") or (c.get("end", 0) - c.get("start", 0))), 1)
-            file_name = c.get("file")
-            j_dir = Path(j.get("dir") or (config.DATA_DIR / "videos" / jid))
-            is_rendered = bool(file_name and (j_dir / "clips" / file_name).is_file())
-
-            words = c.get("fixed_words") or []
-            caption_text = " ".join(w.get("w", "") for w in words if isinstance(w, dict)) if words else c.get("description") or ""
-
-            due_at = p.get("due_at") if p else None
-            countdown = max(0, int(due_at - time.time())) if due_at and p.get("status") == "scheduled" else None
-
-            tags = c.get("hashtags") or _DEFAULT_VIRAL_TAGS
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split() if t.strip()]
-            tags = [f"#{t.lstrip('#')}" for t in tags if t]
-            if not tags:
-                tags = list(_DEFAULT_VIRAL_TAGS)
-
-            clips_list.append({
-                "id": f"{jid}/{cid}",
-                "jid": jid,
-                "cid": cid,
-                "title": c.get("title") or c.get("hook") or "GTA 6 Viral Moment",
-                "hook": c.get("hook") or "VIRAL HIGHLIGHT",
-                "description": c.get("description") or f"Watch this insane moment in {j.get('game', 'GTA 6')}! Did you expect this reaction? Drop your thoughts below!",
-                "hashtags": tags,
-                "duration": duration if duration > 0 else 32.5,
-                "aspect": "9:16",
-                "resolution": "1080x1920 (Pure 9:16 Vertical)",
-                "render_status": "Ready 1080p60 Vertical" if is_rendered else "Rendering 9:16 Vertical",
-                "render_engine": {
-                    "format": "9:16 Fullscreen Vertical (1080x1920 @ 60FPS)",
-                    "layout": "Streamer Facecam + Gameplay Action Split (OpenCV Auto-Lock)",
-                    "audio": "Normalized EBU R128 (-14 LUFS Speech Punch)",
-                    "encoder": "NVIDIA NVENC Ultra HD GPU",
-                    "status": "Render Complete" if is_rendered else "Processing in Queue"
-                },
-                "video_url": f"/media/{jid}/{file_name}" if is_rendered else None,
-                "cover_url": f"/media/{jid}/{cid}-cover.jpg" if (j_dir / "clips" / f"{cid}-cover.jpg").is_file() else None,
-                "thumb_url": f"/media/{jid}/{cid}-thumb.jpg" if (j_dir / "clips" / f"{cid}-thumb.jpg").is_file() else None,
-                "captions_count": len(words) if words else len(caption_text.split()),
-                "captions_text": caption_text,
-                "viral_score": c.get("score") or c.get("viral") or 95,
-                "streamer": (c.get("source_credit") or {}).get("name") or j.get("uploader") or "Featured Streamer",
-                "source_url": (c.get("source_credit") or {}).get("url") or j.get("source", {}).get("url") or "",
-                "created_at": c.get("created") or j.get("created") or time.time(),
-                "scheduled_post": {
-                    "id": p["id"],
-                    "status": p.get("status"),
-                    "due_at": due_at,
-                    "countdown_sec": countdown,
-                    "platform": p.get("platform", "youtube"),
-                    "account_name": p.get("account_name", "YouTube Shorts"),
-                    "url": p.get("url"),
-                    "error": p.get("error")
-                } if p else None
+    result = []
+    for job in jobs.list_jobs():
+        jid = job["id"]
+        folder = Path(job["dir"]) / "clips"
+        for clip in job["clips"]:
+            cid = clip["id"]
+            try:
+                path = posting._clip_file(job, clip) if clip.get("status") == "done" else None
+            except (ValueError, OSError):
+                path = None
+            description = jobs.post_metadata(job, clip)
+            words = clip.get("fixed_words") or []
+            transcript = " ".join(word.get("w", "") for word in words if isinstance(word, dict))
+            post = posts.get((jid, cid))
+            due_at = post.get("due_at") if post else None
+            width, height = clip.get("output_width"), clip.get("output_height")
+            aspect = clip.get("output_aspect") or clip.get("aspect") or ""
+            result.append({
+                "id": f"{jid}/{cid}", "jid": jid, "cid": cid,
+                "title": description["title"], "description": description["description"],
+                "hashtags": ["#" + tag for tag in description["hashtags"]],
+                "hook": clip.get("hook") or "", "aspect": aspect,
+                "duration": round(float(clip.get("duration") or (clip.get("end", 0) - clip.get("start", 0))), 1),
+                "resolution": f"{width} × {height}" if width and height else "",
+                "render_status": "Ready" if path else "File missing" if clip.get("status") == "done" else str(clip.get("status") or "Waiting"),
+                "render_engine": {"format": aspect, "layout": clip.get("layout") or "",
+                                  "audio": "", "encoder": "", "status": "Render complete" if path else "Waiting for render"},
+                "video_url": f"/media/{jid}/{path.name}" if path else None,
+                "cover_url": f"/media/{jid}/{cid}-cover.jpg" if (folder / f"{cid}-cover.jpg").is_file() else None,
+                "thumb_url": f"/media/{jid}/{cid}-thumb.jpg" if (folder / f"{cid}-thumb.jpg").is_file() else None,
+                "captions_count": len(words), "captions_text": transcript,
+                "viral_score": clip.get("score") or 0,
+                "streamer": (clip.get("source_credit") or {}).get("name") or job.get("uploader") or "",
+                "source_url": (clip.get("source_credit") or {}).get("url") or job.get("source", {}).get("url") or "",
+                "created_at": clip.get("created") or job.get("created") or 0,
+                "scheduled_post": ({
+                    **{key: post.get(key) for key in ("id", "status", "due_at", "platform", "account_name", "url", "error")},
+                    "countdown_sec": max(0, int(due_at - time.time())) if due_at and post["status"] == "scheduled" else None,
+                } if post else None),
             })
-
-    if not clips_list:
-        sample_clips = [
-            {
-                "id": "sample-gta6-1/c1",
-                "jid": "sample-gta6-1",
-                "cid": "c1",
-                "title": "His Reaction When The Secret Vault Opened In Vice Beach",
-                "hook": "NO WAY THIS WORKED",
-                "description": "Streamer accidentally triggers the hidden underwater submarine vault in GTA 6! Have you found this easter egg yet? Follow for daily GTA 6 clips!",
-                "hashtags": ["#GTA6", "#Shorts", "#Gaming", "#Viral", "#Trending", "#GTAGameplay", "#TwitchClips"],
-                "duration": 34.2,
-                "aspect": "9:16",
-                "resolution": "1080x1920 (Pure 9:16 Vertical)",
-                "render_status": "Ready 1080p60 Vertical",
-                "render_engine": {
-                    "format": "9:16 Fullscreen Vertical (1080x1920 @ 60FPS)",
-                    "layout": "Streamer Facecam Top 35% + Gameplay Action Bottom 65%",
-                    "audio": "Normalized EBU R128 (-14 LUFS Speech Clarity)",
-                    "encoder": "NVIDIA NVENC Ultra HD GPU",
-                    "status": "Render Complete"
-                },
-                "video_url": None,
-                "cover_url": None,
-                "thumb_url": None,
-                "captions_count": 48,
-                "captions_text": "Bro wait... look at the coordinates! The hatch is literally opening right now! No shot! (LOUD: Shouting)",
-                "viral_score": 98,
-                "streamer": "Kai Cenat",
-                "source_url": "https://twitch.tv/kaicenat",
-                "created_at": time.time() - 360,
-                "scheduled_post": None
-            },
-            {
-                "id": "sample-gta6-2/c2",
-                "jid": "sample-gta6-2",
-                "cid": "c2",
-                "title": "xQc Discovers The Impossible 5-Star Police Escape Route",
-                "hook": "INSANE ESCAPE ROUTE",
-                "description": "5-star wanted level completely vanished using this rooftop motorcycle jump in downtown Vice City! What rating does this move get?",
-                "hashtags": ["#GTA6", "#Shorts", "#Gaming", "#xQc", "#Viral", "#Trending", "#Clutch"],
-                "duration": 28.5,
-                "aspect": "9:16",
-                "resolution": "1080x1920 (Pure 9:16 Vertical)",
-                "render_status": "Ready 1080p60 Vertical",
-                "render_engine": {
-                    "format": "9:16 Fullscreen Vertical (1080x1920 @ 60FPS)",
-                    "layout": "OpenCV Facecam Focus + Gameplay Action Split",
-                    "audio": "Normalized EBU R128 (-14 LUFS Speech Clarity)",
-                    "encoder": "NVIDIA NVENC Ultra HD GPU",
-                    "status": "Render Complete"
-                },
-                "video_url": None,
-                "cover_url": None,
-                "thumb_url": None,
-                "captions_count": 39,
-                "captions_text": "Jump the ramp now! Go go go! We cleared the helicopter! They lost visual! Look at the radar! (LOUD: Laughter)",
-                "viral_score": 96,
-                "streamer": "xQc",
-                "source_url": "https://twitch.tv/xqc",
-                "created_at": time.time() - 720,
-                "scheduled_post": None
-            },
-            {
-                "id": "sample-gta6-3/c3",
-                "jid": "sample-gta6-3",
-                "cid": "c3",
-                "title": "DarkViperAU Tests GTA 6 Physics Engine To The Absolute Limit",
-                "hook": "PHYSICS GLITCH FOUND",
-                "description": "The exact moment the Vice City bridge physics broke down during this high-speed ramp test. Did Rockstar intend this?",
-                "hashtags": ["#GTA6", "#Shorts", "#Gaming", "#DarkViperAU", "#Viral", "#EasterEgg"],
-                "duration": 41.0,
-                "aspect": "9:16",
-                "resolution": "1080x1920 (Pure 9:16 Vertical)",
-                "render_status": "Ready 1080p60 Vertical",
-                "render_engine": {
-                    "format": "9:16 Fullscreen Vertical (1080x1920 @ 60FPS)",
-                    "layout": "Streamer Reaction Mirror + Crosshair Motion Focus",
-                    "audio": "Normalized EBU R128 (-14 LUFS Speech Clarity)",
-                    "encoder": "NVIDIA NVENC Ultra HD GPU",
-                    "status": "Render Complete"
-                },
-                "video_url": None,
-                "cover_url": None,
-                "thumb_url": None,
-                "captions_count": 55,
-                "captions_text": "If the velocity vector aligns with the suspension compression here... wait, look at the car altitude! (CHAT: Hahaha)",
-                "viral_score": 92,
-                "streamer": "DarkViperAU",
-                "source_url": "https://youtube.com/@DarkViperAU",
-                "created_at": time.time() - 1200,
-                "scheduled_post": None
-            }
-        ]
-        return sample_clips
-
-    return sorted(clips_list, key=lambda x: x["created_at"], reverse=True)
+    return sorted(result, key=lambda item: item["created_at"], reverse=True)
 
 
 @app.get("/api/v12/autopilot-posts")
 def get_autopilot_posts():
     clips = _collect_autopilot_clips()
-    scheduled_count = sum(1 for c in clips if c.get("scheduled_post") and c["scheduled_post"].get("status") == "scheduled")
-    rendered_count = sum(1 for c in clips if "Ready" in c.get("render_status", ""))
-    return {
-        "clips": clips,
-        "total_count": len(clips),
-        "scheduled_count": scheduled_count,
-        "rendered_count": rendered_count,
-        "full_auto_yt": True,
-        "version": VERSION
-    }
-
-
-def _auto_schedule_rendered_clips_to_yt() -> int:
-    """Automatically schedules newly rendered clips for YouTube Shorts with 10-minute staggered intervals."""
-    all_j = jobs.all_jobs()
-    with posting._lock:
-        existing_keys = {f"{p.get('job')}:{p.get('clip')}" for p in posting._posts if p.get("status") in ("scheduled", "posted", "posting")}
-        stagger_idx = sum(1 for p in posting._posts if p.get("status") == "scheduled")
-
-    scheduled_any = 0
-    now = time.time()
-    for j in all_j:
-        jid = j["id"]
-        j_dir = Path(j.get("dir") or (config.DATA_DIR / "videos" / jid))
-        for c in j.get("clips", []):
-            cid = c["id"]
-            key = f"{jid}:{cid}"
-            if key in existing_keys:
-                continue
-            file_name = c.get("file")
-            if not file_name or not (j_dir / "clips" / file_name).is_file():
-                continue
-            delay_sec = (stagger_idx * 600) + 600
-            due_time = now + delay_sec
-            stagger_idx += 1
-
-            post_id = secrets.token_hex(8)
-            yt_accounts = [a for a in accounts.list_accounts() if a.get("platform") == "youtube"]
-            acc_id = yt_accounts[0]["id"] if yt_accounts else "youtube_auto"
-            acc_name = yt_accounts[0]["name"] if yt_accounts else "YouTube Shorts (Auto-Publishing Channel)"
-
-            tags = c.get("hashtags") or _DEFAULT_VIRAL_TAGS
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split() if t.strip()]
-            tags = [f"#{t.lstrip('#')}" for t in tags if t]
-
-            new_post = {
-                "id": post_id,
-                "user": j.get("user") or ctx.uid(),
-                "job": jid,
-                "clip": cid,
-                "creator": j.get("creator", ""),
-                "account": acc_id,
-                "account_name": acc_name,
-                "platform": "youtube",
-                "status": "scheduled",
-                "due_at": due_time,
-                "created": now,
-                "title": c.get("title") or c.get("hook") or "GTA 6 Viral Moment",
-                "description": c.get("description") or "Check out this insane viral moment in GTA 6! Follow for daily clips.",
-                "hashtags": tags,
-                "score": c.get("score") or c.get("viral") or 95,
-                "tries": 0,
-                "url": "",
-                "remote_id": "",
-                "error": None,
-                "views": None,
-                "automatic": True,
-                "autopilot": True
-            }
-            with posting._lock:
-                posting._posts.append(new_post)
-                posting._save()
-                posting._mirror(new_post)
-                existing_keys.add(key)
-            scheduled_any += 1
-            _autonomous_log(f"⚡ Full YouTube Auto-Pilot: Scheduled '{new_post['title']}' for YouTube Shorts (in {round(delay_sec/60)}m).")
-
-    if scheduled_any > 0:
-        ctx.bump()
-    return scheduled_any
+    return {"clips": clips, "total_count": len(clips), "version": VERSION,
+            "scheduled_count": sum(1 for c in clips if (c.get("scheduled_post") or {}).get("status") == "scheduled"),
+            "rendered_count": sum(bool(c["video_url"]) for c in clips),
+            "full_auto_yt": bool(autopilot.load()["settings"].get("enabled"))}
 
 
 @app.post("/api/v12/autopilot-posts/auto-schedule-all")
-def auto_schedule_all_autopilot_posts():
-    count = _auto_schedule_rendered_clips_to_yt()
-    return {"ok": True, "count": count, "message": f"Successfully auto-scheduled {count} clip(s) to YouTube Shorts with 10-minute staggering!"}
+def auto_schedule_all_autopilot_posts(body: dict = Body(default={})):
+    items = [{"job": row["jid"], "clip": row["cid"]} for row in _collect_autopilot_clips()
+             if row["video_url"] and (row.get("scheduled_post") or {}).get("status") not in ("scheduled", "posting", "posted", "failed")]
+    if not items:
+        return {"ok": True, "count": 0, "skipped": [], "message": "There are no new rendered clips to queue."}
+    result = _queue_youtube({**body, "clips": items[:posting.YOUTUBE_BATCH_LIMIT],
+                             "visibility": body.get("visibility") or "private"})
+    n = result["queued"]
+    return {**result, "ok": bool(n), "count": n, "message": f"Queued {n} clip(s) for YouTube."}
+
+
+def _legacy_youtube_post(body, delay=0):
+    jid, cid = str(body.get("jid") or ""), str(body.get("cid") or "")
+    if not jid or not cid:
+        raise HTTPException(400, "Select a finished clip.")
+    metadata = {key: body[key] for key in ("title", "description", "hashtags") if body.get(key) is not None}
+    result = _queue_youtube({**body, "clips": [{"job": jid, "clip": cid, "metadata": metadata}],
+                             "visibility": body.get("visibility") or "private"}, delay=delay)
+    if not result["queued"]:
+        raise HTTPException(409, result["skipped"][0]["reason"])
+    post = result["posts"][0]
+    return {**result, "ok": True, "post_id": post["id"], "due_at": post["due_at"],
+            "countdown_sec": max(0, round(post["due_at"] - time.time())), "message": "Queued for YouTube."}
 
 
 @app.post("/api/v12/autopilot-posts/schedule-10m")
 def schedule_autopilot_post_10m(body: dict = Body(...)):
-    jid = str(body.get("jid") or "").strip()
-    cid = str(body.get("cid") or "").strip()
-    title = str(body.get("title") or "").strip()
-    desc = str(body.get("description") or "").strip()
-    tags = body.get("hashtags") or _DEFAULT_VIRAL_TAGS
-    if isinstance(tags, str):
-        tags = [t.strip() for t in tags.split() if t.strip()]
-    tags = [f"#{t.lstrip('#')}" for t in tags if t]
-
-    stagger_idx = int(body.get("stagger_index", 0))
-    delay_sec = int(body.get("delay_seconds") or (stagger_idx * 600 + 600))
-    due_time = time.time() + max(30, delay_sec)
-
-    j = jobs.get(jid)
-    clip = next((c for c in (j.get("clips", []) if j else []) if c["id"] == cid), None)
-
-    if clip and j:
-        if title:
-            clip["title"] = title[:100]
-        if desc:
-            clip["description"] = desc[:2000]
-        clip["hashtags"] = tags
-        jobs.save(j)
-
-    yt_accounts = [a for a in accounts.list_accounts() if a.get("platform") == "youtube"]
-    post_id = secrets.token_hex(8)
-
-    with posting._lock:
-        existing = next((p for p in posting._posts if p.get("job") == jid and p.get("clip") == cid), None)
-        if existing:
-            existing.update(status="scheduled", due_at=due_time, error=None, user=ctx.uid())
-            if title:
-                existing["title"] = title
-            if desc:
-                existing["description"] = desc
-            existing["hashtags"] = tags
-            post_id = existing["id"]
-        else:
-            acc_id = yt_accounts[0]["id"] if yt_accounts else "youtube_auto"
-            acc_name = yt_accounts[0]["name"] if yt_accounts else "YouTube Shorts (Auto-Publishing Channel)"
-            new_post = {
-                "id": post_id,
-                "user": ctx.uid(),
-                "job": jid,
-                "clip": cid,
-                "creator": j.get("creator", "") if j else "",
-                "account": acc_id,
-                "account_name": acc_name,
-                "platform": "youtube",
-                "status": "scheduled",
-                "due_at": due_time,
-                "created": time.time(),
-                "title": title or (clip.get("title") if clip else "Epic GTA 6 Moment"),
-                "description": desc or (clip.get("description") if clip else "Check out this insane GTA 6 moment!"),
-                "hashtags": tags,
-                "score": clip.get("score", 95) if clip else 95,
-                "tries": 0,
-                "url": "",
-                "remote_id": "",
-                "error": None,
-                "views": None,
-                "automatic": True,
-                "autopilot": True
-            }
-            posting._posts.append(new_post)
-            if j and clip:
-                posting._mirror(new_post)
-        posting._save()
-
-    _autonomous_log(f"1-Click Schedule: '{title or cid}' queued for auto-upload to YouTube Shorts in {round(delay_sec / 60)} minutes.")
-    ctx.bump()
-    return {
-        "ok": True,
-        "post_id": post_id,
-        "due_at": due_time,
-        "countdown_sec": delay_sec,
-        "message": f"Scheduled to upload on YouTube in {round(delay_sec / 60)} minutes!"
-    }
+    return _legacy_youtube_post(body, delay=posting.YOUTUBE_GAP)
 
 
 @app.post("/api/v12/autopilot-posts/post-now")
 def post_autopilot_now(body: dict = Body(...)):
-    jid = str(body.get("jid") or "").strip()
-    cid = str(body.get("cid") or "").strip()
-    pid = str(body.get("post_id") or "").strip()
-
-    target = None
-    with posting._lock:
-        target = next((p for p in posting._posts if (pid and p.get("id") == pid) or (p.get("job") == jid and p.get("clip") == cid)), None)
-        if not target:
-            # Create fresh post entry to upload now
-            post_id = pid or secrets.token_hex(8)
-            j = jobs.get(jid)
-            clip = next((c for c in (j.get("clips", []) if j else []) if c["id"] == cid), None)
-            yt_accounts = [a for a in accounts.list_accounts() if a.get("platform") == "youtube"]
-            acc_id = yt_accounts[0]["id"] if yt_accounts else "youtube_auto"
-            acc_name = yt_accounts[0]["name"] if yt_accounts else "YouTube Shorts"
-            target = {
-                "id": post_id, "user": ctx.uid(), "job": jid, "clip": cid,
-                "creator": j.get("creator", "") if j else "", "account": acc_id, "account_name": acc_name,
-                "platform": "youtube", "status": "scheduled", "due_at": time.time(), "created": time.time(),
-                "title": (clip.get("title") if clip else "GTA 6 Viral Moment"),
-                "description": (clip.get("description") if clip else "Watch this viral clip!"),
-                "hashtags": (clip.get("hashtags") if clip else _DEFAULT_VIRAL_TAGS),
-                "score": 95, "tries": 0, "url": "", "remote_id": "", "error": None, "views": None,
-                "automatic": True, "autopilot": True
-            }
-            posting._posts.append(target)
-        else:
-            target["due_at"] = time.time()
-            target["status"] = "scheduled"
-            target["user"] = ctx.uid()
-        posting._save()
-
-    user_id = ctx.uid()
-
-    def _run_post(p, uid):
-        with ctx.as_user(uid):
-            posting._post(p)
-
-    threading.Thread(target=_run_post, args=(target, user_id), daemon=True).start()
-    _autonomous_log(f"Immediate publish triggered for post '{target.get('title')}'.")
-    ctx.bump()
-    return {"ok": True, "message": "Publishing to YouTube Shorts now!"}
+    pid = str(body.get("post_id") or "")
+    if not pid:
+        return _legacy_youtube_post(body)
+    try:
+        posting.expedite(pid, str(body.get("jid") or ""), str(body.get("cid") or ""))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True, "message": "Upload queued for the next available slot."}
 
 
 @app.post("/api/v12/autopilot-posts/cancel-schedule")
 def cancel_autopilot_schedule(body: dict = Body(...)):
-    jid = str(body.get("jid") or "").strip()
-    cid = str(body.get("cid") or "").strip()
-    pid = str(body.get("post_id") or "").strip()
-    with posting._lock:
-        target = next((p for p in posting._posts if (pid and p.get("id") == pid) or (p.get("job") == jid and p.get("clip") == cid)), None)
-        if target:
-            target["status"] = "cancelled"
-            target["due_at"] = None
-            target["error"] = "Schedule cancelled by user."
-            posting._save()
-            j = jobs.get(jid)
-            if j:
-                posting._mirror(target)
-    ctx.bump()
-    return {"ok": True, "message": "Schedule cancelled successfully."}
-    ctx.bump()
-    return {"ok": True, "message": "Schedule cancelled successfully."}
+    pid = str(body.get("post_id") or "")
+    if not pid:
+        raise HTTPException(400, "No scheduled post was selected.")
+    try:
+        posting.cancel(pid)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True, "message": "Scheduled upload cancelled."}
 
 
 @app.post("/api/v12/autopilot-posts/ai-viral-meta")
 def generate_ai_viral_meta(body: dict = Body(...)):
     jid = str(body.get("jid") or "").strip()
     cid = str(body.get("cid") or "").strip()
-    current_title = str(body.get("title") or "GTA 6 Viral Moment").strip()
-    transcript = str(body.get("transcript") or "").strip()
-
-    j = jobs.get(jid)
-    clip = next((c for c in (j.get("clips", []) if j else []) if c["id"] == cid), None)
-    if clip and not transcript:
-        words = clip.get("fixed_words") or []
-        transcript = " ".join(w.get("w", "") for w in words if isinstance(w, dict)) or clip.get("description") or ""
-
-    hook = (clip.get("hook") if clip else "") or "VIRAL MOMENT"
-
-    meta = brain.gameplay_post(current_title, transcript=transcript, use_ai=True, hook=hook)
-
-    tags = list(dict.fromkeys(meta.get("hashtags", []) + ["GTA6", "Shorts", "Gaming", "Viral", "Trending", "FYP"]))[:7]
-    tag_pills = [f"#{t.lstrip('#')}" for t in tags]
-
-    if clip and j:
-        clip["title"] = meta["title"]
-        clip["description"] = meta["description"]
-        clip["hashtags"] = tag_pills
-        jobs.save(j)
-        ctx.bump()
-
-    return {
-        "ok": True,
-        "title": meta["title"],
-        "description": meta["description"],
-        "hashtags": tag_pills
-    }
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    _throttle("titles:" + ctx.uid(), 12, 600, "Wait a few minutes before asking for more post options.")
+    result = _research_clip_post_ideas(job, clip, body.get("region", "US"), count=1)
+    idea = result["ideas"][0]
+    tags = " ".join(f"#{tag}" for tag in idea["hashtags"])
+    try:
+        saved = jobs.update_metadata(job, cid, {"title": idea["title"], "description": idea["description"], "hashtags": tags})
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "title": saved["title"], "description": saved["description"],
+            "hashtags": [f"#{tag}" for tag in saved["hashtags"]], "research": result["research"]}
 
 
 @app.post("/api/v12/autopilot-posts/update-meta")
 def update_autopilot_clip_meta(body: dict = Body(...)):
-    jid = str(body.get("jid") or "").strip()
-    cid = str(body.get("cid") or "").strip()
-    title = str(body.get("title") or "").strip()
-    desc = str(body.get("description") or "").strip()
-    tags = body.get("hashtags") or _DEFAULT_VIRAL_TAGS
-    if isinstance(tags, str):
-        tags = [t.strip() for t in tags.split() if t.strip()]
-    tags = [f"#{t.lstrip('#')}" for t in tags if t]
-
-    j = jobs.get(jid)
-    if j:
-        clip = next((c for c in j.get("clips", []) if c["id"] == cid), None)
-        if clip:
-            if title:
-                clip["title"] = title[:100]
-            if desc:
-                clip["description"] = desc[:2000]
-            clip["hashtags"] = tags
-            jobs.save(j)
-
-    with posting._lock:
-        p = next((post for post in posting._posts if post.get("job") == jid and post.get("clip") == cid), None)
-        if p:
-            if title:
-                p["title"] = title
-            if desc:
-                p["description"] = desc
-            p["hashtags"] = tags
-            posting._save()
-            if j and clip:
-                posting._mirror(p)
-
-    ctx.bump()
-    return {"ok": True, "message": "Metadata updated successfully"}
+    jid, cid = str(body.get("jid") or ""), str(body.get("cid") or "")
+    metadata = {key: body[key] for key in ("title", "description", "hashtags") if key in body}
+    if isinstance(metadata.get("hashtags"), list):
+        metadata["hashtags"] = " ".join(str(tag) for tag in metadata["hashtags"])
+    result = save_clip_metadata(jid, cid, metadata)
+    return {"ok": True, "clip": result["clip"], "message": "Post text saved."}
 
 
 def _configure_logging():

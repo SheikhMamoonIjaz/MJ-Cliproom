@@ -7,9 +7,12 @@ from pathlib import Path
 
 import json
 
-from . import accounts, alerts, config, creators, ctx, jobs, live
+from . import accounts, alerts, config, creators, ctx, jobs, live, media
 
 _lock = threading.RLock()
+_wake = threading.Event()
+YOUTUBE_BATCH_LIMIT = 200
+YOUTUBE_GAP = 600
 _FILE = config.DATA_DIR / "posts.json"
 try:
     _posts: list = json.loads(_FILE.read_text(encoding="utf-8")) if _FILE.exists() else []
@@ -72,13 +75,24 @@ def _day(t):
     return time.strftime("%Y-%m-%d", time.localtime(t))
 
 
+def _mirror_rows(job, rows):
+    clips = {clip["id"]: clip for clip in job["clips"]}
+    changed = False
+    for post in rows:
+        clip = clips.get(post["clip"])
+        if clip is not None:
+            clip.setdefault("posts", {})[post["id"]] = {k: post.get(k) for k in
+                                                         ("account_name", "platform", "status", "url", "due_at", "error")}
+            changed = True
+    if changed:
+        jobs.save(job)
+
+
 def _mirror(p):
     """Copy the post's state onto its clip so the clip card can show it."""
     job = jobs.get(p["job"])
-    clip = next((c for c in job["clips"] if c["id"] == p["clip"]), None) if job else None
-    if clip is not None:
-        clip.setdefault("posts", {})[p["id"]] = {k: p.get(k) for k in ("account_name", "platform", "status", "url", "due_at", "error")}
-        jobs.save(job)
+    if job:
+        _mirror_rows(job, [p])
 
 
 def _next_slot(account_id, gap_min, gap_max, cap):
@@ -94,6 +108,119 @@ def _next_slot(account_id, gap_min, gap_max, cap):
         lt = time.localtime(t + 86400)
         t = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 9, 0, 0, 0, 0, -1))  # 9:00 next day
     return t
+
+
+def _clip_file(job, clip):
+    folder = (Path(job["dir"]) / "clips").resolve()
+    path = (folder / str(clip.get("file") or "")).resolve()
+    if path.parent != folder or not path.is_file():
+        raise ValueError("The rendered clip file is missing. Re-make the clip and try again.")
+    return path
+
+
+def _post_row(job, clip, acc, due, metadata, *, automatic=False, autopilot=False):
+    return {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"],
+            "creator": job.get("creator"), "account": acc["id"], "account_name": acc["name"],
+            "platform": acc["platform"], "status": "scheduled", "due_at": due, "created": time.time(),
+            "title": metadata["title"], "description": metadata["description"], "hashtags": metadata["hashtags"],
+            "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None,
+            "views": None, "automatic": automatic, "autopilot": bool(autopilot)}
+
+
+def _sync_rows(rows):
+    groups = {}
+    for post in rows:
+        groups.setdefault(post["job"], []).append(post)
+    for jid, posts in groups.items():
+        try:
+            job = jobs.get(jid)
+            if job:
+                _mirror_rows(job, posts)
+        except OSError:
+            # The queue has already been written. A panel refresh can still show it.
+            pass
+    if rows:
+        ctx.bump()
+        _wake.set()
+
+
+def youtube_destination(account_id):
+    if not account_id:
+        choices = [a["id"] for a in accounts.list_accounts() if a["platform"] == "youtube"]
+        if len(choices) != 1:
+            raise ValueError("Connect a YouTube channel in Settings → Connected Apps." if not choices
+                             else "Choose the YouTube channel that should receive these clips.")
+        account_id = choices[0]
+    account = accounts.get(account_id)
+    if not account or account["platform"] != "youtube":
+        raise ValueError("Connect or reconnect the selected YouTube channel in Settings → Connected Apps.")
+    return account
+
+
+def youtube_batch(items, account_id="", visibility=None, delay=0):
+    """Queue the submitted order, with a real connected destination and durable, unique rows."""
+    if not isinstance(items, list) or not 1 <= len(items) <= YOUTUBE_BATCH_LIMIT:
+        raise ValueError(f"Select between 1 and {YOUTUBE_BATCH_LIMIT} clips.")
+    if visibility is not None and visibility not in ("public", "unlisted", "private"):
+        raise ValueError("Choose private, unlisted, or public visibility.")
+    acc = youtube_destination(account_id)
+    made, skipped = [], []
+    now = time.time()
+    batch = secrets.token_hex(8) if len(items) > 1 else ""
+    with _lock:
+        if _restart_pending:
+            raise ValueError("MJ Cliproom is restarting. Wait for it to reopen and try again.")
+        # Include failed rows: a failed final chunk can still have reached YouTube.
+        existing = {(p["job"], p["clip"]) for p in _mine()
+                    if p["account"] == acc["id"] and (p["status"] != "cancelled" or p.get("upload_session"))}
+        due = max(now + delay, blocked_until("youtube", acc["id"]))
+        if batch or delay:
+            timing = [float(p.get("posted_at") or p.get("due_at") or 0) for p in _mine()
+                      if p["account"] == acc["id"] and p["status"] in OPEN + ("posted",)]
+            if timing:
+                due = max(due, max(timing) + YOUTUBE_GAP)
+        for item in items:
+            if not isinstance(item, dict):
+                skipped.append({"job": "", "clip": "", "reason": "Invalid clip selection."})
+                continue
+            jid, cid = str(item.get("job") or ""), str(item.get("clip") or "")
+            job = jobs.get(jid)
+            clip = next((row for row in job["clips"] if row["id"] == cid), None) if job else None
+            try:
+                if not clip or clip.get("status") != "done":
+                    raise ValueError("This clip is unavailable or still rendering.")
+                if job.get("rights_cleared") is False:
+                    raise ValueError("Confirm source rights for this video before posting.")
+                if (jid, cid) in existing:
+                    raise ValueError("This clip already has a post for this channel. Check the queue or retry it there.")
+                _clip_file(job, clip)
+                overrides = item.get("metadata")
+                if overrides is not None and not isinstance(overrides, dict):
+                    raise ValueError("Enter title, description and hashtags as post text.")
+                if isinstance(overrides, dict):
+                    overrides = dict(overrides)
+                    if isinstance(overrides.get("hashtags"), str):
+                        overrides["hashtags"] = overrides["hashtags"].replace(",", " ").split()
+                meta = jobs.post_metadata(job, clip, overrides)
+            except (OSError, ValueError) as exc:
+                skipped.append({"job": jid, "clip": cid, "reason": str(exc)})
+                continue
+            post = _post_row(job, clip, acc, due, meta)
+            post.update(visibility=visibility or "private", shorts=True, batch=batch)
+            if batch:
+                post.update(batch_index=len(made), gap_seconds=YOUTUBE_GAP)
+            made.append(post)
+            existing.add((jid, cid))
+            due += YOUTUBE_GAP
+        if made:
+            _posts.extend(made)
+            try:
+                _save()
+            except OSError:
+                del _posts[-len(made):]
+                raise
+    _sync_rows(made)
+    return made, skipped
 
 
 def settle_interrupted(post):
@@ -128,22 +255,19 @@ def enqueue(job, clip, account_ids, now=False, automatic=False, autopilot=False)
             if not acc:
                 continue
             if any(p["job"] == job["id"] and p["clip"] == clip["id"] and p["account"] == aid
-                   and p["status"] in (OPEN + ("posted", "failed", "cancelled") if automatic else OPEN + ("posted",)) for p in _mine()):
+                   and (p["status"] in OPEN + ("posted", "failed") or p.get("upload_session")
+                        or automatic and p["status"] == "cancelled") for p in _mine()):
                 continue  # never post the same clip to the same account twice
             due = time.time() if now else _next_slot(
                 aid, c["post_gap_min"], c.get("post_gap_max", c["post_gap_min"]), c["daily_cap"])
             due = max(due, blocked_until(acc["platform"], aid))
-            p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
-                 "account": aid, "account_name": acc["name"], "platform": acc["platform"], "status": "scheduled",
-                 "due_at": due, "created": time.time(), "title": metadata["title"],
-                 "description": metadata["description"], "hashtags": metadata["hashtags"],
-                 "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None, "views": None,
-                 "automatic": automatic, "autopilot": bool(autopilot)}
+            p = _post_row(job, clip, acc, due, metadata, automatic=automatic, autopilot=autopilot)
+            if autopilot and acc["platform"] == "youtube":
+                p["shorts"] = True
             _posts.append(p)
             made.append(p)
         _save()
-    for p in made:
-        _mirror(p)
+    _sync_rows(made)
     return made
 
 
@@ -217,23 +341,35 @@ def _post(p):
     acc = accounts.get(p["account"])
     try:
         if not job:
-            raise RuntimeError("That video is no longer available.")
+            raise ValueError("That video is no longer available.")
         if p.get("automatic") and job.get("automation", {}).get("revoked"):
             p.update(status="cancelled", error="Automatic publishing was revoked for this video.")
             _save()
             _mirror(p)
             return
         if not clip or clip.get("status") != "done":
-            raise RuntimeError("The clip no longer exists or is not finished.")
+            raise ValueError("The clip no longer exists or is not finished.")
         if not acc:
-            raise RuntimeError("That account was disconnected.")
-        path = Path(job["dir"]) / "clips" / clip["file"]
+            raise ValueError("That account was disconnected. Reconnect it in Settings → Connected Apps, then retry.")
+        if job.get("rights_cleared") is False:
+            raise ValueError("Confirm source rights for this video before posting, then retry.")
+        path = _clip_file(job, clip)
         creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name="clips")
         metadata = jobs.post_metadata(job, clip, p)
         p.update(metadata)
         title, cap = metadata["title"], _caption(metadata, creator)
         if acc["platform"] == "youtube":
-            privacy = (job.get("automation", {}).get("visibility", "private") if p.get("automatic") else creator["privacy"])
+            if p.get("shorts"):
+                try:
+                    spec = media.probe(path, require_audio=False)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise ValueError("The clip could not be opened. Re-make it in 9:16 and retry.") from exc
+                if spec["width"] * 16 != spec["height"] * 9:
+                    raise ValueError("This clip is not 9:16. Re-make it as a vertical clip, then retry.")
+                if spec["duration"] > 180:
+                    raise ValueError("Trim this clip to three minutes or less, then retry.")
+            privacy = p.get("visibility") or (
+                job.get("automation", {}).get("visibility", "private") if p.get("automatic") else creator["privacy"])
             thumb = Path(job["dir"]) / "clips" / f"{clip['id']}-thumb.jpg"
             if not thumb.is_file():
                 thumb = None
@@ -242,7 +378,8 @@ def _post(p):
                 post["upload_session"] = session
                 _save()
 
-            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", metadata["hashtags"], privacy,
+            shorts_caption = cap if p.get("shorts") and any(h.casefold() == "shorts" for h in metadata["hashtags"]) else cap + "\n\n#Shorts"
+            rid, url = accounts.youtube_upload(acc, path, title, shorts_caption, metadata["hashtags"], privacy,
                                                resume=p.get("upload_session"), on_session=remember, thumbnail=thumb)
             p.pop("upload_session", None)
         elif acc["platform"] == "instagram":
@@ -258,9 +395,9 @@ def _post(p):
     except Exception as e:  # noqa: BLE001
         p["tries"] += 1
         p["error"] = str(e)[-300:]
-        if "Source rights clearance" in p["error"]:
+        if isinstance(e, ValueError):
             p["status"] = "failed"
-            creators.log(p["creator"], f"Post stopped because source rights were not confirmed: {p['title']}")
+            creators.log(p["creator"], f"Post stopped on {p['account_name']}: {p['error']}")
         elif p["tries"] < 3 and clip and acc:
             delay = min(3600, 600 * (2 ** max(0, p["tries"] - 1)))
             p.update(status="scheduled", due_at=time.time() + delay)
@@ -268,17 +405,56 @@ def _post(p):
             p["status"] = "failed"
             creators.log(p["creator"], f"Post failed on {p['account_name']}: {p['error']}")
             alerts.notify(f"post failed on {p['account_name']} ({p['title']}): {p['error'][:200]}", kind="post")
-    _save()
-    _mirror(p)
+    with _lock:
+        changed = [p, *_space_batch(p)]
+        _save()
+    _sync_rows(changed)
     if p["status"] == "posted":
         creators.log(p["creator"], f"Posted to {acc['name']}: {title}")
 
 
+def _space_batch(p):
+    """Move later entries when an earlier upload takes longer, is delayed, or is tried again."""
+    if not p.get("batch"):
+        return []
+    gap = p["gap_seconds"]
+    anchor = p["due_at"] if p["status"] == "scheduled" else time.time()
+    changed = []
+    later = sorted((q for q in _posts if q.get("batch") == p["batch"] and q["status"] == "scheduled"
+                    and q["batch_index"] > p["batch_index"]), key=lambda q: q["batch_index"])
+    for row in later:
+        due = max(row["due_at"], anchor + gap)
+        if row["due_at"] != due:
+            row["due_at"] = due
+            changed.append(row)
+        anchor = due
+    return changed
+
+
+def _earliest_short_slot(p, job, now):
+    """Wait for the previous actual upload, and for the owner-selected local daily cap."""
+    same_channel = [q for q in _posts if q["platform"] == "youtube" and q["account"] == p["account"]
+                    and q["status"] == "posted"]
+    last = max((q.get("posted_at") or 0 for q in same_channel), default=0)
+    earliest = max(now, last + (p.get("gap_seconds") or 0))
+    creator = creators.get(job.get("creator")) or creators.DEFAULTS
+    cap = creator["daily_cap"]
+    if cap and sum(_day(q.get("posted_at") or 0) == _day(now) for q in same_channel) >= cap:
+        tomorrow = time.localtime(now + 86400)
+        earliest = max(earliest, time.mktime((tomorrow.tm_year, tomorrow.tm_mon, tomorrow.tm_mday,
+                                           0, 0, 0, 0, 0, -1)))
+    return earliest
+
+
 def _run():
     while True:
-        time.sleep(15)
+        _wake.wait(15)
+        _wake.clear()
         _reconcile_prompt_posts()
-        due = [p for p in list(_posts) if p["status"] == "scheduled" and p["due_at"] <= time.time() and p.get("user")]
+        now = time.time()
+        with _lock:
+            due = sorted((p for p in _posts if p["status"] == "scheduled" and (p.get("due_at") or 0) <= now
+                          and p.get("user")), key=lambda p: p.get("due_at") or 0)
         for p in due:
             try:
                 with ctx.as_user(p["user"]):
@@ -299,6 +475,15 @@ def _run():
                             continue
                         if _restart_pending or blocked_until(p["platform"], p["account"]) > time.time():
                             continue
+                        if p.get("shorts"):
+                            now = time.time()
+                            slot = _earliest_short_slot(p, job, now)
+                            if slot > now:
+                                p["due_at"] = slot
+                                changed = [p, *_space_batch(p)]
+                                _save()
+                                _sync_rows(changed)
+                                continue
                         if p.get("automatic") and job.get("automation", {}).get("revoked"):
                             p.update(status="cancelled", error="Automatic publishing was revoked for this video.")
                             _save()
@@ -316,9 +501,12 @@ def _run():
                                  error="The upload stopped unexpectedly and will be tried again.")
                     else:
                         p.update(status="failed", error="The upload stopped unexpectedly.")
-                    _save()
+                    with _lock:
+                        changed = [p, *_space_batch(p)]
+                        _save()
                     try:
-                        _mirror(p)
+                        with ctx.as_user(p["user"]):
+                            _sync_rows(changed)
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -380,7 +568,22 @@ def cancel(pid):
             raise ValueError("Only posts that are still waiting can be cancelled.")
         p["status"] = "cancelled"
         _save()
-    _mirror(p)
+    _sync_rows([p])
+
+
+def expedite(pid, jid, cid):
+    with _lock:
+        post = next((p for p in _mine() if p["id"] == pid and p["platform"] == "youtube"
+                     and p["job"] == jid and p["clip"] == cid), None)
+        if not post or post["status"] != "scheduled":
+            raise ValueError("Only a waiting YouTube post can be moved forward.")
+        if not accounts.get(post["account"]):
+            raise ValueError("Reconnect the channel selected for this post.")
+        if post.get("batch"):
+            raise ValueError("This clip is part of an ordered batch. Its place in the schedule is fixed.")
+        post["due_at"] = max(time.time(), blocked_until("youtube", post["account"]))
+        _save()
+    _sync_rows([post])
 
 
 def retry(pid):
@@ -397,8 +600,9 @@ def retry(pid):
                and q["status"] in OPEN + ("posted",) for q in _mine()):
             raise ValueError("A post for this clip and account already exists.")
         p.update(status="scheduled", due_at=max(time.time(), blocked_until(p["platform"], p["account"])), tries=0, error=None)
+        changed = [p, *_space_batch(p)]
         _save()
-    _mirror(p)
+    _sync_rows(changed)
 
 
 def overview() -> dict:
@@ -423,7 +627,8 @@ def overview() -> dict:
     names = {c["id"]: c["name"] for c in all_cs}
     queue = sorted((p for p in _posts if p["status"] in OPEN), key=lambda p: p["due_at"])
     done = sorted((p for p in _posts if p["status"] in ("posted", "failed", "cancelled")), key=lambda p: -(p.get("posted_at") or p["due_at"]))[:15]
-    show = [{**{k: v for k, v in p.items() if k != "user"}, "creator_name": names.get(p["creator"], "")} for p in queue + done]
+    show = [{**{k: v for k, v in p.items() if k not in ("user", "upload_session")},
+             "creator_name": names.get(p["creator"], "")} for p in queue + done]
     # last 14 days, oldest first, for the home graph
     days = [_day(time.time() - 86400 * i) for i in range(13, -1, -1)]
     made, posted, views = {d: 0 for d in days}, {d: 0 for d in days}, {d: 0 for d in days}
@@ -460,6 +665,8 @@ def digest_text() -> str:
 def start():
     with _lock:
         for p in _posts:
+            if p.get("account") == "youtube_auto" and p["status"] in OPEN:
+                p.update(status="failed", error="This legacy schedule had no connected channel. Choose a channel to queue the clip.")
             if p["status"] == "posting":  # interrupted mid-upload last time
                 settle_interrupted(p)
         _save()

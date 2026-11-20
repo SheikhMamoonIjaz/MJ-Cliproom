@@ -78,9 +78,9 @@ def install_fonts():
             shutil.copyfile(f, config.FONTS_DIR / f.name)
 
 
-LAYOUTS = {"crop": "Fill the screen (9:16)",
-           "split": "Streamer face on top, gameplay below",
-           "stack": "Gameplay on top, streamer face below"}
+LAYOUTS = {"crop": "Full-screen gameplay (9:16)",
+           "auto": "9:16 with facecam below when detected",
+           "stack": "9:16 gameplay above facecam"}
 
 
 def _ts(t):
@@ -123,16 +123,23 @@ def face_x(corner: str) -> str:
 
 def split_filter(layout: str, facecam: str = "left") -> str:
     """Stack gameplay and facecam in a vertical frame. The facecam pane is not cropped away."""
-    face_h, game_h = 700, H - 700
-    x = face_x(facecam)
-    face = f"scale={W}:{face_h}:force_original_aspect_ratio=increase,crop={W}:{face_h}:{x}:(ih-oh)/2"
+    face_h, game_h = 440, 1040
+    if isinstance(facecam, tuple):
+        cx, cy = facecam
+        x = f"'max(0,min(iw-ow,iw*{cx:.5f}-ow/2))'"
+        y = f"'max(0,min(ih-oh,ih*{cy:.5f}-oh/2))'"
+    else:
+        x, y = face_x(facecam), "ih-oh"
+    face = (f"crop='min(iw*0.36,ih*0.44*{W}/{face_h})':'ow*{face_h}/{W}':{x}:{y},"
+            f"scale={W}:{face_h}")
     game = f"scale={W}:{game_h}:force_original_aspect_ratio=increase,crop={W}:{game_h}:(iw-ow)/2:(ih-oh)/2"
     if layout == "split":
         top, bottom = face, game
     else:
         top, bottom = game, face
     return (f"[0:v]fps={config.OUT_FPS},split=2[panetop][panebot];"
-            f"[panetop]{top}[a];[panebot]{bottom}[b];[a][b]vstack=inputs=2,setsar=1[v0];")
+            f"[panetop]{top},setsar=1[a];[panebot]{bottom},setsar=1[b];"
+            f"[a][b]vstack=inputs=2,pad={W}:{H}:0:0:color=0x101419,setsar=1[v0];")
 
 
 def geometry(src_w, src_h, layout):
@@ -140,7 +147,7 @@ def geometry(src_w, src_h, layout):
     if layout in ("blur", "zoom"):
         layout = "crop"
     if layout in ("stack", "split"):
-        return layout, 1220 if layout == "stack" else 1280, 150, 980 if layout == "split" else 620
+        return layout, H, 210, 1580
     if src_h >= src_w and layout != "crop":
         layout = "crop"  # already vertical or square: nothing to gain from a blurred fill
     if layout == "blur":
@@ -151,7 +158,7 @@ def geometry(src_w, src_h, layout):
         fg_h = H
     top = (H - fg_h) // 2
     if layout == "crop":
-        return layout, fg_h, 300, 1380
+        return layout, fg_h, 260, 1530
     return layout, fg_h, max(230, top - 190), min(1640, top + fg_h + 180)
 
 
@@ -347,28 +354,33 @@ def apply_commentary(fc, inputs, audio, audio_map, cut, commentary_path, duratio
     return fc, inputs, ["-map", "[narrated]"]
 
 
-def _facecam_choice(src, start, layout, choice):
-    if choice != "auto" or layout not in ("stack", "split"):
+def _facecam_choice(src, start, layout, choice, width, height):
+    if layout not in ("auto", "stack", "split") or choice in ("left", "right", "center"):
         return choice or "left"
-    try:
-        from .facecam import sample_corner
-        return sample_corner(src, start) or "left"
-    except Exception:  # noqa: BLE001
-        return "left"
+    from .facecam import find_center
+    center = find_center(src, start, width, height)
+    return center or (None if layout == "auto" else "left")
 
 
 def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, src_w: int, src_h: int) -> dict:
     """Render a vertical MP4 and write its cover, ASS track, and optional SRT."""
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
-    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
+    segments = clip.get("segments") or []
+    layout = clip.get("layout", "auto")
+    facecam = _facecam_choice(src, segments[0]["start"] if segments else start,
+                              layout, clip.get("facecam"), src_w, src_h)
+    if layout == "auto":
+        layout = "stack" if facecam else "crop"
+    if layout == "split":
+        layout = "stack"  # Convert old top-face layouts when re-rendered.
+    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, layout)
     place = clip.get("caption_position") or "bottom"
     if place == "top":
         cap_y = hook_y
     elif place == "middle":
         cap_y = (hook_y + cap_y) // 2
     cues = clip.get("caption_cues")
-    segments = clip.get("segments") or []
     has_audio = clip.get("has_audio")
     if clip.get("music_path") and has_audio is None:
         has_audio = probe(src, require_audio=False)["has_audio"]
@@ -398,7 +410,7 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                           clip.get("music_fade_in", 0.4), clip.get("music_fade_out", 0.8),
                           clip.get("music_offset", 0),
                           clip.get("commentary_path"), clip.get("commentary_volume", 1.0),
-                          bool(clip.get("preserve_source_marks")), _facecam_choice(src, start, layout, clip.get("facecam")))
+                          bool(clip.get("preserve_source_marks")), facecam)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -512,6 +524,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
     else:
         srt_path.unlink(missing_ok=True)
     return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout, "duration": round(end - start, 3),
+            "output_width": W, "output_height": H, "output_aspect": "9:16", "output_fps": config.OUT_FPS,
             "subtitle": srt_path.name if sidecar else None}
 
 

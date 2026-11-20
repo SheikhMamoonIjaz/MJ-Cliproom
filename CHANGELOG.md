@@ -2,6 +2,14 @@
 
 User-facing changes to MJ-Cliping are listed here.
 
+## 1.3.0 — 2026-11-20
+
+- Added Light, Dark, and System themes in **Settings → Appearance**. The browser remembers your selection.
+- Updated the vertical Short layout to put a detected streamer camera under gameplay and captions near the bottom. Re-render an existing clip to apply the new layout.
+- Added YouTube topic research for AI post text. The editor shows recent gaming search references and lets you review an original title, a description of at least 1,500 characters, and relevant hashtags.
+- Added direct posting to a chosen YouTube channel and scheduling for selections of up to 200 clips. The queue spaces successful uploads in each batch by at least 10 minutes and shows skipped, failed, and completed entries. Visibility starts at Private and YouTube limits apply.
+- Updated the installation and YouTube setup guides and added a [tournament workflow](docs/TOURNAMENT_WORKFLOW.md) for editors and agents.
+
 ## 1.2.2 — 2026-11-20
 
 - **In-App Update & Seamless Launcher Supervision Fix:**

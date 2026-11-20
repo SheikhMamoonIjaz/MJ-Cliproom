@@ -109,13 +109,17 @@ try {
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
         $health = Get-Health $baseUrl
-        if ($health -and $health.app -eq "mj-cliproom" -and $health.commit -ne $before) {
-            Write-Host "Updated to $($health.version) ($($health.commit.Substring(0, 7))). Your saved data folder is unchanged."
+        if ($health -and $health.app -eq "mj-cliproom" -and $health.boot -ne $beforeBoot) {
+            if ($health.update_install_failed) {
+                throw "The update could not be installed. The previous version restarted. Check the launcher logs."
+            }
+            if ($health.commit -eq $before) {
+                Write-Host "MJ Cliproom restarted on $($health.version)."
+            } else {
+                Write-Host "Updated to $($health.version) ($($health.commit.Substring(0, 7)))."
+            }
             Start-Process "$baseUrl/app/videos"
             exit 0
-        }
-        if ($health -and $health.app -eq "mj-cliproom" -and $health.boot -ne $beforeBoot -and $health.update_install_failed) {
-            throw "The update could not be installed. The previous version restarted and your files were kept. Check the launcher logs."
         }
         try { $state = Invoke-RestMethod -Uri "$baseUrl/api/update" -TimeoutSec 3 }
         catch { $state = $null } # the launcher briefly stops the server while it installs

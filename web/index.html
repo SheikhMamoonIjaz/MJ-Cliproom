@@ -3,20 +3,55 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ-Cliping · 1.2.0</title>
+<title>MJ Cliproom · 1.3.0</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Geist:wght@400;500;600;700&family=Inter:wght@300&family=Archivo+Black&family=Anton&family=Poppins:wght@800&display=swap" rel="stylesheet">
+<script>
+const appearance = (() => {
+  const key = "mj-cliproom.appearance";
+  const system = matchMedia("(prefers-color-scheme: dark)");
+  let choice = "system";
+  function apply(value) {
+    choice = value === "light" || value === "dark" ? value : "system";
+    document.documentElement.dataset.theme = choice === "system" ? (system.matches ? "dark" : "light") : choice;
+    document.querySelectorAll('input[name="appearance"]').forEach(input => {
+      input.checked = input.value === choice;
+    });
+  }
+  try { apply(localStorage.getItem(key)); } catch { apply("system"); }
+  system.addEventListener("change", () => apply(choice));
+  addEventListener("storage", event => {
+    if (event.key === key || event.key === null) apply(event.newValue);
+  });
+  return {
+    get choice() { return choice; },
+    set(value) {
+      apply(value);
+      try { localStorage.setItem(key, choice); } catch {}
+    },
+  };
+})();
+</script>
 <style>
 :root{
   --brand:#ffa27c;--brand-press:#f3916b;--brand-ink:#132e33;--brand-soft:#f8e9e0;--brand-line:#efbca9;--brand-deep:#843a30;
   --frame:#122a30;--frame-2:#1d3a40;--frame-line:rgba(255,255,255,.12);--frame-text:#fff1d7;--frame-dim:#bfd1cf;
-  --bg:#f8faf7;--muted:#edf2ef;--line:#dfe8e2;--line-2:#cbdad3;
+  --bg:#f8faf7;--surface:#fff;--muted:#edf2ef;--hover:#e4ede8;--line:#dfe8e2;--line-2:#cbdad3;
+  --accent-ink:#132e33;--warn:#7a3e0c;--warn-soft:#fff4e6;
   --text:#152d32;--dim:#4d6464;--faint:#5e7776;
   --good:#0F8A57;--good-soft:#E6F6EE;--bad:#D3343F;--bad-soft:#FDECEE;--live:#E5323F;
   --r-lg:16px;--r:12px;--r-sm:8px;
   color-scheme:light;
+}
+:root[data-theme=dark]{
+  --brand-soft:#392824;--brand-line:#704638;--brand-deep:#ffb397;--brand-ink:#eef5f2;
+  --frame:#0e1b1e;--frame-2:#192d32;--frame-line:#2c4042;--frame-text:#eef5f2;--frame-dim:#a9bab8;
+  --bg:#131f22;--surface:#1b2a2e;--muted:#233438;--hover:#2a3e42;--line:#314448;--line-2:#475d61;
+  --text:#e5eeeb;--dim:#bdccc8;--faint:#a4b6b3;
+  --good:#81deb2;--good-soft:#19382e;--bad:#ff9eaa;--bad-soft:#42262d;--warn:#ffca95;--warn-soft:#392b22;
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -27,7 +62,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 svg{width:18px;height:18px;flex:none;fill:currentColor}
 ::selection{background:var(--brand-line)}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#cfddd8;border-radius:999px;border:3px solid #fff}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px;border:3px solid var(--surface)}
 
 /* ---------- frame */
 .app{display:grid;grid-template-columns:240px minmax(0,1fr);height:100vh;height:100dvh}
@@ -45,29 +80,29 @@ svg{width:18px;height:18px;flex:none;fill:currentColor}
 .nav-item svg{width:17px;height:17px}
 .nav-item svg{color:var(--frame-dim)}
 .nav-item:active{background:var(--frame-2)}
-.nav-item.on{background:var(--brand);color:var(--brand-ink);font-weight:600}
-.nav-item.on svg{color:var(--brand-ink)}
+.nav-item.on{background:var(--brand);color:var(--accent-ink);font-weight:600}
+.nav-item.on svg{color:var(--accent-ink)}
 .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .count{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.1);color:var(--frame-text);white-space:nowrap}
-.nav-item.on .count{background:rgba(42,26,18,.14);color:var(--brand-ink)}
+.nav-item.on .count{background:rgba(42,26,18,.14);color:var(--accent-ink)}
 .avatar{width:26px;height:26px;border-radius:50%;background:rgba(255,162,124,.18);color:#ffa27c;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none;overflow:hidden}
 img.avatar{object-fit:cover;background:rgba(255,255,255,.08)}
 .tav{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none;background:var(--muted)}
 #title{display:flex;align-items:center;gap:10px}
 .chprev{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;background:var(--muted);animation:rise .25s ease both}
-.chprev img,.chprev .ph{width:44px;height:44px;border-radius:50%;object-fit:cover;flex:none;background:#e5eee9}
+.chprev img,.chprev .ph{width:44px;height:44px;border-radius:50%;object-fit:cover;flex:none;background:var(--line)}
 .chprev b{display:block;font-size:14px;color:var(--brand-ink)}
 .chprev span{font-size:12px;color:var(--faint)}
-.chprev.bad{background:#FDECEC;color:#A12A2A;font-size:13px}
+.chprev.bad{background:var(--bad-soft);color:var(--bad);font-size:13px}
 .chprev .sk{width:120px}
-.nav-item.on .avatar{background:var(--brand-ink);color:var(--brand)}
-.nav-item.on img.avatar{background:var(--brand-ink)}
+.nav-item.on .avatar{background:var(--accent-ink);color:var(--brand)}
+.nav-item.on img.avatar{background:var(--accent-ink)}
 .live-dot{width:8px;height:8px;border-radius:50%;background:var(--live);animation:pulse 1.3s infinite;flex:none}
 .side-foot{display:flex;flex-direction:column;gap:2px;padding-top:12px;border-top:1px solid var(--frame-line)}
 .side-card{background:var(--frame-2);border-radius:var(--r);padding:12px 14px;margin-top:8px;font-size:12px;color:var(--frame-dim);display:flex;flex-direction:column;gap:7px}
 .side-card div{display:flex;align-items:center;gap:9px}
 .led{width:7px;height:7px;border-radius:50%;background:#3DDC97;flex:none}.led.no{background:#FF6B78}.led.mid{background:var(--brand)}
-.plans-btn{margin-top:10px;width:100%;background:var(--frame-text);color:var(--brand-ink);border:0}
+.plans-btn{margin-top:10px;width:100%;background:var(--surface);color:var(--text);border:0}
 .scrim{display:none}
 
 main{background:var(--bg);margin:8px 8px 8px 0;border-radius:var(--r-lg);height:calc(100vh - 16px);height:calc(100dvh - 16px);overflow-y:auto;min-width:0;scrollbar-gutter:stable}
@@ -80,10 +115,10 @@ main{background:var(--bg);margin:8px 8px 8px 0;border-radius:var(--r-lg);height:
 .upd .cmd{display:flex;gap:8px;align-items:center}
 .upd .cmd code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px;background:var(--muted);border-radius:8px;padding:9px 11px}
 .upd h3{font-size:13px;font-weight:600;color:var(--brand-ink);margin:0}
-.vb{display:flex;align-items:center;gap:12px;margin:12px 28px 0;padding:12px 12px 12px 16px;border-radius:12px;background:#FFF4E6;color:#7A3E0C;font-size:14px;animation:rise .3s ease both}
+.vb{display:flex;align-items:center;gap:12px;margin:12px 28px 0;padding:12px 12px 12px 16px;border-radius:12px;background:var(--warn-soft);color:var(--warn);font-size:14px;animation:rise .3s ease both}
 .vb svg{width:18px;height:18px;flex:none;color:var(--brand-deep)}
 .vb span{flex:1;min-width:0}
-.vb b{color:#5A2C06}
+.vb b{color:var(--warn)}
 @media (max-width:640px){.vb{margin:10px 16px 0;flex-wrap:wrap}}
 .topbar .titles{flex:1;min-width:0}
 #tpic:empty{display:none}
@@ -98,15 +133,15 @@ main{background:var(--bg);margin:8px 8px 8px 0;border-radius:var(--r-lg);height:
 @media (min-width:761px){.topbar.tabbed{position:sticky}.topbar.tabbed .utabs{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}.topbar.tabbed .titles{max-width:calc(50% - 230px)}}
 @media (max-width:760px){.utabs{order:5;flex-basis:100%;margin:2px 0 0;position:relative}.topbar.tabbed .titles{max-width:none;flex:1}}
 .utabs .tabbtn{height:34px;padding:0 14px;border-radius:8px;background:transparent;color:var(--dim);font-size:13px;transition:background-color .18s ease,color .18s ease}
-.utabs .tabbtn:hover{background:#e4ede8;color:var(--text)}
+.utabs .tabbtn:hover{background:var(--hover);color:var(--text)}
 .utabs .tabbtn::after{display:none}
-.utabs .tabbtn.on{background:transparent;color:var(--brand-ink)}
+.utabs .tabbtn.on{background:transparent;color:var(--accent-ink)}
 .utabs .tabbtn{position:relative;z-index:1}
 .utabs .ind{position:absolute;top:3px;bottom:3px;left:0;border-radius:8px;background:var(--brand);z-index:0;transition:transform .32s cubic-bezier(.3,.7,.2,1),width .32s cubic-bezier(.3,.7,.2,1)}
 .utabs .tabbtn,.utabs .tabbtn svg,.utabs .tabbtn .n{transition:color .25s ease,background-color .25s ease}
-.utabs .tabbtn.on svg{color:var(--brand-ink)}
+.utabs .tabbtn.on svg{color:var(--accent-ink)}
 .utabs .tabbtn .n{background:var(--muted);color:var(--dim)}
-.utabs .tabbtn.on .n{background:rgba(42,26,18,.14);color:var(--brand-ink)}
+.utabs .tabbtn.on .n{background:rgba(42,26,18,.14);color:var(--accent-ink)}
 .rdot{flex:none;width:9px;height:9px;border-radius:50%;background:#fff}
 .btn .rdot.on{background:#E5323F;animation:pulse 1.3s infinite}
 /* live stream panel */
@@ -142,7 +177,7 @@ main{background:var(--bg);margin:8px 8px 8px 0;border-radius:var(--r-lg);height:
 @media (max-width:960px){.stream{grid-template-columns:1fr}}
 .sbadge{display:inline-flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;font-weight:600;padding:2px 8px 2px 7px;border-radius:999px;background:var(--muted);color:var(--dim)}
 .sbadge i{width:6px;height:6px;border-radius:50%;background:currentColor}
-.sbadge.live{background:#FDECEC;color:#C53030}.sbadge.live i,.sbadge.rec i{animation:pulse 1.3s infinite}
+.sbadge.live{background:var(--bad-soft);color:var(--bad)}.sbadge.live i,.sbadge.rec i{animation:pulse 1.3s infinite}
 .sbadge.rec{background:#E5323F;color:#fff}
 .sbadge svg{width:12px;height:12px}
 .sbadge{white-space:nowrap;max-width:100%}
@@ -152,9 +187,9 @@ main{background:var(--bg);margin:8px 8px 8px 0;border-radius:var(--r-lg);height:
 .ttabs .tabbtn{height:32px;padding:0 12px;border-radius:8px;font-size:13px;color:var(--dim)}
 .ttabs .tabbtn::after{display:none}
 .ttabs .tabbtn svg{width:16px;height:16px}
-.ttabs .tabbtn:hover{background:#e4ede8;color:var(--text)}
+.ttabs .tabbtn:hover{background:var(--hover);color:var(--text)}
 .ttabs .tabbtn.on{background:var(--brand-soft);color:var(--brand-ink)}
-.ttabs .tabbtn.on .n{background:#fff}
+.ttabs .tabbtn.on .n{background:var(--surface)}
 #actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 #actions a.btn{text-decoration:none}
 @media (max-width:560px){#actions .btn .long{display:none}}
@@ -196,11 +231,11 @@ img.avatar.ring{background:transparent}
 .app.mini .sb-tag{display:none}
 
 /* ---------- buttons */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:38px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:#fff;color:var(--text);cursor:pointer;text-decoration:none;white-space:nowrap;font-weight:600}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:38px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);color:var(--text);cursor:pointer;text-decoration:none;white-space:nowrap;font-weight:600}
 .btn:active{background:var(--muted)}
-.btn.primary{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:var(--accent-ink)}
 .btn.primary:active{background:var(--brand-press);border-color:var(--brand-press)}
-.btn.dark{background:var(--brand-ink);border-color:var(--brand-ink);color:#fff}
+.btn.dark{background:var(--accent-ink);border-color:var(--accent-ink);color:#fff}
 .btn.dark svg{color:var(--brand)}
 .btn.danger{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--dim)}
@@ -211,10 +246,10 @@ img.avatar.ring{background:transparent}
 .btn:disabled{opacity:.45;cursor:default;pointer-events:none}
 
 /* ---------- fields */
-:where(input:not([type=checkbox],[type=radio],[type=file],[type=range]),select,textarea){width:100%;height:40px;padding:0 12px;background:#fff;border:1px solid var(--line-2);border-radius:var(--r-sm);min-width:0;outline:none;transition:border-color .15s ease}
+:where(input:not([type=checkbox],[type=radio],[type=file],[type=range]),select,textarea){width:100%;height:40px;padding:0 12px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);min-width:0;outline:none;transition:border-color .15s ease}
 :where(textarea){height:auto;padding:10px 12px;resize:vertical}
 :where(input:not([type=checkbox],[type=radio],[type=file],[type=range]),select,textarea):hover{border-color:#D9CCC2}
-:where(input:not([type=checkbox],[type=radio],[type=file],[type=range]),select,textarea):focus{background:#fff;border-color:var(--brand)}
+:where(input:not([type=checkbox],[type=radio],[type=file],[type=range]),select,textarea):focus{background:var(--surface);border-color:var(--brand)}
 input:not([type=checkbox],[type=radio],[type=range]):focus-visible,select:focus-visible,textarea:focus-visible{outline:none}
 input::placeholder,textarea::placeholder{color:var(--faint)}
 label.f{display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--dim);font-weight:600}
@@ -223,14 +258,14 @@ label.sw input{appearance:none;width:38px;height:22px;border-radius:999px;backgr
 label.sw input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
 label.sw input:checked{background:var(--brand)}label.sw input:checked::after{transform:translateX(16px)}
 label.sw small{display:block;color:var(--dim);font-size:12px;font-weight:400}
-label.ck{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 13px;border-radius:var(--r);cursor:pointer;background:#fff;border:1px solid var(--line-2);font-weight:500}
+label.ck{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 13px;border-radius:var(--r);cursor:pointer;background:var(--surface);border:1px solid var(--line-2);font-weight:500}
 label.ck:has(input:checked){background:var(--brand-soft);border-color:var(--brand-line);color:var(--brand-ink)}
 label.ck input{accent-color:var(--brand);margin:0}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:18px}
 .span{grid-column:1/-1}
 
 /* ---------- surfaces */
-.card{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:22px;margin-bottom:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:22px;margin-bottom:16px}
 .card>h2,.card-head h2{font-size:15px;font-weight:600;color:var(--brand-ink)}
 .card>h2{margin-bottom:4px}
 .card>h2+.help{margin-bottom:18px}
@@ -251,7 +286,7 @@ label.ck input{accent-color:var(--brand);margin:0}
 .pill.bad{color:var(--bad);background:var(--bad-soft)}
 .pill.warn{color:var(--brand-deep);background:var(--brand-soft)}
 .pill.live{color:#fff;background:var(--live)}
-.pill.brand{color:var(--brand-ink);background:var(--brand)}
+.pill.brand{color:var(--accent-ink);background:var(--brand)}
 .dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.3s infinite}
 @keyframes pulse{50%{opacity:.3}}
 .empty{border:1px dashed var(--line-2);border-radius:var(--r);padding:48px 20px;text-align:center;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:4px}
@@ -267,12 +302,12 @@ label.ck input{accent-color:var(--brand);margin:0}
 .hero h2{font-size:clamp(21px,5.2vw,28px);font-weight:700;letter-spacing:-.03em;color:var(--brand-ink);line-height:1.2;text-wrap:balance}
 .hero>p{color:var(--dim);margin:8px auto 22px;max-width:520px;font-size:15px}
 .guide-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;max-width:760px;margin:20px auto 0;text-align:left}
-.g-step{background:#fff;border:1px solid var(--line-2);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.g-step{background:var(--surface);border:1px solid var(--line-2);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
 .g-step span.num{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;background:var(--brand-soft);color:var(--brand-ink);font-size:12px;font-weight:700;margin-bottom:4px}
 .g-step b{font-size:13px;color:var(--text)}
 .g-step small{font-size:11px;color:var(--faint)}
 @media (max-width:640px){.guide-steps{grid-template-columns:1fr}}
-.composer{max-width:760px;margin:0 auto;background:#fff;border:1px solid var(--line-2);border-radius:var(--r-lg);text-align:left;transition:background-color .15s ease,border-color .15s ease}
+.composer{max-width:760px;margin:0 auto;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-lg);text-align:left;transition:background-color .15s ease,border-color .15s ease}
 .composer:has(#url:focus){border-color:#ffa27c}
 .composer.compact{max-width:none;margin-bottom:28px;background:var(--muted)}
 .composer.over{background:var(--brand-soft);border-color:var(--brand)}
@@ -286,9 +321,9 @@ label.ck input{accent-color:var(--brand);margin:0}
 .composer-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
 .composer-actions .btn{min-height:38px;padding:0 18px;font-weight:600}
 .chip{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 12px;border-radius:999px;border:0;background:var(--muted);color:var(--dim);font-weight:500;font-size:13px;cursor:pointer;white-space:nowrap;transition:background-color .15s ease,color .15s ease}
-.composer.compact .chip{background:#fff}
+.composer.compact .chip{background:var(--surface)}
 .chip svg{width:16px;height:16px}
-.chip:hover,.chip:focus-visible{background:#e4ede8;color:var(--text)}
+.chip:hover,.chip:focus-visible{background:var(--hover);color:var(--text)}
 .chip.on,.pick.open .chip{background:var(--brand-soft);color:var(--brand-ink)}
 .hint{font-size:12px;color:var(--faint);margin-right:4px}
 @media (max-width:680px){
@@ -307,30 +342,30 @@ label.ck input{accent-color:var(--brand);margin:0}
 .att>div{min-height:0;overflow:hidden}
 .att-in{display:flex;flex-direction:column;gap:8px;padding:0 12px 8px}
 .lp{display:flex;align-items:center;gap:12px;padding:8px;border-radius:12px;background:var(--muted);animation:rise .28s ease both}
-.composer.compact .lp{background:#fff}
+.composer.compact .lp{background:var(--surface)}
 .lp .th{position:relative;flex:none;width:112px;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#2A1A12}
 .lp .th img{width:100%;height:100%;object-fit:cover;display:block}
 .lp .th .du{position:absolute;right:5px;bottom:5px;background:rgba(20,12,8,.82);color:#fff;font-size:11px;font-weight:600;padding:1px 6px;border-radius:6px}
 .lp .tx{min-width:0;flex:1}
 .lp .tx b{display:block;font-size:14px;font-weight:600;color:var(--brand-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lp .tx span{display:block;font-size:12px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lp .ok{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#1F7A4D;background:#E3F4EA;padding:4px 10px;border-radius:999px}
+.lp .ok{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--good);background:var(--good-soft);padding:4px 10px;border-radius:999px}
 .lp .ok svg{width:14px;height:14px}
 .lp .ok.live{background:#E5323F;color:#fff}
 .lp .ok.live i{width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1.3s infinite}
-.lp.bad{background:#FDECEC;color:#A12A2A;font-size:13px;padding:10px 12px}
+.lp.bad{background:var(--bad-soft);color:var(--bad);font-size:13px;padding:10px 12px}
 .lp.bad>span{flex:1;min-width:0}
-.lp.bad b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#7A1F1F}
+.lp.bad b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--bad)}
 .lp.wait .rm{margin-left:auto}
 .lp.bad svg{width:16px;height:16px;flex:none}
-.lp.wait .th,.sk{background:linear-gradient(90deg,#e5eee9 0%,#F8F3EF 50%,#e5eee9 100%);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+.lp.wait .th,.sk{background:linear-gradient(90deg,var(--muted) 0%,var(--surface) 50%,var(--muted) 100%);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
 .sk{display:block;height:10px;border-radius:6px;margin:4px 0}
 .lp{position:relative;overflow:hidden}
 .lp .th video{width:100%;height:100%;object-fit:cover;display:block}
-.lp .tx em{font-style:normal;color:#A12A2A}
+.lp .tx em{font-style:normal;color:var(--bad)}
 .lp .ok.up{background:var(--brand-soft);color:var(--brand-ink);min-width:52px;justify-content:center}
 .lp .rm{flex:none;width:30px;height:30px;border-radius:8px;border:0;background:transparent;color:var(--faint);display:grid;place-items:center;cursor:pointer;transition:background-color .15s ease,color .15s ease}
-.lp .rm:hover,.lp .rm:focus-visible{background:#FDECEC;color:#C53030}
+.lp .rm:hover,.lp .rm:focus-visible{background:var(--bad-soft);color:var(--bad)}
 .lp .rm svg{width:14px;height:14px}
 .lp .pbar{position:absolute;left:0;bottom:0;height:3px;background:var(--brand);transition:width .2s ease}
 .addrow{display:flex;align-items:center;gap:8px;width:100%;height:42px;padding:0 12px;border:0;border-radius:12px;background:transparent;color:var(--dim);font-size:13px;font-weight:600;cursor:pointer;transition:background-color .15s ease,color .15s ease;animation:rise .28s ease both}
@@ -338,13 +373,13 @@ label.ck input{accent-color:var(--brand);margin:0}
 .addrow svg{width:16px;height:16px}
 .addrow span{margin-left:auto;font-weight:500;color:var(--faint);font-size:12px}
 @media (max-width:560px){.lp .th{width:88px}.lp .ok{display:none}}
-.btn.primary:disabled{background:#F3E7DD;color:#bfd1cf;cursor:not-allowed}
+.btn.primary:disabled{background:var(--muted);color:var(--dim);cursor:not-allowed}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 @keyframes spin{to{transform:rotate(360deg)}}
 .working{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--brand);background:rgba(255,162,124,.14);padding:2px 8px 2px 6px;border-radius:999px}
 .working i{width:10px;height:10px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .8s linear infinite}
-.nav-item.on .working{background:rgba(42,26,18,.14);color:var(--brand-ink)}
+.nav-item.on .working{background:rgba(42,26,18,.14);color:var(--accent-ink)}
 .app.mini .nav-item .working{display:none}
 
 /* custom dropdown: a dark panel, no border or shadow needed against the white */
@@ -370,25 +405,25 @@ img.av{object-fit:cover}
 /* options panel */
 .og{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .ob{background:var(--muted);border-radius:12px;padding:12px 14px 14px;min-width:0}
-.composer.compact .ob{background:#fff}
+.composer.compact .ob{background:var(--surface)}
 .ob.wide{grid-column:1/-1}
 .ot{font-size:12px;font-weight:600;color:var(--dim);margin-bottom:10px}
 .nsteps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-.nstep{display:flex;flex-direction:column;gap:6px;background:#fff;border-radius:10px;padding:10px 10px 8px}
+.nstep{display:flex;flex-direction:column;gap:6px;background:var(--surface);border-radius:10px;padding:10px 10px 8px}
 .composer.compact .nstep{background:var(--muted)}
 .nstep>span{font-size:12px;color:var(--faint)}
 .nstep .ctl{display:flex;align-items:center;gap:6px}
 .nstep .ctl button{flex:none;width:28px;height:28px;border-radius:8px;border:0;background:var(--muted);color:var(--text);display:grid;place-items:center;cursor:pointer;transition:background-color .15s ease,color .15s ease}
-.composer.compact .nstep .ctl button{background:#fff}
-.nstep .ctl button:hover,.nstep .ctl button:focus-visible{background:var(--brand);color:#fff}
+.composer.compact .nstep .ctl button{background:var(--surface)}
+.nstep .ctl button:hover,.nstep .ctl button:focus-visible{background:var(--brand);color:var(--accent-ink)}
 .nstep .ctl button svg{width:14px;height:14px}
 .nstep input,.nstep input:focus{flex:1;min-width:0;height:30px;padding:0;border:0;background:transparent;text-align:center;font-size:20px;font-weight:700;color:var(--brand-ink);-moz-appearance:textfield}
 .nstep input::-webkit-inner-spin-button,.nstep input::-webkit-outer-spin-button,.range input::-webkit-inner-spin-button,.range input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .nstep .ctl i{font-style:normal;font-size:12px;color:var(--faint);width:10px}
 .tiles3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-.tile-o{display:flex;flex-direction:column;gap:7px;padding:6px 6px 8px;border:0;border-radius:10px;background:#fff;color:var(--dim);font-size:12px;font-weight:600;cursor:pointer;text-align:center;transition:background-color .15s ease,color .15s ease}
+.tile-o{display:flex;flex-direction:column;gap:7px;padding:6px 6px 8px;border:0;border-radius:10px;background:var(--surface);color:var(--dim);font-size:12px;font-weight:600;cursor:pointer;text-align:center;transition:background-color .15s ease,color .15s ease}
 .composer.compact .tile-o{background:var(--muted)}
-.tile-o:hover,.tile-o:focus-visible{background:#e4ede8;color:var(--text)}
+.tile-o:hover,.tile-o:focus-visible{background:var(--hover);color:var(--text)}
 .tile-o[aria-pressed=true]{background:var(--brand-soft);color:var(--brand-ink)}
 .cap-prev{height:54px;border-radius:7px;background:#122a30;display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;font-size:14px;line-height:1;color:#fff;letter-spacing:0;-webkit-text-stroke:1px #000;paint-order:stroke fill}
 .cap-prev b{font-weight:inherit}
@@ -401,15 +436,15 @@ img.av{object-fit:cover}
 .lay-prev.split .ph::after{content:"";position:absolute;left:0;right:0;bottom:0;height:62%;background:linear-gradient(135deg,#ffa27c,#ffa27c)}
 .lay-prev.stack .ph i{left:0;right:0;bottom:0;height:38%;transform:none;border-top:1px solid #122a30}
 .lay-prev.stack .ph::after{content:"";position:absolute;left:0;right:0;top:0;height:62%;background:linear-gradient(135deg,#ffa27c,#ffa27c)}
-.seg{display:flex;gap:4px;background:#fff;border-radius:10px;padding:4px}
+.seg{display:flex;gap:4px;background:var(--surface);border-radius:10px;padding:4px}
 .composer.compact .seg{background:var(--muted)}
 .seg button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 6px;border:0;border-radius:7px;background:transparent;color:var(--dim);font-size:13px;font-weight:600;cursor:pointer;transition:background-color .15s ease,color .15s ease}
 .seg button small{font-size:11px;font-weight:500;color:var(--faint);transition:color .15s ease}
-.seg button:hover,.seg button:focus-visible{background:#e4ede8;color:var(--text)}
+.seg button:hover,.seg button:focus-visible{background:var(--hover);color:var(--text)}
 .seg button[aria-pressed=true]{background:var(--brand-soft);color:var(--brand-ink)}
-.seg button[aria-pressed=true] small{color:#B8693A}
+.seg button[aria-pressed=true] small{color:var(--brand-deep)}
 .range{display:flex;align-items:center;gap:8px}
-.range label{flex:1;display:flex;align-items:center;gap:6px;background:#fff;border-radius:10px;padding:0 10px;height:44px;font-size:12px;color:var(--faint);min-width:0}
+.range label{flex:1;display:flex;align-items:center;gap:6px;background:var(--surface);border-radius:10px;padding:0 10px;height:44px;font-size:12px;color:var(--faint);min-width:0}
 .composer.compact .range label{background:var(--muted)}
 .range input,.range input:focus{flex:1;min-width:0;height:40px;border:0;background:transparent;padding:0;font-size:15px;font-weight:600;color:var(--brand-ink);-moz-appearance:textfield}
 .range>svg{width:14px;height:14px;color:var(--faint);flex:none}
@@ -417,7 +452,7 @@ img.av{object-fit:cover}
 
 /* ---------- home blocks */
 .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:16px}
-.tile{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;display:flex;flex-direction:column}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;display:flex;flex-direction:column}
 .tile i{width:32px;height:32px;border-radius:var(--r-sm);background:var(--brand-soft);color:var(--brand-deep);display:grid;place-items:center;margin-bottom:14px}
 .tile i svg{width:18px;height:18px}
 .tile b{font-size:26px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--brand-ink);line-height:1.1}
@@ -462,6 +497,18 @@ img.av{object-fit:cover}
 .set-sec:last-child{border-bottom:0}
 .set-sec h2{font-size:17px;color:var(--brand-ink);margin-bottom:4px}
 .set-sec .help{margin-bottom:16px}
+.appearance-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;max-width:600px;min-width:0;margin:0;padding:0;border:0}
+.appearance-choices legend{margin-bottom:10px;padding:0;color:var(--dim);font-size:12px;font-weight:600}
+.appearance-option{min-width:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);padding:10px;color:var(--text);font-weight:600}
+.appearance-option:hover{border-color:var(--brand-deep)}
+.appearance-option:has(input:checked){border-color:var(--brand-deep);background:var(--brand-soft)}
+.appearance-option input{margin:0;accent-color:var(--brand-deep)}
+.appearance-swatch{width:100%;height:56px;display:grid;grid-template-columns:27% 1fr;border:1px solid var(--line-2);border-radius:var(--r-sm);overflow:hidden;background:#f3f6f3}
+.appearance-swatch::before{content:"";background:#122a30}
+.appearance-swatch::after{content:"";margin:11px 9px;background:#fff;border:1px solid #cbdad3;border-top:4px solid var(--brand);border-radius:4px}
+.appearance-swatch.dark{background:#131f22}.appearance-swatch.dark::before{background:#0e1b1e}.appearance-swatch.dark::after{background:#233438;border-color:#475d61;border-top-color:var(--brand)}
+.appearance-swatch.system{background:linear-gradient(90deg,#f3f6f3 50%,#131f22 50%)}
+.appearance-swatch.system::after{background:linear-gradient(90deg,#fff 32%,#233438 32%)}
 .set-load{padding:40px 0;color:var(--faint)}
 .fields.narrow{max-width:420px;grid-template-columns:1fr}
 .prof{display:flex;align-items:center;gap:14px;margin-bottom:18px}
@@ -490,20 +537,20 @@ img.av{object-fit:cover}
 .appsetup a{color:var(--brand-deep);font-weight:600}
 .appsetup a:hover{color:var(--brand-ink)}
 .appsetup .copyrow{display:flex;gap:8px;align-items:center}
-.appsetup .copyrow code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px;background:#fff;border:1px solid var(--line-2);border-radius:8px;padding:8px 10px}
+.appsetup .copyrow code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px;background:var(--surface);border:1px solid var(--line-2);border-radius:8px;padding:8px 10px}
 .appsetup .warnline{font-size:12px;color:var(--brand-deep)}
 .appact{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .applist{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 .applist div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .applist .btn{margin-left:auto}
 @media (max-width:860px){.set-layout{grid-template-columns:1fr;gap:16px}.set-nav{position:static;flex-direction:row;overflow-x:auto}.set-link small{display:none}.set-link{flex:none}.kv div{grid-template-columns:1fr;gap:2px}}
-.savebar{position:sticky;bottom:16px;z-index:4;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 16px;margin-top:8px;border-radius:14px;background:var(--brand-ink);color:#F4ECE6;opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}
+.savebar{position:sticky;bottom:16px;z-index:4;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 16px;margin-top:8px;border-radius:14px;background:var(--accent-ink);color:#F4ECE6;opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}
 .savebar.on{opacity:1;transform:none;pointer-events:auto}
 .savebar>span{flex:1;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500}
 .savebar>span svg{width:16px;height:16px;color:var(--brand)}
 .savebar .btn.ghost{color:#E9DED6;background:transparent;border-color:transparent}
 .savebar .btn.ghost:hover{background:rgba(255,255,255,.08)}
-.step .n{width:26px;height:26px;border-radius:999px;border:1px solid var(--line-2);background:#fff;display:grid;place-items:center;font-size:12px;font-weight:600;flex:none;color:var(--brand-ink)}
+.step .n{width:26px;height:26px;border-radius:999px;border:1px solid var(--line-2);background:var(--surface);display:grid;place-items:center;font-size:12px;font-weight:600;flex:none;color:var(--brand-ink)}
 .step b{display:block;font-weight:600;color:var(--text)}
 .step .d{font-size:12px;color:var(--dim)}
 .step>svg{color:var(--faint);margin-left:auto}
@@ -530,15 +577,15 @@ img.av{object-fit:cover}
 @keyframes transfer-pending{to{transform:translateX(400%)}}
 .err{color:var(--bad);font-size:13px;overflow-wrap:anywhere;margin:6px 0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
-.clip{background:#fff;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column}
+.clip{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column}
 .shot{position:relative;aspect-ratio:9/16;background:#17110E;border:0;padding:0;cursor:pointer;display:block;width:100%;overflow:hidden}
 .shot img{width:100%;height:100%;object-fit:cover;display:block}
 .shot .veil{position:absolute;left:10px;bottom:10px}
-.veil span{width:34px;height:34px;border-radius:50%;background:var(--brand);display:grid;place-items:center;color:var(--brand-ink)}
+.veil span{width:34px;height:34px;border-radius:50%;background:var(--brand);display:grid;place-items:center;color:var(--accent-ink)}
 .veil svg{width:15px;height:15px;margin-left:2px}
-.badge{position:absolute;top:10px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:var(--r-sm);background:#fff;color:var(--brand-ink)}
+.badge{position:absolute;top:10px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:var(--r-sm);background:var(--surface);color:var(--brand-ink)}
 .badge.l{left:10px}.badge.r{right:10px}
-.badge.s-hi{background:var(--brand);color:var(--brand-ink)}.badge.s-mid{background:#FFE3CC;color:var(--brand-ink)}
+.badge.s-hi{background:var(--brand);color:var(--accent-ink)}.badge.s-mid{background:#FFE3CC;color:var(--accent-ink)}
 .making{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:14px;color:var(--dim);font-size:13px;font-weight:500;background:linear-gradient(110deg,#F4EFEE 30%,#FBF8F7 50%,#F4EFEE 70%);background-size:220% 100%;animation:shim 1.6s linear infinite}
 @keyframes shim{to{background-position:-220% 0}}
 .clip-body{padding:12px 14px;display:flex;flex-direction:column;gap:5px;flex:1}
@@ -563,7 +610,7 @@ img.av{object-fit:cover}
 .clip-foot{display:flex;gap:4px;align-items:center;margin-top:auto;padding-top:8px}
 
 /* ---------- live */
-.livecard{background:#fff;border:1px solid #F4C9CD;border-radius:var(--r);padding:20px;margin-bottom:28px}
+.livecard{background:var(--surface);border:1px solid #F4C9CD;border-radius:var(--r);padding:20px;margin-bottom:28px}
 .lc-head{display:flex;gap:16px;align-items:flex-start;justify-content:space-between}
 .lc-title{flex:1;min-width:0}
 .lc-title h3{margin-top:8px;font-size:16px;line-height:1.4;color:var(--brand-ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
@@ -615,16 +662,16 @@ a.lnk{color:var(--brand-ink);text-decoration:none;font-weight:600}
 
 /* ---------- plans */
 .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
-.plan{position:relative;display:flex;flex-direction:column;gap:4px;padding:18px;border-radius:var(--r);background:#fff;border:1px solid var(--line-2);cursor:pointer;font-size:13px;color:var(--dim)}
+.plan{position:relative;display:flex;flex-direction:column;gap:4px;padding:18px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line-2);cursor:pointer;font-size:13px;color:var(--dim)}
 .plan b{font-size:16px;font-weight:600;color:var(--brand-ink);margin-bottom:6px;display:flex;align-items:center;gap:8px}
 .plan b svg{color:var(--brand)}
-.plan em{position:absolute;top:16px;right:16px;font-style:normal;font-size:11px;font-weight:600;background:var(--brand-ink);color:var(--brand);padding:2px 8px;border-radius:999px}
+.plan em{position:absolute;top:16px;right:16px;font-style:normal;font-size:11px;font-weight:600;background:var(--accent-ink);color:var(--brand);padding:2px 8px;border-radius:999px}
 .plan input{position:absolute;opacity:0;pointer-events:none}
 .plan.on{background:var(--brand-soft);border-color:var(--brand)}
 .plan:has(input:focus-visible){outline:2px solid var(--brand);outline-offset:2px}
 
 /* ---------- dialogs + toasts */
-dialog{border:1px solid var(--line);background:#fff;color:var(--text);border-radius:var(--r-lg);padding:0;max-width:calc(100vw - 32px)}
+dialog{border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:var(--r-lg);padding:0;max-width:calc(100vw - 32px)}
 dialog.release-dialog{width:min(540px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto}
 .release-dialog .dlg{width:100%;box-sizing:border-box}
 .release-dialog textarea{width:100%;min-height:6rem;resize:vertical}
@@ -678,13 +725,13 @@ dialog{max-height:calc(100dvh - 24px)}
 .toast .rep:hover{background:rgba(255,255,255,.18)}
 .err .rep{margin-left:8px;border:0;background:transparent;color:inherit;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer;padding:0}
 
-.ntoast{display:flex;gap:12px;align-items:flex-start;width:340px;max-width:calc(100vw - 40px);padding:12px 12px 12px 12px;border-radius:12px;background:#fff;border:1px solid var(--line);color:var(--text);cursor:pointer;text-align:left;
+.ntoast{display:flex;gap:12px;align-items:flex-start;width:340px;max-width:calc(100vw - 40px);padding:12px 12px 12px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--line);color:var(--text);cursor:pointer;text-align:left;
   animation:ntin .35s cubic-bezier(.2,.8,.2,1) both;transition:background-color .15s ease}
-.ntoast:hover{background:#FFFBF8}
+.ntoast:hover{background:var(--hover)}
 .ntoast.out{animation:ntout .25s ease forwards}
 .ntoast i{flex:none;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand-deep)}
 .ntoast i svg{width:17px;height:17px}
-.ntoast.k-expiry i{background:#FFF1DC;color:#9A5B12}.ntoast.k-post i{background:#FDECEC;color:#C53030}.ntoast.k-live i{background:#FDECEC;color:#E5323F}.ntoast.k-clips i{background:#E9F6EE;color:#1F7A4D}
+.ntoast.k-expiry i{background:var(--warn-soft);color:var(--warn)}.ntoast.k-post i{background:var(--bad-soft);color:var(--bad)}.ntoast.k-live i{background:var(--bad-soft);color:var(--bad)}.ntoast.k-clips i{background:var(--good-soft);color:var(--good)}
 .ntoast .tx{flex:1;min-width:0}
 .ntoast b{display:block;font-size:13px;font-weight:600;color:var(--brand-ink);line-height:1.35}
 .ntoast span{display:block;font-size:12px;color:var(--dim);margin-top:2px;overflow-wrap:anywhere}
@@ -701,7 +748,7 @@ dialog{max-height:calc(100dvh - 24px)}
 .me-btn:hover,.me-btn[aria-expanded=true]{background:var(--frame-2)}
 .bell{position:relative}
 .bell .dotn{position:absolute;top:2px;right:1px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#E5323F;color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;border:2px solid var(--frame)}
-.pop{position:fixed;z-index:60;left:248px;bottom:12px;width:360px;max-width:calc(100vw - 24px);max-height:min(520px,calc(100vh - 100px));display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;
+.pop{position:fixed;z-index:60;left:248px;bottom:12px;width:360px;max-width:calc(100vw - 24px);max-height:min(520px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;
   opacity:0;transform:translateY(8px);transition:opacity .18s ease,transform .18s ease}
 .pop.open{opacity:1;transform:none}
 @media (max-width:900px){.pop{left:12px!important;bottom:74px!important;z-index:80}}
@@ -714,7 +761,7 @@ dialog{max-height:calc(100dvh - 24px)}
 .nt:hover{background:var(--muted)}
 .nt i{flex:none;width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand-deep)}
 .nt i svg{width:16px;height:16px}
-.nt.k-expiry i{background:#FFF1DC;color:#9A5B12}.nt.k-post i,.nt.k-fail i{background:#FDECEC;color:#C53030}.nt.k-live i{background:#FDECEC;color:#E5323F}.nt.k-clips i{background:#E9F6EE;color:#1F7A4D}
+.nt.k-expiry i{background:var(--warn-soft);color:var(--warn)}.nt.k-post i,.nt.k-fail i{background:var(--bad-soft);color:var(--bad)}.nt.k-live i{background:var(--bad-soft);color:var(--bad)}.nt.k-clips i{background:var(--good-soft);color:var(--good)}
 .nt .tx{flex:1;min-width:0}
 .nt b{display:block;font-size:13px;font-weight:600;color:var(--brand-ink);line-height:1.35}
 .nt span{display:block;font-size:12px;color:var(--dim);margin-top:2px;overflow-wrap:anywhere}
@@ -728,7 +775,7 @@ dialog{max-height:calc(100dvh - 24px)}
 .pop.menu button svg{width:16px;height:16px;color:var(--dim)}
 .pop.menu .who2{padding:8px 10px 10px;border-bottom:1px solid var(--line);margin-bottom:4px}
 .pop.menu .who2 b{display:block;font-size:13px;color:var(--brand-ink)}.pop.menu .who2 span{font-size:12px;color:var(--faint);overflow-wrap:anywhere}
-.pop.menu .danger{color:#C53030}.pop.menu .danger svg{color:#C53030}
+.pop.menu .danger{color:var(--bad)}.pop.menu .danger svg{color:var(--bad)}
 .me .who{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
 .me .who b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .me .who span{font-size:12px;color:var(--frame-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -744,7 +791,7 @@ dialog{max-height:calc(100dvh - 24px)}
 .ai-card .ai-n{font-size:12px;color:var(--frame-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
 .app.mini .ai-card{justify-content:center;padding:6px 0;background:transparent;border-color:transparent}
 .app.mini .ai-card .ai-tx,.app.mini .ai-card .ai-n{display:none}
-.ai-home{display:flex;flex-direction:column;background:#fff;color:var(--text);border-color:var(--line)}
+.ai-home{display:flex;flex-direction:column;background:var(--surface);color:var(--text);border-color:var(--line)}
 .ai-home h2{font-size:13px;font-weight:500;color:var(--dim);margin-bottom:6px}
 .ai-big{font-size:28px;font-weight:600;letter-spacing:-.02em;color:var(--brand-ink);line-height:1.15;overflow-wrap:anywhere}
 .ai-sub{font-size:12px;color:var(--faint);margin:4px 0 14px;overflow-wrap:anywhere}
@@ -779,7 +826,7 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;bac
 .btn:hover{background:var(--muted);border-color:#D4CAC3}
 .btn.primary:hover{background:#FF9A4C;border-color:#FF9A4C}
 .btn.dark:hover{background:#3A2C25;border-color:#3A2C25}
-.btn.danger:hover{background:#FADDE0}
+.btn.danger:hover{background:color-mix(in srgb,var(--bad-soft),var(--bad) 12%)}
 .btn.ghost:hover{background:var(--muted);border-color:transparent;color:var(--text)}
 
 .nav-item:hover{background:var(--frame-2)}
@@ -787,14 +834,14 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;bac
 .icon-btn:hover{background:var(--muted);color:var(--text)}
 .side .icon-btn:hover{background:var(--frame-2);color:var(--frame-text)}
 .chip:hover{background:var(--muted);color:var(--text)}
-.chip.on:hover,.pick.open .chip:hover{background:#FFE2CC;color:var(--brand-ink)}
-.step:hover{background:#F1EBE6}
+.chip.on:hover,.pick.open .chip:hover{background:color-mix(in srgb,var(--brand-soft),var(--brand) 20%);color:var(--brand-ink)}
+.step:hover{background:var(--hover)}
 .tabbtn:hover{color:var(--brand-ink);background:var(--muted)}
 label.ck:hover{border-color:#D4CAC3}
 .clip:hover{border-color:var(--line-2)}
 .shot:hover .veil span{background:#FF9A4C}
 a.lnk:hover{color:var(--brand-deep)}
-tr:hover>td{background:#FCFAF8}
+tr:hover>td{background:var(--hover)}
 .ai-card:hover{background:#352a24}
 .ai-card.on{border-color:rgba(255,162,124,.5)}
 .app.mini .ai-card:hover{background:var(--frame-2)}
@@ -848,15 +895,15 @@ dialog[open]{animation:fadein .16s ease}
 .tr-block{position:absolute;inset:0}
 .tr-dim{position:absolute;inset:0;background:rgba(20,14,11,.64);opacity:0;transition:opacity .3s ease}
 .tr-ring{position:absolute;left:0;top:0;border:2px solid var(--brand);border-radius:14px;pointer-events:none;opacity:0;transition:opacity .25s ease}
-.tr-card{position:absolute;left:0;top:0;width:400px;max-width:calc(100vw - 24px);background:#fff;border-radius:var(--r-lg);overflow:hidden;opacity:0;
+.tr-card{position:absolute;left:0;top:0;width:400px;max-width:calc(100vw - 24px);background:var(--surface);border-radius:var(--r-lg);overflow:hidden;opacity:0;
   transition:transform .5s cubic-bezier(.22,.8,.24,1),opacity .3s ease;will-change:transform}
 #tour.on .tr-dim,#tour.on .tr-card,.tr-ring.on{opacity:1}
 .tr-art{background:var(--brand-soft);margin:8px 8px 0;border-radius:var(--r);height:132px;display:grid;place-items:center;overflow:hidden}
 .tr-chips{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;padding:0 46px}
-.tr-chip{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 13px;border-radius:10px;background:#fff;color:var(--brand-ink);font-size:13px;font-weight:600;white-space:nowrap}
+.tr-chip{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 13px;border-radius:10px;background:var(--surface);color:var(--brand-ink);font-size:13px;font-weight:600;white-space:nowrap}
 .tr-chip svg{width:16px;height:16px;color:var(--brand-deep)}
-.tr-chip.on{background:var(--brand)}.tr-chip.on svg{color:var(--brand-ink)}
-.tr-x{position:absolute;top:16px;right:16px;width:32px;height:32px;border-radius:50%;border:0;background:#fff;color:var(--brand-ink);display:grid;place-items:center;cursor:pointer;transition:background-color .15s ease}
+.tr-chip.on{background:var(--brand);color:var(--accent-ink)}.tr-chip.on svg{color:var(--accent-ink)}
+.tr-x{position:absolute;top:16px;right:16px;width:32px;height:32px;border-radius:50%;border:0;background:var(--surface);color:var(--brand-ink);display:grid;place-items:center;cursor:pointer;transition:background-color .15s ease}
 .tr-x:hover{background:var(--brand-line)}
 .tr-x svg{width:14px;height:14px}
 .tr-body{padding:18px 22px 2px}
@@ -871,7 +918,7 @@ dialog[open]{animation:fadein .16s ease}
 .tr-grow{flex:1}
 .tr-back{width:40px;height:40px;border-radius:var(--r);border:0;background:var(--muted);color:var(--brand-ink);display:grid;place-items:center;cursor:pointer;flex:none;transition:background-color .15s ease,opacity .2s ease}
 .tr-back svg{transform:rotate(180deg)}
-.tr-back:hover{background:#e4ede8}
+.tr-back:hover{background:var(--hover)}
 .tr-back[disabled]{opacity:0;pointer-events:none}
 .tr-foot .btn{height:40px;padding:0 16px}
 @keyframes tr-in{from{opacity:0;transform:translateY(6px)}}
@@ -905,7 +952,7 @@ dialog[open]{animation:fadein .16s ease}
 
 /* Autopilot Posts & Review Section */
 .autoposts-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:18px}
-.autopost-card{background:#fff;border:1px solid var(--line-2);border-radius:var(--r);padding:18px;margin-bottom:18px;display:flex;flex-direction:column;gap:14px}
+.autopost-card{background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);padding:18px;margin-bottom:18px;display:flex;flex-direction:column;gap:14px}
 .ap-head{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .ap-streamer{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
 .ap-grid{display:grid;grid-template-columns:300px 1fr;gap:18px}
@@ -919,11 +966,11 @@ dialog[open]{animation:fadein .16s ease}
 .ap-meta-form{display:flex;flex-direction:column;gap:12px}
 .ap-field{display:flex;flex-direction:column;gap:4px}
 .ap-field label{font-size:12px;font-weight:600;color:var(--dim);display:flex;justify-content:space-between}
-.ap-field input,.ap-field textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:13px;background:#fff;color:inherit}
+.ap-field input,.ap-field textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:13px;background:var(--surface);color:inherit}
 .ap-field textarea{min-height:70px;resize:vertical}
 .ap-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
 .ap-tag{background:var(--muted);border:1px solid var(--line);border-radius:12px;padding:2px 8px;font-size:11px;color:var(--dim);font-weight:500}
-.ap-captions-box{background:#f8fafc;border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-size:12px;color:var(--dim);max-height:120px;overflow-y:auto}
+.ap-captions-box{background:var(--muted);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-size:12px;color:var(--dim);max-height:120px;overflow-y:auto}
 .countdown-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--r-sm);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .countdown-box.active{background:#fef3c7;border-color:#fde68a}
 .countdown-timer{font-size:18px;font-weight:700;font-family:monospace;color:#b45309}
@@ -1205,7 +1252,7 @@ const S = {status:{styles:{}, layouts:{}}, jobs:[], creators:[], accounts:[], ov
            view:"library", ctab:"clips", pendingUploads:[], resumeUploadId:null};
 const RIGHTS_GATE_VERSION = 1;
 const rightsGateReady = () => true;
-const D = {jid:null, cid:null, sig:"", metaIdeas:[], metaFormat:"short", titleIdeas:[], titleModel:""};
+const D = {jid:null, cid:null, session:0, sig:"", metaIdeas:[], metaFormat:"short", titleIdeas:[], titleModel:"", research:null};
 const creatorId = () => S.view.startsWith("c:") ? S.view.slice(2) : null;
 const creator = () => S.creators.find(c => c.id === creatorId());
 const jobOf = id => S.jobs.find(j => j.id === id);
@@ -1260,7 +1307,7 @@ function aiCard() {
     <div class="card-head" style="margin-bottom:8px">
       <div>
         <h2 style="display:flex;align-items:center;gap:8px">
-          ${ic("bolt")} MJ-Cliping Studio v1.2.0
+          ${ic("bolt")} MJ Cliproom 1.3.0
           <span class="pill ${isAuto ? "ok" : "warn"}">${isAuto ? '<span class="dot"></span>24/7 Autopilot: ACTIVE' : '24/7 Autopilot: PAUSED'}</span>
           <span class="pill ok" style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0" title="Auto-failover to GLM or dB signal clipping if primary AI limit is reached">${ic("check")} Quota Guard: Auto-Failover</span>
         </h2>
@@ -1283,21 +1330,20 @@ function aiCard() {
     </div>
 
     <div class="v12-suite-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:10px">
-      <div class="v12-col" style="background:#fff;border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
+      <div class="v12-col" style="background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
         <b style="font-size:12px;text-transform:uppercase;color:var(--dim);display:block;margin-bottom:8px">1. Automation & Growth</b>
         <div style="display:flex;flex-direction:column;gap:6px">
           <button class="btn sm dark" style="justify-content:flex-start" data-act="go" data-v="autopilot_posts">${ic("send")}Autopilot Posts & 10m Queue</button>
-          <button class="btn sm ghost" style="justify-content:flex-start" data-act="trendradar">${ic("chart")}Trend Radar (Viral Hooks)</button>
+          <button class="btn sm ghost" style="justify-content:flex-start" data-act="trendradar">${ic("chart")}YouTube topic research</button>
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="dailycomp">${ic("film")}Daily Compilation Stitcher</button>
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="multiplatform">${ic("send")}Multi-Platform Auto-Post</button>
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="toggleauto">${isAuto ? ic("pause") + "Pause 24/7 Autopilot" : ic("play") + "Start 24/7 Autopilot"}</button>
         </div>
       </div>
 
-      <div class="v12-col" style="background:#fff;border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
+      <div class="v12-col" style="background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
         <b style="font-size:12px;text-transform:uppercase;color:var(--dim);display:block;margin-bottom:8px">2. Content & 8 Render Formats</b>
         <div style="display:flex;flex-direction:column;gap:6px">
-          <button class="btn sm ghost" style="justify-content:flex-start" data-act="renderformatsmodal">${ic("film")}8 Video Render Formats</button>
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="seriesmaker">${ic("copy")}Series Maker (Part 1, 2...)</button>
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="voiceovermodal">${ic("user")}Natural AI Voiceover</button>
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="captionsmodal">${ic("font")}Animated Captions (ASS)</button>
@@ -1306,7 +1352,7 @@ function aiCard() {
         </div>
       </div>
 
-      <div class="v12-col" style="background:#fff;border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
+      <div class="v12-col" style="background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
         <b style="font-size:12px;text-transform:uppercase;color:var(--dim);display:block;margin-bottom:8px">3. Diagnosis & Insights</b>
         <div style="display:flex;flex-direction:column;gap:6px">
           <button class="btn sm ghost" style="justify-content:flex-start" data-act="analyticsmodal">${ic("chart")}Analytics Dashboard</button>
@@ -1316,7 +1362,7 @@ function aiCard() {
         </div>
       </div>
 
-      <div class="v12-col" style="background:#fff;border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
+      <div class="v12-col" style="background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px">
         <b style="font-size:12px;text-transform:uppercase;color:var(--dim);display:block;margin-bottom:8px">4. Creators & Scale</b>
         <div style="display:flex;flex-direction:column;gap:6px">
           <button class="btn sm dark" style="justify-content:flex-start" data-act="livebrainhud">${ic("radio")}Live Stream & Brain HUD</button>
@@ -1437,7 +1483,8 @@ function openAcct() {
   const u = S.status.user;
   const on = S.status.accounts !== false;
   p.innerHTML = `${on ? `<div class="who2"><b>${esc(u.name)}</b><span>${esc(u.email)}</span></div>` : ""}
-    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · 1.0.1</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
+    <button data-act="go" data-v="settings" data-tab="appearance">${ic("bulb")}Appearance</button>
+    <button data-act="go" data-v="settings">${ic("cog")}Settings</button><button data-act="go" data-v="usage">${ic("chart")}AI usage</button><button data-act="tour">${ic("play")}Take the tour</button><button data-act="whats-new">What’s new · ${RELEASE}</button>${S.status.links?.follow ? `<button data-act="feedback">${ic("chat")}Send feedback</button>` : ""}
     ${on ? `<button class="danger" data-act="logout">${ic("signout")}Sign out</button>` : ""}`;
   openPop(p, $("[data-act=acctmenu]"));
 }
@@ -1489,21 +1536,19 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await copyText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "1.2.2";
+const RELEASE = "1.3.0";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
-const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_1_2_2";
+const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_" + RELEASE;
 function whatsNew(first = false) {
   const d = $("#releasedlg");
   if (d.open) return;
   d.innerHTML = `<form method="dialog" class="dlg">
-    <h2 id="releaseTitle">What’s new in MJ Cliproom 1.2.2</h2>
+    <h2 id="releaseTitle">What’s new in MJ Cliproom ${RELEASE}</h2>
     <ul>
-      <li><b>100% Full YouTube Auto-Pilot:</b> Fully automated pipeline scheduling newly discovered and rendered clips for YouTube Shorts with 10-minute staggered intervals and auto-queue fallback.</li>
-      <li><b>In-App Update & Launcher Supervision:</b> Resolved launcher check error; updates and restarts can now be applied directly with 1-click from the web UI with automatic launcher supervisor respawn.</li>
-      <li><b>Autopilot Posts & Review Queue:</b> Dedicated section to review, inspect and manage all clips rendered by Autopilot with zero metadata or caption mistakes.</li>
-      <li><b>1-Click 10-Minute YouTube Auto-Scheduler:</b> Master 1-click action and card controls with live countdowns to auto-upload to YouTube Shorts in 10-minute intervals.</li>
-      <li><b>AI Viral Metadata & Trending Hashtags:</b> High-retention hooks, meta descriptions, and trending gaming hashtags (#GTA6 #Shorts #Gaming #Viral #Trending #FYP).</li>
-      <li><b>Renderer Technical Readout:</b> Visual inspector displaying 9:16 vertical resolution (1080x1920 @ 60FPS), facecam tracking, LUFS audio normalization, and NVENC GPU pipeline.</li>
+      <li>Choose Light, Dark or System in Settings → Appearance.</li>
+      <li>Export in 9:16 with gameplay above the facecam and captions beneath it.</li>
+      <li>Post directly to the selected YouTube channel or queue batches with 10 minutes between uploads.</li>
+      <li>Generate titles, descriptions of at least 1,500 characters, and hashtags using clip captions and recent YouTube research.</li>
     </ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
@@ -1573,7 +1618,7 @@ async function watchUpdate(before) {
       try {
         const health = await api("/healthz", {cache:"no-store"});
         if (health.boot !== before.boot && health.app === "mj-cliproom") {
-          if (!health.update_install_failed && health.commit !== before.commit && (!target || health.commit === target)) {
+          if (!health.update_install_failed && (!target || health.commit === target)) {
             location.reload(); return;
           }
           S.status = await api("/api/status"); drawShell();
@@ -1618,7 +1663,7 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
     (S.status.user?.role === "admin" && S.status.accounts !== false ? `<h4><span>Owner</span></h4><a class="nav-item" href="/admin" title="Admin dashboard" style="text-decoration:none">${ic("shield")}<span class="label">Admin dashboard</span></a>` : ""));
   const st = S.status;
   put($("#foot"), (S.status.user ? `<div class="me"><button class="me-btn" data-act="acctmenu" aria-haspopup="menu" aria-expanded="false">${meAvatar(S.status.user)}
-      <span class="who">${S.status.accounts === false ? `<b>Studio Settings</b><span>v1.1.0 · Connected</span>` : `<b>${esc(S.status.user.name)}</b><span>${esc(S.status.user.email)}</span>`}</span></button>
+      <span class="who">${S.status.accounts === false ? `<b>Studio settings</b><span>${esc(S.status.version || RELEASE)}</span>` : `<b>${esc(S.status.user.name)}</b><span>${esc(S.status.user.email)}</span>`}</span></button>
       <button class="icon-btn bell" data-act="bell" title="Notifications" aria-label="Notifications${S.status.unread ? `, ${S.status.unread} new` : ""}" aria-haspopup="dialog">${ic("bell")}${S.status.unread ? `<span class="dotn">${S.status.unread > 9 ? "9+" : S.status.unread}</span>` : ""}</button></div>` : ""));
   const c = creator();
   const recording = S.creators.filter(x => x.live_job).length;
@@ -1675,7 +1720,7 @@ function pathFor(v, tab) {
 function fromPath(path) {
   const m = path.match(/^\/app\/creators\/([^/]+)(?:\/(setup|activity|clips))?\/?$/);
   if (m) return ["c:" + decodeURIComponent(m[1]), m[2] || "clips"];
-  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage|autopilot))?\/?$/);
+  const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage|autopilot|appearance))?\/?$/);
   if (st) return ["settings", st[1] || null];
   const k = Object.keys(ROUTES).find(x => ROUTES[x] && path.replace(/\/$/, "") === "/app/" + ROUTES[x]);
   return [k || "library", "clips"];
@@ -1759,7 +1804,7 @@ function drawAdd(variant) {
       <div class="ob"><label class="ck"><input type="checkbox" id="o_ai_post"> Use AI to refine titles, descriptions and hashtags</label>
         <small class="hint">Uses your connected AI service when dialogue is available.</small></div>
       <div class="ob"><div class="ot">Caption style</div>${choice("o_style", Object.entries(S.status.styles).map(([k, v]) => ({v:k, label:v, prev:capPrev(k)})), c?.style ?? "bounce")}</div>
-      <div class="ob"><div class="ot">Layout</div>${choice("o_layout", Object.entries(S.status.layouts).map(([k, v]) => ({v:k, label:LAYOUT_SHORT[k] || v, title:v, prev:`<span class="lay-prev ${esc(k)}"><span class="ph"><i></i></span></span>`})), c?.layout ?? "crop")}</div>
+      <div class="ob"><div class="ot">Layout</div>${choice("o_layout", Object.entries(S.status.layouts).map(([k, v]) => ({v:k, label:LAYOUT_SHORT[k] || v, title:v, prev:`<span class="lay-prev ${esc(k)}"><span class="ph"><i></i></span></span>`})), ({split:"stack", blur:"crop", zoom:"crop"}[c?.layout] || c?.layout || "auto"))}</div>
       <div class="ob"><div class="ot">Video quality</div><input type="hidden" id="o_quality" value="720"><div class="seg" role="group" aria-label="Video quality">
         <button type="button" data-seg="o_quality" data-v="720" aria-pressed="true">720p<small>Fast</small></button>
         <button type="button" data-seg="o_quality" data-v="1080" aria-pressed="false">1080p<small>Sharper, about 2x slower</small></button></div></div>
@@ -1769,7 +1814,7 @@ function drawAdd(variant) {
     </div></div></form>`;
   drawAtt();
 }
-const LAYOUT_SHORT = {crop:"9:16 Full screen", split:"Streamer face + gameplay", stack:"Gameplay + streamer face"};
+const LAYOUT_SHORT = {crop:"9:16 Full screen", auto:"Auto facecam below", stack:"Facecam below"};
 const CAP_LOOK = {bounce:{font:"'Archivo Black'", hl:"#FFFF00", up:true}, hype:{font:"Anton", hl:"#FF3C3C", up:true}, clean:{font:"Poppins", hl:"#6BD7FF", up:false, w:800}};
 function capPrev(k) {
   const s = CAP_LOOK[k] || {font:"inherit", hl:"#ffa27c", up:true};
@@ -2114,7 +2159,9 @@ function clipHtml(j, c) {
         <button class="btn sm icon ghost" data-act="copy" ${a} title="Copy post text" aria-label="Copy post text">${ic("copy")}</button>
         ${busyClip ? "" : `<button class="btn sm icon ghost" data-act="delclip" ${a} title="Delete this clip" aria-label="Delete this clip">${ic("trash")}</button>`}
         <span class="grow"></span>
-        ${c.status === "done" ? `<button class="btn sm" data-act="openclip" ${a}>${ic("send")}Review post</button>` : ""}
+        ${c.status === "done" ? `<button class="btn sm" data-act="openclip" ${a}>Edit</button>
+          ${youtubeOptions().account ? `<button class="btn sm primary" data-act="cardpost" ${a}
+            title="Upload to ${esc(youtubeOptions().account.name)} as ${youtubeOptions().visibility}">${ic("send")}Post</button>` : ""}` : ""}
       </div>
     </div></article>`;
 }
@@ -2220,12 +2267,19 @@ function selParts() {
   for (const k of sel()) { const p = k.split(":"); if (p[0] === "j") jobsSel.push(p[1]); else clipsSel.push([p[1], p[2]]); }
   return {jobsSel, clipsSel};
 }
-function selClips() {          // every finished clip the selection covers, for downloading
-  const {jobsSel, clipsSel} = selParts(), out = new Map();
-  jobsSel.forEach(id => (jobOf(id)?.clips || []).forEach(c => { if (c.status === "done") out.set(id + "." + c.id, 1); }));
-  clipsSel.forEach(([j, c]) => { if (jobOf(j)?.clips.find(x => x.id === c)?.status === "done") out.set(j + "." + c, 1); });
-  return [...out.keys()];
+function selectedClips() {
+  const clips = new Map();
+  for (const key of sel()) {
+    const [kind, job, clip] = key.split(":");
+    for (const item of jobOf(job)?.clips || []) {
+      if (item.status === "done" && (kind === "j" || item.id === clip)) {
+        clips.set(job + "." + item.id, {job, clip:item.id});
+      }
+    }
+  }
+  return clips;
 }
+const selClips = () => [...selectedClips().keys()];
 function drawSelBar() {
   let bar = $("#selbar");
   if (!bar) { bar = document.createElement("div"); bar.id = "selbar"; bar.setAttribute("role", "toolbar"); bar.setAttribute("aria-label", "Selected items"); document.body.append(bar); }
@@ -2245,35 +2299,48 @@ function drawSelBar() {
     <button class="btn sm danger" data-act="seldel">${ic("trash")}Delete</button>
     <button class="btn sm" data-act="selclear">Cancel</button>`);
 }
-async function openBulkPost(jobIds = [], clipPairs = []) {
-  const readyAccounts = S.accounts || [];
-  if (!readyAccounts.length) return toast("Connect a posting account in Settings first.", "bad");
-  const dialog = $("#formdlg");
-  dialog.innerHTML = `<div class="dlg"><h2>Post the finished clips</h2>
-    <p class="help">Queue the selected clips to the accounts you tick.</p>
-    <div class="fields">${readyAccounts.map(a => `<label class="ck"><input type="checkbox" data-bacc value="${esc(a.id)}" checked> ${esc(a.label || a.platform)} · ${esc(a.name)}</label>`).join("")}</div>
-    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button>
-    <button class="btn primary" type="button" id="bulkpostgo">Queue posts</button></div></div>`;
-  $("[data-close]", dialog).onclick = () => dialog.close();
-  $("#bulkpostgo", dialog).onclick = async () => {
-    const accs = $$("[data-bacc]:checked", dialog).map(i => i.value);
-    if (!accs.length) return toast("Tick at least one account.", "bad");
-    dialog.close();
-    let total = 0;
-    const handled = new Set();
-    for (const jid of jobIds) {
-      try { total += (await send("/api/posts", {job: jid, clip: "all", accounts: accs})).queued || 0; handled.add(jid); }
-      catch (err) { toast(err.message, "bad"); }
-    }
-    for (const [jid, cid] of clipPairs) {
-      if (handled.has(jid)) continue;
-      try { total += (await send("/api/posts", {job: jid, clip: cid, accounts: accs})).queued || 0; }
-      catch (err) { toast(err.message, "bad"); }
-    }
-    toast(`Queued ${total} post${total === 1 ? "" : "s"}.`, "ok");
+function youtubeOptions() {
+  const accounts = S.accounts.filter(account => account.platform === "youtube");
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("mj-youtube-destination-" + S.status.user?.id)) || {}; } catch {}
+  return {accounts, account:accounts.find(a => a.id === saved.account) || accounts[0],
+    visibility:["private", "unlisted", "public"].includes(saved.visibility) ? saved.visibility : "private"};
+}
+function saveYoutubeOptions() {
+  const account = $("#youtube-channel")?.value, visibility = $("#youtube-visibility")?.value;
+  try { localStorage.setItem("mj-youtube-destination-" + S.status.user?.id, JSON.stringify({account, visibility})); } catch {}
+  return {account, visibility};
+}
+function youtubeControls(clip) {
+  const {accounts, account, visibility} = youtubeOptions();
+  if (!account) return `<p class="hint">Connect your YouTube channel to upload clips.</p>
+    <button class="btn sm" data-act="clip-connect-youtube">Connect YouTube</button>`;
+  return `<div class="two">
+    <label class="f">YouTube channel<select id="youtube-channel" data-youtube-option>${accounts.map(item =>
+      `<option value="${esc(item.id)}" ${item.id === account.id ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label>
+    <label class="f">Visibility<select id="youtube-visibility" data-youtube-option>${opts({private:"Private", unlisted:"Unlisted", public:"Public"}, visibility)}</select></label>
+    </div><button class="btn primary" data-act="postnow" ${clip.status === "done" ? "" : "disabled"}>${ic("send")}Post to YouTube</button>
+    <p class="hint">${S.status.posting_paused ? "Posting is paused. Clips will wait in the queue until you resume posting on Overview." : "Check your channel and visibility before posting. Follow the upload status here."}</p>`;
+}
+async function postYoutube(button, clips, options = youtubeOptions()) {
+  if (!clips.length) return toast("Choose at least one finished clip.", "bad");
+  if (clips.length > 200) return toast("Select up to 200 finished clips per batch.", "bad");
+  const account = typeof options.account === "string" ? options.account : options.account?.id;
+  if (!account) return toast("Connect a YouTube channel in Settings → Connected apps.", "bad");
+  button.disabled = true;
+  try {
+    const result = await send("/api/posts/youtube", {clips, account, visibility:options.visibility});
+    const skipped = result.skipped || [];
+    const text = result.queued > 1 ? `${result.queued} clips queued, 10 minutes apart.`
+      : result.queued === 1 ? "One clip queued for YouTube." : "No new posts were queued.";
+    const detail = skipped.length ? ` ${skipped.length} skipped. ${skipped[0].reason}` : "";
+    const pauseNote = result.queued && S.status.posting_paused ? " Posting is paused." : "";
+    toast(text + detail + pauseNote, result.queued ? "ok" : "bad");
     await tick();
-  };
-  dialog.showModal();
+    return result;
+  } finally {
+    button.disabled = false;
+  }
 }
 function zipDownload(ids) {
   if (!ids.length) return toast("None of those clips are ready to download yet.");
@@ -2528,23 +2595,22 @@ function drawAutopilotPosts() {
           <div style="width:40px;height:40px;border-radius:50%;background:#4f46e5;display:flex;align-items:center;justify-content:center;font-size:20px">⚡</div>
           <div>
             <div style="font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px">
-              100% Full YouTube Auto-Pilot: ACTIVE
-              <span class="pill ok" style="background:#10b981;color:#fff;border:none;font-size:11px">24/7 AUTO-SYNC</span>
+              YouTube queue
             </div>
             <div style="font-size:13px;opacity:0.85;margin-top:2px">
-              Every clip discovered, captured & rendered by Autopilot is automatically queued with AI viral metadata and published to YouTube Shorts with 10-minute staggered intervals.
+              ${youtubeOptions().account ? `${esc(youtubeOptions().account.name)} · ${youtubeOptions().visibility} · 10 minutes between batch uploads` : "Connect a YouTube channel in Settings → Connected apps."}
             </div>
           </div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn sm" style="background:#4f46e5;color:#fff;border:none" data-act="auto-schedule-all">⚡ Auto-Schedule All to YouTube (10m Stagger)</button>
+          <button class="btn sm" style="background:#4f46e5;color:#fff;border:none" data-act="auto-schedule-all">Queue ready clips</button>
         </div>
       </div>
     </div>
 
     <div class="autoposts-kpis">
       <div class="tile"><i>${ic("scissors")}</i><b>${clips.length}</b><span>Total Clips Created</span></div>
-      <div class="tile"><i>${ic("bolt")}</i><b>${renderedCount}</b><span>Rendered (9:16 1080p60)</span></div>
+      <div class="tile"><i>${ic("bolt")}</i><b>${renderedCount}</b><span>Rendered clips</span></div>
       <div class="tile"><i>${ic("clock")}</i><b>${scheduledCount}</b><span>10-Min Auto-Upload Active</span></div>
       <div class="tile"><i>${ic("send")}</i><b>${uploadedCount}</b><span>Uploaded to YouTube</span></div>
     </div>
@@ -2586,7 +2652,7 @@ function renderAutopilotCard(c) {
   const dueAt = p?.due_at || 0;
   const tagsStr = (c.hashtags || []).join(" ");
   const streamer = c.streamer || "GTA 6 Streamer";
-  const score = c.viral_score || 95;
+  const score = c.viral_score;
   const re = c.render_engine || {};
 
   return `
@@ -2595,7 +2661,7 @@ function renderAutopilotCard(c) {
         <div>
           <div class="ap-streamer">
             <span class="pill live"><span class="dot"></span>${esc(streamer)}</span>
-            <span class="pill ok" style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0">🔥 Viral Score: ${score}/100</span>
+            ${score ? `<span class="pill">Clip score ${score}/100</span>` : ""}
             <span class="pill" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe">${esc(c.resolution)}</span>
             <span class="pill">${c.duration}s</span>
           </div>
@@ -2616,18 +2682,14 @@ function renderAutopilotCard(c) {
             ` : `
               <div class="placeholder-916">
                 ${ic("play")}
-                <b style="margin-top:8px;font-size:14px">9:16 Vertical Render</b>
-                <span style="font-size:12px;opacity:0.8">${esc(re.format || '1080x1920 60FPS')}</span>
-                <span class="pill ok sm" style="margin-top:12px">${ic("check")} Rendered on Disk</span>
+                <b style="margin-top:8px;font-size:14px">Preview unavailable</b>
               </div>
             `}
           </div>
           <div class="ap-render-info">
             <b>${ic("sliders")} Renderer Technical Specs:</b>
-            <span>• <b>Format:</b> ${esc(re.format || '1080x1920 @ 60FPS Pure 9:16')}</span>
-            <span>• <b>Layout:</b> ${esc(re.layout || 'Facecam + Action Split (OpenCV Locked)')}</span>
-            <span>• <b>Audio:</b> ${esc(re.audio || 'Normalized -14 LUFS Speech')}</span>
-            <span>• <b>GPU Acceleration:</b> ${esc(re.encoder || 'NVENC Ultra HD')}</span>
+            <span><b>Format:</b> ${esc(re.format || 'Available after re-render')}</span>
+            <span><b>Layout:</b> ${esc(re.layout || 'Source layout')}</span>
           </div>
         </div>
 
@@ -2652,7 +2714,7 @@ function renderAutopilotCard(c) {
 
           <div class="ap-field">
             <label>
-              <span>Popular & Viral Trending Hashtags (AI Generated)</span>
+              <span>Hashtags</span>
               <button class="btn sm ghost" style="padding:0 6px;height:20px;font-size:11px" data-act="copytags-ap" data-tags="${esc(tagsStr)}">${ic("copy")}Copy Tags</button>
             </label>
             <input class="ap-tags-input" value="${esc(tagsStr)}">
@@ -2688,8 +2750,8 @@ function renderAutopilotCard(c) {
             ` : p?.status === "posted" ? `
               <div class="countdown-box" style="background:#ecfdf5;border-color:#a7f3d0">
                 <div style="display:flex;align-items:center;gap:8px">
-                  <span class="pill ok">${ic("check")}Published Live</span>
-                  <span style="font-size:13px;color:#047857">Successfully uploaded to YouTube Shorts!</span>
+                  <span class="pill ok">${ic("check")}Uploaded</span>
+                  <span style="font-size:13px;color:#047857">YouTube received this clip.</span>
                 </div>
                 ${p.url ? `<a class="btn sm" href="${esc(p.url)}" target="_blank" rel="noopener">View on YouTube ${ic("upright")}</a>` : ""}
               </div>
@@ -2699,18 +2761,18 @@ function renderAutopilotCard(c) {
                   <span class="pill danger">Upload Failed</span>
                   <span style="font-size:13px;color:#b91c1c">${esc(p.error || "Upload failed. Check YouTube settings.")}</span>
                 </div>
-                <button class="btn sm primary" data-act="sched10m" data-jid="${esc(c.jid)}" data-cid="${esc(c.cid)}">
-                  Retry Auto-Upload (10 Min)
+                <button class="btn sm primary" data-act="retry-ap" data-pid="${esc(p.id)}">
+                  Retry upload
                 </button>
               </div>
-            ` : `
+            ` : p?.status === "posting" ? `<div class="countdown-box"><span class="pill">Uploading to YouTube</span></div>` : `
               <div class="countdown-box">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span class="pill" style="background:#f1f5f9;color:#475569">Queue Status: Ready for Review</span>
-                  <span class="hint">1-click to auto-publish on YouTube after a 10-minute cooldown buffer.</span>
+                  <span class="hint">Uses the saved YouTube channel and visibility.</span>
                 </div>
                 <button class="btn sm primary" data-act="sched10m" data-jid="${esc(c.jid)}" data-cid="${esc(c.cid)}">
-                  🚀 1-Click Auto-Upload to YouTube in 10 Min
+                  Post to YouTube
                 </button>
               </div>
             `}
@@ -2719,7 +2781,7 @@ function renderAutopilotCard(c) {
           <div class="ap-actions">
             <div class="row" style="gap:8px">
               <button class="btn sm ghost" data-act="aiviralmeta" data-jid="${esc(c.jid)}" data-cid="${esc(c.cid)}">
-                ✨ AI Viral Metadata & Hashtags
+                Research and draft post text
               </button>
               <button class="btn sm" data-act="savemeta-ap" data-jid="${esc(c.jid)}" data-cid="${esc(c.cid)}">
                 ${ic("check")}Save Edits
@@ -2811,6 +2873,7 @@ const setTabs = () => [
   ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name, email and how you sign in"],
                                           ["security", "Security", "lock", "Password and signing out"]]),
   ["apps", "Connected apps", "plug", "Where your clips get posted"],
+  ["appearance", "Appearance", "bulb", "Light, dark, or system theme"],
   ["autopilot", "Autopilot", "radio", "GTA 6 live clipping and uploads"],
   ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos and clips are kept"]] : [])];
 function aiHints() {
@@ -2860,8 +2923,9 @@ function drawAutopilot() {
         <label class="f">Keywords<textarea id="auto_keywords" rows="2">${esc((a.keywords || []).join(", "))}</textarea><span class="hint">Search uses these words. A listed channel is still kept only when the live game is GTA 6.</span></label>
         <label class="f">Recordings at once<input id="auto_max" type="number" min="1" max="32" value="${a.max_recordings}"></label>
         <label class="f">Minutes between uploads<input id="auto_gap" type="number" min="5" max="1440" value="${a.gap_min}"></label>
-        <label class="f">Daily upload cap<input id="auto_cap" type="number" min="0" max="100" value="${a.daily_cap}"></label>
-        <label class="f">YouTube unit budget<input id="auto_quota" type="number" min="0" max="100000" value="${a.quota_units}"><span class="hint">${a.quota_used || 0} estimated units used today. One upload is about 1600. Default project quota is 10,000.</span></label>
+        <label class="f">Daily upload cap<input id="auto_cap" type="number" min="0" max="200" value="${a.daily_cap}"></label>
+        <label class="f">Daily Autopilot queue budget<input id="auto_quota" type="number" min="0" max="200" value="${a.upload_budget}"><span class="hint">${a.uploads_queued_today || 0} added today. Set 0 for no local queue budget. YouTube limits still apply.</span></label>
+        <label class="f">YouTube channel<select id="auto_youtube"><option value="">Use sole connected channel</option>${S.accounts.filter(account => account.platform === "youtube").map(account => `<option value="${esc(account.id)}" ${a.youtube_account === account.id ? "selected" : ""}>${esc(account.name)}</option>`).join("")}${a.youtube_account && !S.accounts.some(account => account.id === a.youtube_account) ? `<option value="${esc(a.youtube_account)}" selected>Previously selected channel is disconnected</option>` : ""}</select><span class="hint">Select a channel here if several are connected.</span></label>
         <label class="f">YouTube privacy<select id="auto_privacy"><option ${a.privacy === "private" ? "selected" : ""}>private</option><option ${a.privacy === "unlisted" ? "selected" : ""}>unlisted</option><option ${a.privacy === "public" ? "selected" : ""}>public</option></select></label>
       </div>
       <p class="help">Commentary is optional. It is your own narration, mixed over the stream. The picture is fitted whole so a creator watermark is not cropped off.</p>
@@ -2894,7 +2958,8 @@ function autopilotBody() {
     original_topic: $("#auto_topic")?.value || "", keywords: $("#auto_keywords").value, channels,
     max_recordings: Number($("#auto_max").value), gap_min: Number($("#auto_gap").value),
     gap_max: Number($("#auto_gap").value), daily_cap: Number($("#auto_cap").value),
-    quota_units: Number($("#auto_quota").value), privacy: $("#auto_privacy").value};
+    upload_budget: Number($("#auto_quota").value), youtube_account: $("#auto_youtube").value,
+    privacy: $("#auto_privacy").value};
 }
 async function drawSettings() {
   const box = $("#sform"); if (!box) return;
@@ -2904,6 +2969,14 @@ async function drawSettings() {
     <div class="set-body" id="setbody"><div class="set-load">Loading…</div></div></div>`;
   const body = $("#setbody");
   try {
+    if (tab === "appearance") {
+      const themes = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
+      body.innerHTML = `<section class="set-sec"><h2>Appearance</h2><p class="help">Choose how MJ Cliproom looks on this device. System follows your device setting.</p>
+        <fieldset class="appearance-choices"><legend>Theme</legend>${themes.map(([value, label]) => `<label class="appearance-option">
+          <span class="appearance-swatch ${value}" aria-hidden="true"></span><input type="radio" name="appearance" value="${value}"${appearance.choice === value ? " checked" : ""}>${label}
+        </label>`).join("")}</fieldset></section>`;
+      return;
+    }
     if (tab === "autopilot") {
       body.innerHTML = `<div id="auto"><div class="set-load">Loading…</div></div>`;
       return loadAutopilot(true);
@@ -2982,6 +3055,7 @@ async function drawSettings() {
           <div class="apptx"><b>${name}</b><span>${desc}</span>${list}</div><div class="appact">${action}</div></div>`;
       const mine = plat => conn.filter(a => (a.platform || a.label || "").toLowerCase().includes(plat));
       const listOf = arr => arr.length ? `<div class="applist">${arr.map(a => `<div><span class="pill ok">Connected</span><b>${esc(a.name)}</b><span class="sub">${esc(a.detail || "")}</span>
+          ${a.platform === "youtube" ? `<button class="btn sm ghost" data-act="ytcheck" data-id="${esc(a.id)}">Check connection</button>` : ""}
           <button class="btn sm ghost" data-act="accremove" data-id="${esc(a.id)}">Disconnect</button></div>`).join("")}</div>` : "";
       const yt = '<svg viewBox="0 0 24 24"><path fill="#fff" d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.19C0 8.07 0 12 0 12s0 3.93.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.88.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.93 24 12 24 12s0-3.93-.5-5.81zM9.55 15.57V8.43L15.82 12l-6.27 3.57z"/></svg>';
       const ig = '<svg viewBox="0 0 24 24"><path fill="#fff" d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23a3.7 3.7 0 0 1-.9 1.38c-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41a3.7 3.7 0 0 1-1.38-.9 3.7 3.7 0 0 1-.9-1.38c-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 5.84a6.16 6.16 0 1 0 0 12.32 6.16 6.16 0 0 0 0-12.32zm0 10.16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.4-11.85a1.44 1.44 0 1 0 0 2.88 1.44 1.44 0 0 0 0-2.88z"/></svg>';
@@ -3041,7 +3115,12 @@ function metadataIdeasHtml() {
 
 function titleIdeasHtml() {
   if (!D.titleIdeas?.length) return "";
+  const research = D.research;
+  const sources = (research?.sources || []).filter(source => /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(source.url));
   return `<div class="metasuggestions"><p class="hint">10 complete post options from ${esc(D.titleModel || "your selected AI model")}, ranked by a truthful hook, clarity, and clip detail. Descriptions and relevant gaming hashtags are included. No title or hashtag can guarantee views.</p>
+    <p class="hint" role="status">${esc(research?.message || "Drafts based on the clip transcript.")}</p>
+    ${sources.length ? `<details><summary>YouTube research sources · ${esc(research.region)}</summary>
+      <ul>${sources.map(source => `<li><a href="${esc(source.url)}" target="_blank" rel="noopener">${esc(source.title)}</a></li>`).join("")}</ul></details>` : ""}
     ${D.titleIdeas.map((idea, i) => `<div class="card" style="padding:10px;margin:6px 0"><b>${String(i + 1).padStart(2, "0")}. ${esc(idea.title)}</b>
       ${idea.angle ? `<p class="sub">${esc(idea.angle)}</p>` : ""}<p class="hint">${esc(idea.description || "")}</p>
       <p class="hint">${esc((idea.hashtags || []).map(h => "#" + h).join(" "))}${idea.evidence ? `<br>Based on: ${esc(idea.evidence)}` : ""}</p>
@@ -3070,34 +3149,21 @@ function ncsPicksHtml() {
 /* ============================================================ Version 1.2.0 Modals & Tools */
 async function openTrendRadar() {
   const dlg = $("#formdlg");
-  dlg.innerHTML = `<div class="dlg" style="max-width:540px"><h2>${ic("chart")} GTA 6 Viral Trend Radar</h2>
-    <p class="help">Live algorithm-ranked viral topics, hashtags and retention hooks for GTA 6 shorts.</p>
-    <div id="trendlist" class="set-load">Loading trend radar…</div>
+  dlg.innerHTML = `<div class="dlg"><h2>YouTube topic research</h2>
+    <div id="trendlist" role="status" class="set-load">Looking up recent GTA 6 gaming videos…</div>
     <div class="dlg-foot"><button class="btn" type="button" data-close>Close</button></div></div>`;
   $("[data-close]", dlg).onclick = () => dlg.close();
+  const list = $("#trendlist", dlg);
   dlg.showModal();
   try {
     const data = await api("/api/v12/trends");
-    const h = (data.trends || []).map(t => `<div class="card" style="padding:12px;margin:8px 0;background:var(--muted)">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <b>${esc(t.topic)}</b>
-        <span class="pill ok">${t.viral_score}/100 · ${t.growth}</span>
-      </div>
-      <p class="hint" style="margin:4px 0"><b>Hook:</b> "${esc(t.hook)}"</p>
-      <div class="row" style="margin-top:6px;gap:6px;flex-wrap:wrap">
-        ${(t.tags || []).map(tag => `<span class="pill">${esc(tag)}</span>`).join("")}
-        <button class="btn sm" type="button" data-copytrend="${esc(t.hook + ' ' + (t.tags||[]).join(' '))}">Copy Hook & Tags</button>
-      </div>
-    </div>`).join("");
-    $("#trendlist").innerHTML = h || "<p class='help'>No active trends found.</p>";
-    $$("[data-copytrend]", dlg).forEach(btn => {
-      btn.onclick = async () => {
-        await copyText(btn.dataset.copytrend);
-        toast("Trend hook & tags copied to clipboard!", "ok");
-      };
-    });
+    if (!list.isConnected) return;
+    const sources = (data.sources || []).filter(source => /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(source.url));
+    list.innerHTML = `<p class="help">${esc(data.message)}</p>${sources.map(source =>
+      `<p><a class="lnk" href="${esc(source.url)}" target="_blank" rel="noopener">${esc(source.title)}</a>
+      <span class="hint">${esc(source.published_at)}</span></p>`).join("")}`;
   } catch (err) {
-    $("#trendlist").innerHTML = `<div class="note">${esc(err.message)}</div>`;
+    if (list.isConnected) list.textContent = err.message;
   }
 }
 
@@ -3555,43 +3621,6 @@ function openMapOverlaysModal() {
   dlg.showModal();
 }
 
-async function openRenderFormatsModal() {
-  const dlg = $("#formdlg");
-  dlg.innerHTML = `<div class="dlg" style="max-width:720px"><h2>${ic("film")} 8 Video Rendering Formats</h2>
-    <p class="help">Choose your output canvas resolution and layout. Pre-configured for pure 9:16 vertical short-form platforms.</p>
-    <div id="render_formats_list" class="set-load" style="max-height:420px;overflow-y:auto;padding-right:4px">Loading formats…</div>
-    <div class="dlg-foot"><button class="btn" type="button" data-close>Close</button></div></div>`;
-  $("[data-close]", dlg).onclick = () => dlg.close();
-  dlg.showModal();
-  try {
-    const d = await api("/api/v12/render-formats");
-    const active = d.active_format;
-    $("#render_formats_list").innerHTML = (d.formats || []).map(f => {
-      const isSel = f.id === active;
-      return `<div class="card" style="padding:12px;margin:8px 0;border:${isSel ? '2px solid var(--accent)' : '1px solid var(--line-2)'};background:${isSel ? '#f8fafc' : '#fff'}">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-          <div>
-            <b>${esc(f.name)}</b>
-            <span class="pill ${isSel ? 'ok' : ''}" style="margin-left:6px">${esc(f.res)} · ${f.fps}fps</span>
-            <span class="pill" style="font-size:11px">${esc(f.target)}</span>
-            <div class="hint" style="margin-top:4px">${esc(f.description)}</div>
-          </div>
-          <button class="btn sm ${isSel ? 'dark' : 'primary'}" data-fmt="${esc(f.id)}">${isSel ? 'Active Format ✓' : 'Select Format'}</button>
-        </div>
-      </div>`;
-    }).join("");
-    $$("[data-fmt]", dlg).forEach(btn => {
-      btn.onclick = async () => {
-        try {
-          await send("/api/v12/render-formats", {format_id: btn.dataset.fmt});
-          toast("Rendering format updated!", "ok");
-          openRenderFormatsModal();
-        } catch (err) { toast(err.message, "bad"); }
-      };
-    });
-  } catch (err) { $("#render_formats_list").innerHTML = `<div class="note">${esc(err.message)}</div>`; }
-}
-
 async function openDiagnosisModal() {
   const dlg = $("#formdlg");
   dlg.innerHTML = `<div class="dlg" style="max-width:680px"><h2>${ic("bolt")} UI Diagnosis & System Health Monitor</h2>
@@ -3763,7 +3792,7 @@ function openLiveBrainHud() {
 }
 
 /* ============================================================ clip editor */
-function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.sig = ""; D.metaIdeas = []; D.titleIdeas = []; D.titleModel = ""; D.metaTrendCount = 0; D.metaFormat = "short"; drawClipDlg(true); $("#clipdlg").showModal(); }
+function openClip(jid, cid) { D.jid = jid; D.cid = cid; D.session++; D.sig = ""; D.metaIdeas = []; D.titleIdeas = []; D.titleModel = ""; D.research = null; D.metaTrendCount = 0; D.metaFormat = "short"; drawClipDlg(true); $("#clipdlg").showModal(); }
 function drawClipDlg(full) {
   const j = jobOf(D.jid), c = j?.clips.find(x => x.id === D.cid), dlg = $("#clipdlg");
   if (!c) { if (dlg.open) dlg.close(); return; }
@@ -3783,7 +3812,9 @@ function drawClipDlg(full) {
         ${staleHook ? `<p class="warnline">This older render still has a placeholder burned into the video. Save and re-make clears it from the next render.</p>` : ""}
         <label class="f">Big text<input data-f="hook" value="${esc(staleHook ? "" : c.hook)}"></label>
         <div class="two"><label class="f">Caption style<select data-f="style">${opts(S.status.styles, c.style)}</select></label>
-          <label class="f">Layout<select data-f="layout">${opts(S.status.layouts, c.layout)}</select></label></div>
+          <label class="f">9:16 layout<select data-f="layout">${opts(S.status.layouts, {split:"stack", blur:"crop", zoom:"crop"}[c.layout] || c.layout || "auto")}</select></label></div>
+        <div class="two"><label class="f">Facecam source<select data-f="facecam">${opts({auto:"Detect automatically", left:"Bottom left", center:"Bottom center", right:"Bottom right"}, c.facecam || "auto")}</select></label>
+          <label class="f">Caption position<select data-f="caption_position">${opts({bottom:"Bottom", middle:"Middle", top:"Top"}, c.caption_position || "bottom")}</select></label></div>
         <div class="two"><label class="f">Start (seconds)<input data-f="start" type="number" step="any" value="${c.start}"></label>
           <label class="f">End (seconds)<input data-f="end" type="number" step="any" value="${c.end}"></label></div>
         ${j.can_edit_source && c.src_offset === undefined && !["queued", "rendering"].includes(c.status) ? `<button class="btn" data-act="trimsourcereopen">Trim and reframe from source</button>` : ""}
@@ -3801,7 +3832,6 @@ function drawClipDlg(full) {
         <label class="ck"><input type="checkbox" data-f="watermark" ${c.watermark ? "checked" : ""}> MJ video watermark</label>
         <h3>Instrumental background music</h3>
         <label class="f">Track<select data-f="music_id">${musicOptions}</select></label>
-        <label class="f">Caption position<select data-f="caption_position"><option value="bottom" ${c.caption_position === "bottom" || !c.caption_position ? "selected" : ""}>Bottom</option><option value="middle" ${c.caption_position === "middle" ? "selected" : ""}>Middle</option><option value="top" ${c.caption_position === "top" ? "selected" : ""}>Top</option></select></label>
         <label class="f">Music level · ${Math.round((c.music_volume ?? 0.3) * 100)}%<input data-f="music_volume" type="range" min="0" max="1" step="0.01" value="${c.music_volume ?? 0.3}"></label>
         <label class="ck"><input type="checkbox" data-f="music_duck" ${c.music_duck !== false ? "checked" : ""}> Lower music under the original audio</label>
         <div class="two"><label class="f">Fade in<input data-f="music_fade_in" type="number" min="0" max="5" step="0.1" value="${c.music_fade_in ?? 0.4}"></label>
@@ -3817,8 +3847,8 @@ function drawClipDlg(full) {
         ${ncsPicksHtml()}
         <p class="hint">The starting mix is more audible and dips under prominent source audio to keep the streamer and gameplay clear. Use the instrumental version and verify its current terms before publishing. For YouTube, browse the <a href="https://youtube.com/audiolibrary" target="_blank" rel="noopener">YouTube Audio Library</a>; Shorts catalogue music must be added inside YouTube's own editor.</p>
         <h3>Post text</h3>
-        <div class="row"><button class="btn sm primary" data-act="titlegenerate">Generate 10 viral-style post options</button></div>
-        <p class="hint">Uses the active model in Settings → AI and this clip’s captions. Each option includes a realistic description and relevant gaming hashtags, tuned for viral-style discovery without inventing clip events. Hashtags are not a live trend feed.</p>
+        <div class="row"><button class="btn sm primary" data-act="titlegenerate">Research and generate 10 options</button></div>
+        <p class="hint">Uses clip captions, the active AI model, and recent YouTube search results for the selected region when available.</p>
         <div id="titleideas">${titleIdeasHtml()}</div>
         <div class="row"><select id="metaformat" aria-label="Metadata format"><option value="short">YouTube Shorts ideas</option><option value="long">Full video title and description</option></select>
           <select id="metaregion" aria-label="Trend region"><option value="US">US gaming trends</option><option value="GB">UK gaming trends</option><option value="PK">Pakistan gaming trends</option><option value="IN">India gaming trends</option><option value="CA">Canada gaming trends</option><option value="AU">Australia gaming trends</option></select>
@@ -3826,7 +3856,7 @@ function drawClipDlg(full) {
         <p class="hint">Drafts avoid the stream name and timestamps. The selected LLM uses the clip transcript when available; otherwise MJ Cliproom makes conservative gameplay drafts. No title can guarantee views. Long-form ideas are for copying into a separate full-video upload; this uploader posts the clip as a Short.</p>
         <div id="metaideas">${metadataIdeasHtml()}</div>
         <label class="f">Title<input data-f="title" value="${esc(c.title || "Gameplay clip")}"></label>
-        <label class="f">Description<textarea data-f="description" rows="2">${esc(c.description || "")}</textarea></label>
+        <label class="f">Description<textarea data-f="description" rows="6" maxlength="2000">${esc(c.description || "")}</textarea></label>
         <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).map(h => "#" + h).join(" "))}"></label>
         <button class="btn sm" data-act="savemeta">Save post text</button>
         ${j.source_deleted ? '<p class="hint">The original video was deleted. Download it again before editing or re-rendering this clip.</p>' : ""}
@@ -3834,14 +3864,15 @@ function drawClipDlg(full) {
         <h3>Post it</h3>
         <div id="dposts" class="row" style="gap:4px"></div>
         ${!rightsGateReady() ? `<p class="hint">Restart MJ Cliproom to enable uploads.</p>` : ""}
-          ${!S.accounts.some(a => a.platform === "youtube") ? `<div class="card" style="padding:12px;margin-top:8px"><b>No YouTube channel is connected.</b><p class="hint">Connect it in Settings → Connected apps. If Google shows “app is being tested,” the Google account must be on the OAuth test-user list.</p><button class="btn sm" data-act="go" data-v="settings" data-tab="apps">${ic("cog")}Connect YouTube</button></div>` : ""}
-          ${!S.accounts.length ? `<p class="hint">No posting accounts are connected, so there is nowhere to upload this clip yet.</p>` : ""}
-          ${S.accounts.length ? `<div class="row">${S.accounts.map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.label)} · ${esc(a.name)}</label>`).join("")}</div>
-            <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Upload now</button><button class="btn" data-act="postqueue">Add to queue</button></div>
+        ${youtubeControls(c)}
+        ${S.accounts.some(a => a.platform !== "youtube") ? `<details><summary>Other platforms</summary>
+          <div class="row">${S.accounts.filter(a => a.platform !== "youtube").map(a => `<label class="ck"><input type="checkbox" data-pacc value="${esc(a.id)}">${esc(a.name)}</label>`).join("")}</div>
+          <button class="btn" data-act="postqueue">Add to queue</button></details>` : ""}
+        ${c.status === "done" ? `
             <div class="row"><button class="btn sm" data-act="makethumb" data-j="${j.id}" data-c="${c.id}">Make thumbnail</button><button class="btn sm" data-act="makepack" data-j="${j.id}" data-c="${c.id}">Title options</button></div>
             <p class="hint" id="packnote"></p>
             ${j.clips.filter(x => x.status === "done").length > 1 ? `<div class="row"><button class="btn sm" data-act="postallinone" data-j="${j.id}">${ic("send")}Post all clips (${j.clips.filter(x => x.status === "done").length})</button></div>` : ""}
-            <p class="hint">Upload now sends the clip through the selected account’s API and keeps you on this page. Watch the post status and returned link here.</p>` : ""}
+            ` : ""}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
           ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
           ${c.status === "done" && c.subtitle ? `<a class="btn" href="${m}${esc(c.subtitle)}?download=1&amp;v=${c.version}">SRT captions</a>` : ""}
@@ -3954,6 +3985,8 @@ document.addEventListener("dragleave", () => $(".composer")?.classList.remove("o
 document.addEventListener("drop", e => { const a = $(".composer"); if (a) { e.preventDefault(); a.classList.remove("over"); attach(e.dataTransfer.files); } });
 document.addEventListener("change", async e => {
   const t = e.target;
+  if (t.matches("[data-youtube-option]")) { saveYoutubeOptions(); drawJobs(); return; }
+  if (t.matches('input[name="appearance"]')) return appearance.set(t.value);
   if (t.id === "auto_voice" && t.files?.[0]) {
     const form = new FormData(); form.append("file", t.files[0]);
     try { S.auto = await api("/api/autopilot/commentary", {method:"POST", body:form}); autoDirty = false; drawAutopilot(); toast("Commentary saved.", "ok"); }
@@ -3996,7 +4029,6 @@ document.addEventListener("click", async e => {
     if (a === "trendradar") return openTrendRadar();
     if (a === "dailycomp") return openDailyCompilation();
     if (a === "multiplatform") return openMultiPlatformModal();
-    if (a === "renderformatsmodal") return openRenderFormatsModal();
     if (a === "seriesmaker") return openSeriesMaker();
     if (a === "voiceovermodal") return openVoiceoverModal();
     if (a === "captionsmodal") return openCaptionsModal();
@@ -4050,6 +4082,15 @@ document.addEventListener("click", async e => {
       S.auto = await send("/api/autopilot/commentary", {}, "DELETE");
       drawAutopilot(); return;
     }
+    if (a === "retry-ap") {
+      b.disabled = true;
+      try {
+        await send(`/api/posts/${encodeURIComponent(d.pid)}/retry`, {});
+        toast("Upload returned to the queue.", "ok");
+        await loadAutopilotPosts();
+      } finally { b.disabled = false; }
+      return;
+    }
     if (a === "sched10m") {
       b.disabled = true;
       const jid = d.jid, cid = d.cid;
@@ -4058,19 +4099,17 @@ document.addEventListener("click", async e => {
       const desc = card?.querySelector(".ap-desc-input")?.value;
       const tags = card?.querySelector(".ap-tags-input")?.value;
       try {
-        const res = await send("/api/v12/autopilot-posts/schedule-10m", {jid, cid, title, description: desc, hashtags: tags});
-        toast(res.message || "Scheduled to auto-upload on YouTube in 10 minutes!", "ok");
+        await postYoutube(b, [{job:jid, clip:cid, metadata:{title, description:desc, hashtags:tags}}]);
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }
       return;
     }
     if (a === "postnow-ap") {
-      if (!await ask("Upload now to YouTube?", "Trigger immediate publication for this clip without waiting for the 10-minute cooldown.", "Upload now")) return;
       b.disabled = true;
       try {
         await send("/api/v12/autopilot-posts/post-now", {jid: d.jid, cid: d.cid, post_id: d.pid});
-        toast("Publishing to YouTube Shorts now!", "ok");
+        toast("Moved to the front of the YouTube queue.", "ok");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }
@@ -4106,7 +4145,7 @@ document.addEventListener("click", async e => {
           const descCounter = $(`#char-desc-${jid}-${cid}`);
           if (descCounter) descCounter.textContent = res.description.length + " / 2000";
         }
-        toast("AI viral metadata and trending hashtags applied!", "ok");
+        toast(res.research?.message || "AI post text ready for review.", "ok");
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; b.textContent = old; }
       return;
@@ -4140,8 +4179,10 @@ document.addEventListener("click", async e => {
     if (a === "schedall10m" || a === "auto-schedule-all") {
       b.disabled = true;
       try {
-        const res = await send("/api/v12/autopilot-posts/auto-schedule-all", {});
-        toast(res.message || "All clips scheduled for YouTube auto-upload with 10-minute stagger intervals!", "ok");
+        const {account, visibility} = youtubeOptions();
+        if (!account) return toast("Connect a YouTube channel in Settings → Connected apps.", "bad");
+        const res = await send("/api/v12/autopilot-posts/auto-schedule-all", {account:account.id, visibility});
+        toast(res.message, res.count ? "ok" : "");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }
@@ -4274,8 +4315,12 @@ document.addEventListener("click", async e => {
       toast("Title options are ready.", "ok");
       return;
     }
-    if (a === "postalljob" || a === "postallinone") return openBulkPost([d.j]);
-    if (a === "selpost") { const {jobsSel, clipsSel} = selParts(); return openBulkPost(jobsSel, clipsSel); }
+    if (a === "cardpost") return await postYoutube(b, [{job:d.j, clip:d.c}]);
+    if (a === "postalljob" || a === "postallinone") {
+      const clips = (jobOf(d.j)?.clips || []).filter(clip => clip.status === "done");
+      return await postYoutube(b, clips.map(clip => ({job:d.j, clip:clip.id})));
+    }
+    if (a === "selpost") return await postYoutube(b, [...selectedClips().values()]);
     if (a === "seldl") return zipDownload(selClips());
     if (a === "selclear") { sel().clear(); return render(); }
     if (a === "selall") {
@@ -4423,7 +4468,11 @@ document.addEventListener("click", async e => {
     if (a === "ntgo") { closePops(); const l = d.link || ""; if (l.startsWith("/app")) { const [v, tab] = fromPath(l); return go(v, tab); } if (l.startsWith("/")) location.href = l; return; }
     if (a === "csave") return void await saveCreator();
     if (a === "cdiscard") { drawCreatorForm(); return toast("Changes discarded"); }
-    if (a === "pause") { await send("/api/settings", {paused:!S.overview.paused}, "PUT"); return loadOverview(); }
+    if (a === "pause") {
+      const settings = await send("/api/settings", {paused:!S.overview.paused}, "PUT");
+      S.status.posting_paused = settings.paused;
+      return loadOverview();
+    }
     if (a === "pcancel" || a === "pretry") { await api(`/api/posts/${d.id}/${a === "pcancel" ? "cancel" : "retry"}`, {method:"POST"}); return loadOverview(); }
     if (a === "ssave") { await saveSettings(); toast("Saved", "ok"); return drawSettings(); }
     if (a === "plansave") {
@@ -4431,6 +4480,13 @@ document.addEventListener("click", async e => {
       await send("/api/settings", {plans:p}, "PUT"); S.status = await api("/api/status"); toast("Plans saved", "ok"); return drawSettings();
     }
     if (a === "testalert") { await saveSettings(); await api("/api/alerts/test", {method:"POST"}); return toast("Test message sent. Check your phone.", "ok"); }
+    if (a === "ytcheck") {
+      b.disabled = true;
+      try {
+        const info = await send(`/api/accounts/${encodeURIComponent(d.id)}/check-youtube`, {});
+        return toast(`YouTube verified ${info.name}.`, "ok");
+      } finally { b.disabled = false; }
+    }
     if (a === "accremove") {
       if (!await ask("Disconnect this account?", "Posts still waiting for it will fail.", "Disconnect", true)) return;
       await api(`/api/accounts/${d.id}`, {method:"DELETE"}); await tick(); return drawSettings();
@@ -4461,10 +4517,13 @@ document.addEventListener("click", async e => {
     if (a === "resetcaptions") { const input = $("#captiondraft"); input.dataset.dirty = "reset"; input.value = ""; input.readOnly = false; return; }
     if (a === "saveglossary") { await saveCaptionGlossary($("#glossarydraft")); return toast("Caption glossary saved", "ok"); }
     if (a === "titlegenerate") {
+      const session = D.session;
       b.disabled = true; const label = b.textContent; b.textContent = "Asking AI…";
       try {
-        const result = await send(`/api/jobs/${D.jid}/clips/${D.cid}/titles`, {});
+        const result = await send(`/api/jobs/${D.jid}/clips/${D.cid}/titles`, {region:$("#metaregion").value});
+        if (session !== D.session || !$("#clipdlg").open) return;
         D.titleIdeas = result.ideas || []; D.titleModel = result.model || "AI model";
+        D.research = result.research;
         $("#titleideas").innerHTML = titleIdeasHtml();
         toast(`10 post options ready · ${D.titleModel}`, "ok");
       } finally { b.disabled = false; b.textContent = label; }
@@ -4558,18 +4617,20 @@ document.addEventListener("click", async e => {
       if (captions !== undefined) body.caption_cues = captions;
       await send(`/api/jobs/${D.jid}/clips/${D.cid}/render`, body); toast("Re-making the clip…", "ok"); return tick();
     }
+    if (a === "clip-connect-youtube") {
+      $("#clipdlg").close();
+      return go("settings", "apps");
+    }
     if (a === "postnow" || a === "postqueue") {
-      const accs = $$("#clipdlg [data-pacc]:checked").map(i => i.value);
-      if (!accs.length) return toast("Tick at least one account first.", "bad");
-      if (a === "postnow" && !await ask("Upload now?", `Send this clip and its title, description, and hashtags to ${accs.length} selected account${accs.length > 1 ? "s" : ""} through the account API. MJ Cliproom stays open and shows the upload status here.`, "Upload now")) return;
       const metadata = {};
       $$("#clipdlg [data-f]").filter(i => ["title", "description", "hashtags"].includes(i.dataset.f))
         .forEach(i => metadata[i.dataset.f] = i.value);
-      const result = await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, metadata,
-        now:a === "postnow"});
+      if (a === "postnow") return await postYoutube(b, [{job:D.jid, clip:D.cid, metadata}], saveYoutubeOptions());
+      const accs = $$("#clipdlg [data-pacc]:checked").map(i => i.value);
+      if (!accs.length) return toast("Tick at least one account first.", "bad");
+      const result = await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, metadata});
       const count = result.queued || 0;
-      toast(a === "postnow" ? `Upload queued for ${count} account${count === 1 ? "" : "s"}. This page stays open; follow the status and link here.`
-        : `Added to the queue for ${count} account${count === 1 ? "" : "s"}.`, "ok"); return tick();
+      toast(`Added to the queue for ${count} account${count === 1 ? "" : "s"}.`, "ok"); return tick();
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }
 });

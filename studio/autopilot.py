@@ -17,7 +17,7 @@ from . import accounts, auth, config, creators, ctx, jobs, live, posting, profil
 
 RIGHTS_STATUSES = ("AUTHORIZED", "PERMISSION_REQUIRED", "RESTRICTED", "UNKNOWN")
 PLATFORMS = ("twitch", "kick", "youtube")
-UPLOAD_UNITS = 1600
+LEGACY_UPLOAD_UNITS = 1600
 _GTA6 = re.compile(r"\b(?:grand\s+theft\s+auto|gta)\s*(?:vi|6)\b", re.I)
 _GTA5 = re.compile(r"\b(?:grand\s+theft\s+auto|gta)\s*(?:online|v|5)\b", re.I)
 _EN_WORDS = {"the", "and", "you", "that", "this", "what", "yeah", "okay", "ok", "just", "like",
@@ -85,10 +85,12 @@ def default_settings() -> dict:
         "dismissed": [],
         "language": "en",
         "max_recordings": _bounded_int(config.env("PEAKCUT_AUTOPILOT_MAX_RECORDINGS", "2"), 1, 32, 2),
-        "daily_cap": _bounded_int(config.env("PEAKCUT_AUTOPILOT_DAILY_CAP", "4"), 0, 100, 4),
+        "daily_cap": _bounded_int(config.env("PEAKCUT_AUTOPILOT_DAILY_CAP", "4"), 0, 200, 4),
         "gap_min": _bounded_int(config.env("PEAKCUT_AUTOPILOT_GAP_MIN", "20"), 5, 1440, 20),
         "gap_max": _bounded_int(config.env("PEAKCUT_AUTOPILOT_GAP_MAX", "30"), 5, 1440, 30),
-        "quota_units": _bounded_int(config.env("PEAKCUT_AUTOPILOT_QUOTA", "8000"), 0, 100000, 8000),
+        "upload_budget": _bounded_int(config.env("PEAKCUT_AUTOPILOT_UPLOAD_BUDGET"), 0, 200,
+                                      _legacy_upload_budget(config.env("PEAKCUT_AUTOPILOT_QUOTA", "160000"))),
+        "youtube_account": "",
         "privacy": config.env("PEAKCUT_AUTOPILOT_PRIVACY", "private") if config.env("PEAKCUT_AUTOPILOT_PRIVACY", "private") in ("private", "unlisted", "public") else "private",
         "commentary_id": "",
         "poll_seconds": _bounded_int(config.env("PEAKCUT_AUTOPILOT_POLL", "90"), 30, 600, 90),
@@ -104,6 +106,11 @@ def _bounded_int(value, lo, hi, default):
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
+
+
+def _legacy_upload_budget(value):
+    raw = _bounded_int(value, 0, 200 * LEGACY_UPLOAD_UNITS, 100 * LEGACY_UPLOAD_UNITS)
+    return max(1, raw // LEGACY_UPLOAD_UNITS) if raw else 0
 
 
 def _file():
@@ -160,6 +167,8 @@ def clean_settings(data: dict, previous=None) -> dict:
     base = default_settings()
     if previous:
         base.update({k: previous[k] for k in base if k in previous})
+        if "upload_budget" not in previous and "quota_units" in previous:
+            base["upload_budget"] = _legacy_upload_budget(previous["quota_units"])
     if not isinstance(data, dict):
         data = {}
     if "keywords" in data:
@@ -176,13 +185,17 @@ def clean_settings(data: dict, previous=None) -> dict:
         base["channels"] = incoming
     if "dismissed" in data and isinstance(data["dismissed"], list):
         base["dismissed"] = [str(x)[:80] for x in data["dismissed"][:80]]
-    for key, lo, hi in (("max_recordings", 1, 32), ("daily_cap", 0, 100), ("gap_min", 5, 1440),
-                        ("gap_max", 5, 1440), ("quota_units", 0, 100000), ("poll_seconds", 30, 600)):
+    if "upload_budget" not in data and "quota_units" in data:
+        base["upload_budget"] = _legacy_upload_budget(data["quota_units"])
+    for key, lo, hi in (("max_recordings", 1, 32), ("daily_cap", 0, 200), ("gap_min", 5, 1440),
+                        ("gap_max", 5, 1440), ("upload_budget", 0, 200), ("poll_seconds", 30, 600)):
         if key in data:
             base[key] = _bounded_int(data[key], lo, hi, base[key])
     base["gap_max"] = max(base["gap_min"], base["gap_max"])
     if data.get("privacy") in ("private", "unlisted", "public"):
         base["privacy"] = data["privacy"]
+    if "youtube_account" in data:
+        base["youtube_account"] = str(data["youtube_account"] or "")[:80]
     if "commentary_id" in data:
         base["commentary_id"] = str(data.get("commentary_id") or "")[:32]
     base["language"] = "en"
@@ -220,7 +233,9 @@ def load() -> dict:
             if isinstance(saved.get(key), list):
                 state[key] = saved[key][:400]
         if isinstance(saved.get("quota"), dict):
-            state["quota"] = {"day": str(saved["quota"].get("day") or ""), "units": int(saved["quota"].get("units") or 0)}
+            bucket = saved["quota"]
+            uploads = bucket.get("uploads", int(bucket.get("units") or 0) // LEGACY_UPLOAD_UNITS)
+            state["quota"] = {"day": str(bucket.get("day") or ""), "uploads": int(uploads or 0)}
         state["creator_id"] = str(saved.get("creator_id") or "")
     return state
 
@@ -404,31 +419,38 @@ def viral_score(clip: dict, *, game="other", has_commentary=False, live=True) ->
 
 
 def disposition(clip: dict, row: dict) -> str:
-    """Third-party clips wait in review unless this source is set to full auto, or the moment was judged from words and signals."""
-    if clip.get("score_source") == "ai_and_signals" or row.get("full_auto"):
+    """Automatic upload needs an explicit source setting or existing source authorization."""
+    if row.get("rights_status") in ("RESTRICTED", "PERMISSION_REQUIRED") or not rights_open(row):
+        return "skip"
+    if row.get("full_auto") or (row.get("rights") and row.get("rights_status") == "AUTHORIZED"
+                                and clip.get("score_source") == "ai_and_signals"):
         return "upload"
     return "review"
 
 
 def quota_bucket(state, now):
     day = time.strftime("%Y-%m-%d", time.gmtime(now))
-    bucket = state.setdefault("quota", {"day": day, "units": 0})
+    bucket = state.setdefault("quota", {"day": day, "uploads": 0})
     if bucket.get("day") != day:
         bucket["day"] = day
+        bucket["uploads"] = 0
         bucket["units"] = 0
     return bucket
 
 
-def quota_room(state, now, units=UPLOAD_UNITS) -> bool:
-    budget = int(state["settings"].get("quota_units") or 0)
+def quota_room(state, now, units=None) -> bool:
+    if "upload_budget" not in state["settings"]:
+        budget = int(state["settings"].get("quota_units") or 0)
+        return not budget or (quota_bucket(state, now).get("units") or 0) + (units or LEGACY_UPLOAD_UNITS) <= budget
+    budget = int(state["settings"]["upload_budget"])
     if budget <= 0:
         return True
-    return quota_bucket(state, now)["units"] + units <= budget
+    return (quota_bucket(state, now).get("uploads") or 0) < budget
 
 
-def reserve_quota(state, now, units=UPLOAD_UNITS):
+def reserve_quota(state, now):
     bucket = quota_bucket(state, now)
-    bucket["units"] = int(bucket.get("units") or 0) + units
+    bucket["uploads"] = int(bucket.get("uploads") or 0) + 1
 
 
 def run_once(state, *, probe, start, active, now=None, language=None, record=True) -> dict:
@@ -511,7 +533,7 @@ def consider_clip(state, job, clip, now=None) -> dict:
         else:
             account_ids = _youtube_ids()
             if not account_ids:
-                _queue(state, job, clip, "review", "Connect a YouTube channel before this original short can upload.", now, score)
+                _queue(state, job, clip, "review", "Connect and select a YouTube channel before this original short can upload.", now, score)
             else:
                 made = posting.enqueue(job, clip, account_ids, automatic=True, autopilot=True)
                 if made:
@@ -547,26 +569,7 @@ def consider_clip(state, job, clip, now=None) -> dict:
     else:
         account_ids = _youtube_ids()
         if not account_ids:
-            post_id = secrets.token_hex(8)
-            due_at = now + 600
-            new_post = {
-                "id": post_id, "user": ctx.uid(), "job": job.get("id"), "clip": clip.get("id"),
-                "creator": job.get("creator", ""), "account": "youtube_auto",
-                "account_name": "YouTube Shorts (Auto-Publishing Channel)",
-                "platform": "youtube", "status": "scheduled", "due_at": due_at, "created": now,
-                "title": clip.get("title") or clip.get("hook") or "Epic GTA 6 Moment",
-                "description": clip.get("description") or "Check out this insane viral moment in GTA 6!",
-                "hashtags": clip.get("hashtags") or ["#GTA6", "#Shorts", "#Gaming", "#Viral", "#Trending", "#FYP"],
-                "score": clip.get("score", 95) if clip else 95, "tries": 0, "url": "", "remote_id": "",
-                "error": None, "views": None, "automatic": True, "autopilot": True
-            }
-            with posting._lock:
-                posting._posts.append(new_post)
-                posting._save()
-                posting._mirror(new_post)
-            item = _queue(state, job, clip, "queued", "Automatically queued for YouTube Shorts (10m delay).", now, score)
-            item["post_id"] = post_id
-            item["due_at"] = due_at
+            _queue(state, job, clip, "review", "Connect and select a YouTube channel before uploading.", now, score)
         else:
             made = posting.enqueue(job, clip, account_ids, automatic=True, autopilot=True)
             if not made:
@@ -620,7 +623,11 @@ def _queue(state, job, clip, status, reason, now, score=None):
 
 
 def _youtube_ids():
-    return [row["id"] for row in accounts.list_accounts() if row.get("platform") == "youtube"][:1]
+    connected = [row["id"] for row in accounts.list_accounts() if row.get("platform") == "youtube"]
+    requested = load()["settings"]["youtube_account"]
+    if requested:
+        return [requested] if requested in connected else []
+    return connected if len(connected) == 1 else []
 
 
 def approve(state, item_id, now=None):
@@ -636,7 +643,7 @@ def approve(state, item_id, now=None):
         raise ValueError("The YouTube quota budget for today is used up.")
     ids = _youtube_ids()
     if not ids:
-        raise ValueError("Connect a YouTube channel first.")
+        raise ValueError("Connect and select a YouTube channel in Autopilot settings first.")
     made = posting.enqueue(job, clip, ids, automatic=True, autopilot=True)
     if not made:
         raise ValueError("This clip is already queued or posted.")
@@ -695,7 +702,7 @@ def production_start(state, row, info):
     if classify_game(title) != "gta6" and classify_game(info.get("category") or "") == "gta6":
         title = f"GTA 6 — {title}"[:180]
     shadow = dict(creator)
-    shadow.update(rights_cleared=True, signal_fallback=True, layout="stack", brand=True, facecam="auto",
+    shadow.update(rights_cleared=True, signal_fallback=True, layout="auto", brand=True, facecam="auto",
                   allow_parallel=True,
                   commentary_id=state["settings"].get("commentary_id") or "",
                   source_credit={"name": row["name"], "url": url})
@@ -905,8 +912,9 @@ def public(state=None) -> dict:
     return {"enabled": settings["enabled"], "keywords": settings["keywords"], "channels": settings["channels"],
             "language": "en", "max_recordings": settings["max_recordings"],
             "server_live_ceiling": config.MAX_LIVE_TOTAL, "daily_cap": settings["daily_cap"],
-            "gap_min": settings["gap_min"], "gap_max": settings["gap_max"], "quota_units": settings["quota_units"],
-            "quota_used": bucket.get("units") or 0, "privacy": settings["privacy"],
+            "gap_min": settings["gap_min"], "gap_max": settings["gap_max"], "upload_budget": settings["upload_budget"],
+            "uploads_queued_today": bucket.get("uploads") or 0, "privacy": settings["privacy"],
+            "youtube_account": settings["youtube_account"],
             "commentary": {k: track[k] for k in ("id", "name", "duration")} if track else None,
             "streams": state["streams"][:40], "queue": state["queue"][:40], "errors": state["errors"][:20],
             "drafts": state.get("drafts") or [], "creators": len(creator_names(settings["channels"])),

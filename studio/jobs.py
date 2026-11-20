@@ -110,7 +110,7 @@ _cancel_events: dict = {}
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
-DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "crop", "quality": 720,
+DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "auto", "quality": 720,
             "range_start": None, "range_end": None, "mode": "news", "motion": "none", "watermark": False,
             "ai_post_text": False}
 
@@ -132,6 +132,8 @@ def clean_options(options) -> dict:
         elif k == "layout":
             if v in ("blur", "zoom"):
                 v = "crop"
+            elif v == "split":
+                v = "stack"
             v = v if v in render.LAYOUTS else DEFAULTS["layout"]
         elif k == "mode":
             if v not in ("news", "gameplay", "manual"):
@@ -197,9 +199,9 @@ def _is_old_generated_text(text, source=""):
         return True
     if re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", value):
         return True
-    if re.search(r"\bgameplay\s+(?:highlight|moment)\b|captured at", value, re.I):
+    if re.search(r"\| Gameplay highlight\b|\bcaptured at \d", value, re.I):
         return True
-    return bool(source and source.casefold() in value.casefold())
+    return bool(source and value.casefold().startswith(source.casefold() + " | "))
 
 
 def post_metadata(job, clip, overrides=None) -> dict:
@@ -242,10 +244,11 @@ def post_metadata(job, clip, overrides=None) -> dict:
         title = brain._post_text(title, source, job.get("uploader", ""), limit=100)[:100] or draft["title"][:100]
 
     description = str(values.get("description") or "").strip()
-    if _is_old_generated_text(description, source):
-        description = draft["description"]
-    else:
-        description = brain._post_text(description, source, job.get("uploader", ""), limit=2000) or draft["description"]
+    # Real descriptions can use words such as "gameplay moment". Replace only
+    # the old canned copy; otherwise clean and preserve the saved paragraphs.
+    old_description = re.match(r"^A gameplay moment from .+?, captured at \d{1,2}:\d{2}", description, re.I)
+    description = (draft["description"] if old_description else
+                   brain._post_description(description, source, job.get("uploader", "")) or draft["description"])
     raw_tags = values.get("hashtags")
     tags = []
     if isinstance(raw_tags, list):
@@ -596,8 +599,14 @@ def clip_changes(job, clip, changes):
             new[k] = str(changes[k])[:{"hook": 60, "title": 100, "description": 2000}.get(k, 20)]
     if new.get("style") not in render.STYLES:
         new["style"] = DEFAULTS["style"]
+    if new.get("layout") == "split":
+        new["layout"] = "stack"
     if new.get("layout") not in render.LAYOUTS:
         new["layout"] = DEFAULTS["layout"]
+    if "facecam" in changes:
+        if changes["facecam"] not in ("auto", "left", "center", "right"):
+            raise ValueError("Choose automatic face detection or a bottom source position.")
+        new["facecam"] = changes["facecam"]
     for k in ("crop_x", "crop_y"):
         if k in changes:
             value = float(changes[k])
@@ -926,12 +935,23 @@ def render_one(job, clip, words):
             # Old clip scans sometimes label an empty hook "Untitled clip". Never burn that placeholder into video.
             clip["hook"] = ""
         if clip.get("auto_gameplay") and not clip.get("post_drafted"):
-            if job["options"].get("ai_post_text"):
-                if not clip.get("metadata_ai"):
-                    transcript = " ".join(w["w"] for w in corrected if clip["start"] <= w["s"] < clip["end"])
-                    usage.set_context(job.get("creator"), job.get("title") or "")
-                    clip.update(brain.gameplay_post(Path(job["title"]).stem if job["source"]["type"] == "file" else job["title"],
-                                                    clip["start"], clip["end"], transcript, config.ai_ready()))
+            if job["options"].get("ai_post_text") and config.ai_ready():
+                from . import youtube_research
+
+                transcript = " ".join(w["w"] for w in corrected if clip["start"] <= w["s"] < clip["end"])
+                if clip.get("caption_cues") is not None:
+                    transcript = " ".join(c.get("text", "") for c in clip["caption_cues"])
+                title = _source_display(job)
+                uploader = job.get("uploader") or ""
+                usage.set_context(job.get("creator"), job.get("title") or "")
+                try:
+                    research = youtube_research.for_clip(title, uploader, transcript, infer_topic=False)
+                    result = brain.generate_title_ideas(title, uploader, transcript, clip.get("hook") or "",
+                                                        references=research["sources"], count=1)
+                    clip.update({key: result["ideas"][0][key] for key in ("title", "description", "hashtags")})
+                except (RuntimeError, ValueError):
+                    # An optional metadata service error must never block the render.
+                    pass
             clip["post_drafted"] = True
         near = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(corrected)]
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
