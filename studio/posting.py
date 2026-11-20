@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import json
+import re
 
 from . import accounts, alerts, config, creators, ctx, jobs, live, media
 
@@ -73,6 +74,11 @@ def _save():
 
 def _day(t):
     return time.strftime("%Y-%m-%d", time.localtime(t))
+
+
+def _text_key(value):
+    """Compare post copy without case, punctuation, or whitespace differences."""
+    return " ".join(re.findall(r"\w+", str(value or "").casefold()))
 
 
 def _mirror_rows(job, rows):
@@ -173,6 +179,10 @@ def youtube_batch(items, account_id="", visibility=None, delay=0):
         # Include failed rows: a failed final chunk can still have reached YouTube.
         existing = {(p["job"], p["clip"]) for p in _mine()
                     if p["account"] == acc["id"] and (p["status"] != "cancelled" or p.get("upload_session"))}
+        used_titles = {_text_key(p.get("title")) for p in _mine()
+                       if p["account"] == acc["id"] and p["status"] not in ("cancelled",)}
+        used_descriptions = {_text_key(p.get("description")) for p in _mine()
+                             if p["account"] == acc["id"] and p["status"] not in ("cancelled",)}
         due = max(now + delay, blocked_until("youtube", acc["id"]))
         if batch or delay:
             timing = [float(p.get("posted_at") or p.get("due_at") or 0) for p in _mine()
@@ -202,6 +212,9 @@ def youtube_batch(items, account_id="", visibility=None, delay=0):
                     if isinstance(overrides.get("hashtags"), str):
                         overrides["hashtags"] = overrides["hashtags"].replace(",", " ").split()
                 meta = jobs.post_metadata(job, clip, overrides)
+                title_key, description_key = _text_key(meta["title"]), _text_key(meta["description"])
+                if not title_key or not description_key or title_key in used_titles or description_key in used_descriptions:
+                    raise ValueError("This channel already has that title or description. Generate fresh post text first.")
             except (OSError, ValueError) as exc:
                 skipped.append({"job": jid, "clip": cid, "reason": str(exc)})
                 continue
@@ -211,6 +224,8 @@ def youtube_batch(items, account_id="", visibility=None, delay=0):
                 post.update(batch_index=len(made), gap_seconds=YOUTUBE_GAP)
             made.append(post)
             existing.add((jid, cid))
+            used_titles.add(title_key)
+            used_descriptions.add(description_key)
             due += YOUTUBE_GAP
         if made:
             _posts.extend(made)
@@ -218,6 +233,95 @@ def youtube_batch(items, account_id="", visibility=None, delay=0):
                 _save()
             except OSError:
                 del _posts[-len(made):]
+                raise
+    _sync_rows(made)
+    return made, skipped
+
+
+def schedule_youtube_batch(items, account_id="", visibility="private"):
+    """Schedule or reschedule an ordered set as one verified 9:16 batch.
+
+    Existing scheduled rows are reused, so pressing the batch action cannot duplicate them.
+    The first slot is ten minutes from now, followed by exact ten-minute increments.
+    """
+    if not isinstance(items, list) or not 1 <= len(items) <= YOUTUBE_BATCH_LIMIT:
+        raise ValueError(f"Select between 1 and {YOUTUBE_BATCH_LIMIT} clips.")
+    if visibility not in ("public", "unlisted", "private"):
+        raise ValueError("Choose private, unlisted, or public visibility.")
+    acc = youtube_destination(account_id)
+    now = time.time()
+    due = max(now + YOUTUBE_GAP, blocked_until("youtube", acc["id"]))
+    batch = secrets.token_hex(8)
+    made, skipped = [], []
+    pairs = set()
+    with _lock:
+        mine = _mine()
+        target_pairs = {(str(item.get("job") or ""), str(item.get("clip") or ""))
+                        for item in items if isinstance(item, dict)}
+        used_titles = {_text_key(p.get("title")) for p in mine
+                       if p["account"] == acc["id"] and (p["job"], p["clip"]) not in target_pairs
+                       and p["status"] != "cancelled"}
+        used_descriptions = {_text_key(p.get("description")) for p in mine
+                             if p["account"] == acc["id"] and (p["job"], p["clip"]) not in target_pairs
+                             and p["status"] != "cancelled"}
+        by_pair = {}
+        for post in mine:
+            if post["account"] == acc["id"]:
+                by_pair.setdefault((post["job"], post["clip"]), []).append(post)
+        snapshot = [dict(post) for post in _posts]
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                skipped.append({"job": "", "clip": "", "reason": "Choose a finished clip."})
+                continue
+            jid, cid = str(item.get("job") or ""), str(item.get("clip") or "")
+            pair = (jid, cid)
+            try:
+                if not jid or not cid:
+                    raise ValueError("Choose a finished clip.")
+                if pair in pairs:
+                    raise ValueError("This clip appears more than once in the batch.")
+                pairs.add(pair)
+                job = jobs.get(jid)
+                clip = next((row for row in job["clips"] if row["id"] == cid), None) if job else None
+                if not clip or clip.get("status") != "done":
+                    raise ValueError("This clip is unavailable or still rendering.")
+                if job.get("rights_cleared") is False:
+                    raise ValueError("Confirm source rights for this video before posting.")
+                path = _clip_file(job, clip)
+                spec = media.probe(path, require_audio=False)
+                if spec["width"] * 16 != spec["height"] * 9 or spec["duration"] > 180:
+                    raise ValueError("Re-make this clip as a 9:16 Short of three minutes or less before scheduling.")
+                metadata = jobs.post_metadata(job, clip, item.get("metadata"))
+                title_key, description_key = _text_key(metadata["title"]), _text_key(metadata["description"])
+                if not title_key or not description_key or title_key in used_titles or description_key in used_descriptions:
+                    raise ValueError("This channel already has that title or description. Generate fresh post text first.")
+                rows = by_pair.get(pair, [])
+                existing = next((row for row in rows if row["status"] == "scheduled"), None)
+                if any(row["status"] in ("posting", "posted") or row.get("upload_session") for row in rows):
+                    raise ValueError("This clip is already uploading, posted, or has an uncertain upload. Review its queue row.")
+                if any(row["status"] == "failed" for row in rows):
+                    raise ValueError("This clip already has a failed upload. Review or retry that queue row first.")
+                if existing:
+                    post = existing
+                    post.update(metadata)
+                    post.update(due_at=due, visibility=visibility, shorts=True, batch=batch,
+                                batch_index=len(made), gap_seconds=YOUTUBE_GAP, error=None)
+                else:
+                    post = _post_row(job, clip, acc, due, metadata)
+                    post.update(visibility=visibility, shorts=True, batch=batch,
+                                batch_index=len(made), gap_seconds=YOUTUBE_GAP)
+                    _posts.append(post)
+                made.append(post)
+                used_titles.add(title_key)
+                used_descriptions.add(description_key)
+                due += YOUTUBE_GAP
+            except (OSError, RuntimeError, ValueError, TypeError) as exc:
+                skipped.append({"job": jid, "clip": cid, "reason": str(exc)})
+        if made:
+            try:
+                _save()
+            except OSError:
+                _posts[:] = snapshot
                 raise
     _sync_rows(made)
     return made, skipped

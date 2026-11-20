@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MJ Cliproom · 1.3.1</title>
+<title>MJ Cliproom · 1.3.2</title>
 <link rel="icon" type="image/svg+xml" href="/brand/mj-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1307,7 +1307,7 @@ function aiCard() {
     <div class="card-head" style="margin-bottom:8px">
       <div>
         <h2 style="display:flex;align-items:center;gap:8px">
-          ${ic("bolt")} MJ Cliproom 1.3.1
+          ${ic("bolt")} MJ Cliproom 1.3.2
           <span class="pill ${isAuto ? "ok" : "warn"}">${isAuto ? '<span class="dot"></span>24/7 Autopilot: ACTIVE' : '24/7 Autopilot: PAUSED'}</span>
           <span class="pill ok" style="background:#ecfdf5;color:#047857;border:1px solid #a7f3d0" title="Auto-failover to GLM or dB signal clipping if primary AI limit is reached">${ic("check")} Quota Guard: Auto-Failover</span>
         </h2>
@@ -1536,7 +1536,7 @@ async function openFeedback(kind = "bug", context = "") {
   if (context) { try { await copyText(context); toast("The problem is copied. Paste it in your message.", "ok"); } catch {} }
   window.open(url, "_blank", "noopener");
 }
-const RELEASE = "1.3.1";
+const RELEASE = "1.3.2";
 const RELEASE_REF = "https://github.com/SheikhMamoonIjaz/MJ-Cliproom/blob/main/";
 const whatsNewKey = () => "mj_whats_new_" + (S.status.user?.id || "local") + "_" + RELEASE;
 function whatsNew(first = false) {
@@ -1545,11 +1545,11 @@ function whatsNew(first = false) {
   d.innerHTML = `<form method="dialog" class="dlg">
     <h2 id="releaseTitle">What’s new in MJ Cliproom ${RELEASE}</h2>
     <ul>
-      <li>Choose Light, Dark or System in Settings → Appearance.</li>
-      <li>Export in 9:16 with gameplay above the facecam and captions beneath it.</li>
-      <li>Post directly to the selected YouTube channel or queue batches with 10 minutes between uploads.</li>
-      <li>Generate titles, descriptions of at least 1,500 characters, and hashtags using clip captions and recent YouTube research.</li>
-      <li>Post text shows the model and supporting words. Add scene notes for clips with sparse captions.</li>
+      <li>AI can switch to an enabled, independent backup profile when the active provider is cooling down or unavailable.</li>
+      <li>Generate fresh titles and descriptions for each clip. Saving and scheduling reject copy already used on the channel.</li>
+      <li>Batch scheduling checks each rendered file is 9:16 and spaces scheduled uploads by exactly 10 minutes.</li>
+      <li>The Autopilot Posts list now keeps a short cache to make refreshes faster.</li>
+      <li>Choose Light, Dark or System in Settings → Appearance. Review AI copy before publishing.</li>
     </ul>
     <p class="help"><a class="lnk" href="${RELEASE_REF}CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a> ·
       <a class="lnk" href="${RELEASE_REF}docs/INSTALL.md" target="_blank" rel="noopener">Install and update guide</a></p>
@@ -2601,12 +2601,13 @@ function drawAutopilotPosts() {
             </div>
             <div style="font-size:13px;opacity:0.85;margin-top:2px">
               ${data.posting_paused ? "Posting paused in Overview. " : ""}
-              ${youtubeOptions().account ? `${esc(youtubeOptions().account.name)} · ${youtubeOptions().visibility} · 10 minutes between batch uploads` : "Connect a YouTube channel in Settings → Connected apps."}
+              ${youtubeOptions().account ? `${esc(youtubeOptions().account.name)} · ${youtubeOptions().visibility} · clips are checked for unique titles, descriptions and 9:16 framing` : "Connect a YouTube channel in Settings → Connected apps."}
             </div>
           </div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn sm" style="background:#4f46e5;color:#fff;border:none" data-act="auto-schedule-all">Queue ready clips</button>
+          <button class="btn sm" data-act="generate-unique-meta">Generate unique copy</button>
+          <button class="btn sm" style="background:#4f46e5;color:#fff;border:none" data-act="auto-schedule-all">Schedule clips · 10m apart</button>
         </div>
       </div>
     </div>
@@ -2874,12 +2875,12 @@ function drawUsage() {
 // With sign-in off there is no profile or password to manage. The AI section is for whoever runs the server.
 const setTabs = () => [
   ...(S.status.user?.is_admin ? [["ai", "AI", "bolt", "Your AI service, model and key"]] : []),
-  ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name, email and how you sign in"],
-                                          ["security", "Security", "lock", "Password and signing out"]]),
   ["apps", "Connected apps", "plug", "Where your clips get posted"],
-  ["appearance", "Appearance", "bulb", "Light, dark, or system theme"],
   ["autopilot", "Autopilot", "radio", "GTA 6 live clipping and uploads"],
-  ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos and clips are kept"]] : [])];
+  ["appearance", "Appearance", "bulb", "Light, dark, or system theme"],
+  ...(S.status.user?.is_admin ? [["storage", "Storage", "folder", "Where videos and clips are kept"]] : []),
+  ...(S.status.accounts === false ? [] : [["profile", "Profile", "user", "Your name, email and how you sign in"],
+                                          ["security", "Security", "lock", "Password and signing out"]])];
 function aiHints() {
   const k = S.aiEdit, sel = $("#ai_provider"); if (!k || !sel) return;
   const pv = k.providers.find(x => x.id === sel.value) || k.providers[0], same = pv.id === k.provider;
@@ -4156,13 +4157,44 @@ document.addEventListener("click", async e => {
       toast("Hashtags copied to clipboard!", "ok");
       return;
     }
+    if (a === "generate-unique-meta") {
+      b.disabled = true;
+      const oldLabel = b.textContent;
+      try {
+        if (!S.autopilotData) await loadAutopilotPosts();
+        const clips = (S.autopilotData?.clips || []).filter(c => c.video_url &&
+          !["posting", "posted", "failed"].includes(c.scheduled_post?.status))
+          .map(c => ({job:c.jid, clip:c.cid}));
+        if (!clips.length) return toast("No rendered clips are waiting for unique copy.");
+        await send("/api/v12/autopilot-posts/unique-metadata", {clips});
+        let state;
+        do {
+          await new Promise(resolve => setTimeout(resolve, 1800));
+          state = await api("/api/v12/autopilot-posts/unique-metadata");
+          b.textContent = `Writing copy · ${state.completed}/${state.total}`;
+        } while (state.status === "running");
+        const done = state.completed - (state.errors || []).length;
+        toast(`${done} clip(s) now have unique titles and descriptions.${state.errors?.length ? ` ${state.errors.length} need review.` : ""}`,
+          state.errors?.length ? "bad" : "ok");
+        await loadAutopilotPosts();
+      } catch (err) { toast(err.message, "bad"); }
+      finally { b.disabled = false; b.textContent = oldLabel; }
+      return;
+    }
     if (a === "schedall10m" || a === "auto-schedule-all") {
       b.disabled = true;
       try {
         const {account, visibility} = youtubeOptions();
         if (!account) return toast("Connect a YouTube channel in Settings → Connected apps.", "bad");
-        const res = await send("/api/v12/autopilot-posts/auto-schedule-all", {account:account.id, visibility});
-        toast(res.message, res.count ? "ok" : "");
+        if (!S.autopilotData) await loadAutopilotPosts();
+        const clips = (S.autopilotData?.clips || []).filter(c => c.video_url &&
+          !["posting", "posted", "failed"].includes(c.scheduled_post?.status))
+          .map(c => ({job:c.jid, clip:c.cid}));
+        if (!clips.length) return toast("No rendered clips are waiting to be scheduled.");
+        const res = await send("/api/v12/autopilot-posts/schedule-batch", {clips, account:account.id, visibility});
+        const missed = res.skipped?.length || 0;
+        toast(`Scheduled ${res.queued} clip(s) in 10-minute slots.${missed ? ` ${missed} skipped; review the queue.` : ""}`,
+          res.queued ? "ok" : missed ? "bad" : "");
         await loadAutopilotPosts();
       } catch (err) { toast(err.message, "bad"); }
       finally { b.disabled = false; }

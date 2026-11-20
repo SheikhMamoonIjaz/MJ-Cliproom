@@ -131,10 +131,15 @@ def attempts():
         if family in seen:
             continue
         with use(p):
-            available = ready()
+            available = ready() and not cooling()
         if available:
             seen.add(family)
             yield p
+
+
+def can_answer() -> bool:
+    """Whether the active profile or an opted-in independent backup can answer now."""
+    return next(attempts(), None) is not None
 
 
 def cooling(profile=None) -> bool:

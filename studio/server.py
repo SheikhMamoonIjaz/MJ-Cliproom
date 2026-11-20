@@ -2,6 +2,7 @@
 
 Public pages:  /  /login  /signup          The app:  /app  (signed-in users only)
 Everything under /api, /media and /oauth needs a session, except /api/auth/* and /api/public."""
+import copy
 import hashlib
 import hmac
 import json
@@ -50,8 +51,12 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
+_AUTOPILOT_CLIP_CACHE = {}
+_AUTOPILOT_CLIP_CACHE_LOCK = threading.RLock()
+_UNIQUE_META_LOCK = threading.RLock()
+_UNIQUE_META_TASKS = {}
 
 
 @app.on_event("startup")
@@ -1179,7 +1184,7 @@ def _source_transcript(job):
     return " ".join(excerpts)
 
 
-def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="short", notes=""):
+def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="short", notes="", avoid=None):
     from . import youtube_research
 
     if video_format not in ("short", "long"):
@@ -1200,7 +1205,8 @@ def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="shor
         research = youtube_research.for_clip(source, uploader, notes.strip() + " " + transcript[:2200], region)
         drafts = brain.generate_title_ideas(
             source, uploader, transcript, clip.get("hook") or "",
-            references=research["sources"], count=count, video_format=video_format, notes=notes)
+            references=research["sources"], count=count, video_format=video_format, notes=notes,
+            avoid=_metadata_history() if avoid is None else avoid)
         return {**drafts, "format": video_format, "research": research}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -1227,8 +1233,28 @@ def clip_title_ideas(jid: str, cid: str, body: dict | None = Body(None)):
 @app.put("/api/jobs/{jid}/clips/{cid}/metadata")
 def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
     job = _job_or_404(jid)
+    clip = next((item for item in job["clips"] if item["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    proposed = jobs.post_metadata(job, clip, body)
+    title_key = brain._words_key(proposed["title"])
+    description_key = brain._words_key(proposed["description"])
+    for row in _metadata_history(exclude=(jid, cid)):
+        if (title_key and title_key == brain._words_key(row.get("title"))) or (
+                description_key and description_key == brain._words_key(row.get("description"))):
+            raise HTTPException(409, "That title or description is already used by another clip. Write distinct copy before saving.")
     try:
         clip = jobs.update_metadata(job, cid, body)
+        changed = []
+        with posting._lock:
+            for post in posting._mine():
+                if post.get("job") == jid and post.get("clip") == cid and post.get("status") == "scheduled":
+                    post.update(title=clip["title"], description=clip["description"], hashtags=clip["hashtags"])
+                    changed.append(post)
+            if changed:
+                posting._save()
+        if changed:
+            posting._sync_rows(changed)
         return {"clip": {key: clip.get(key) for key in ("id", "title", "description", "hashtags")},
                 "job": jobs.public(job)}
     except RuntimeError as e:
@@ -2935,6 +2961,11 @@ def switch_ai_provider(request: Request, body: dict = Body(...)):
 # ================================================================ Autopilot Posts & Review Queue
 def _collect_autopilot_clips():
     """List this user's clips, using the file and queue state from this installation."""
+    uid, revision, now = ctx.uid(), ctx.version(), time.monotonic()
+    with _AUTOPILOT_CLIP_CACHE_LOCK:
+        cached = _AUTOPILOT_CLIP_CACHE.get(uid)
+        if cached and cached[0] == revision and now - cached[1] < 3:
+            return copy.deepcopy(cached[2])
     posts = {}
     with posting._lock:
         for post in posting._mine():
@@ -2985,7 +3016,87 @@ def _collect_autopilot_clips():
                     "countdown_sec": max(0, int(due_at - time.time())) if due_at and post["status"] == "scheduled" else None,
                 } if post else None),
             })
-    return sorted(result, key=lambda item: item["created_at"], reverse=True)
+    result.sort(key=lambda item: item["created_at"], reverse=True)
+    with _AUTOPILOT_CLIP_CACHE_LOCK:
+        _AUTOPILOT_CLIP_CACHE[uid] = (revision, now, result)
+    return copy.deepcopy(result)
+
+
+def _metadata_history(exclude=None):
+    """Existing YouTube copy, so later AI drafts can avoid reusing it."""
+    history, seen = [], set()
+    exclude = tuple(exclude) if exclude else None
+    with posting._lock:
+        rows = [dict(row) for row in posting._mine()
+                if row.get("platform") == "youtube"]
+    for row in rows:
+        if exclude and (row.get("job"), row.get("clip")) == exclude:
+            continue
+        title, description = str(row.get("title") or "").strip(), str(row.get("description") or "").strip()
+        key = (brain._words_key(title), brain._words_key(description))
+        if (title or description) and key not in seen:
+            history.append({"title": title, "description": description})
+            seen.add(key)
+    for clip in _collect_autopilot_clips():
+        if exclude and (clip.get("jid"), clip.get("cid")) == exclude:
+            continue
+        title, description = str(clip.get("title") or "").strip(), str(clip.get("description") or "").strip()
+        key = (brain._words_key(title), brain._words_key(description))
+        if (title or description) and key not in seen:
+            history.append({"title": title, "description": description})
+            seen.add(key)
+    return history[-120:]
+
+
+def _run_unique_metadata(uid, task_id, items, region):
+    with ctx.as_user(uid):
+        history = _metadata_history()
+        for item in items:
+            jid, cid = item["job"], item["clip"]
+            try:
+                job = jobs.get(jid)
+                clip = next((row for row in job["clips"] if row["id"] == cid), None) if job else None
+                if not clip:
+                    raise ValueError("This clip is no longer available.")
+                result = _research_clip_post_ideas(job, clip, region, count=1, avoid=history)
+                idea = result["ideas"][0]
+                title_key, description_key = brain._words_key(idea["title"]), brain._words_key(idea["description"])
+                if any(title_key == brain._words_key(row.get("title")) or
+                       description_key == brain._words_key(row.get("description")) for row in history):
+                    raise ValueError("The model repeated a title or description; retry this clip.")
+                saved = jobs.update_metadata(job, cid, {
+                    "title": idea["title"], "description": idea["description"],
+                    "hashtags": " ".join(f"#{tag}" for tag in idea["hashtags"]),
+                })
+                changed = []
+                with posting._lock:
+                    for post in posting._mine():
+                        if post.get("job") == jid and post.get("clip") == cid and post.get("status") == "scheduled":
+                            post.update(title=saved["title"], description=saved["description"],
+                                        hashtags=saved["hashtags"])
+                            changed.append(post)
+                    if changed:
+                        posting._save()
+                if changed:
+                    posting._sync_rows(changed)
+                history.append({"title": saved["title"], "description": saved["description"]})
+                with _UNIQUE_META_LOCK:
+                    state = _UNIQUE_META_TASKS.get(uid, {})
+                    if state.get("id") == task_id:
+                        state["completed"] += 1
+                        state["updated_at"] = time.time()
+            except Exception as exc:  # noqa: BLE001
+                with _UNIQUE_META_LOCK:
+                    state = _UNIQUE_META_TASKS.get(uid, {})
+                    if state.get("id") == task_id:
+                        state["completed"] += 1
+                        state["errors"].append({"job": jid, "clip": cid, "message": safe.friendly(exc, 240)})
+                        state["updated_at"] = time.time()
+        with _UNIQUE_META_LOCK:
+            state = _UNIQUE_META_TASKS.get(uid, {})
+            if state.get("id") == task_id:
+                state["status"] = "complete_with_errors" if state["errors"] else "complete"
+                state["updated_at"] = time.time()
 
 
 @app.get("/api/v12/autopilot-posts")
@@ -2996,6 +3107,56 @@ def get_autopilot_posts():
             "rendered_count": sum(bool(c["video_url"]) for c in clips),
             "full_auto_yt": bool(autopilot.load()["settings"].get("enabled")),
             "posting_paused": accounts.settings()["paused"]}
+
+
+@app.post("/api/v12/autopilot-posts/unique-metadata")
+def start_unique_metadata(request: Request, body: dict = Body(...)):
+    _admin(request)
+    items = body.get("clips")
+    if not isinstance(items, list) or not 1 <= len(items) <= posting.YOUTUBE_BATCH_LIMIT:
+        raise HTTPException(400, "Select between 1 and 200 clips.")
+    clean = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(400, "Each selection needs a job and clip id.")
+        jid, cid = str(item.get("job") or ""), str(item.get("clip") or "")
+        if not re.fullmatch(r"[\w-]{8,60}", jid) or not re.fullmatch(r"[\w-]{1,60}", cid):
+            raise HTTPException(400, "A selected clip id is invalid.")
+        clean.append({"job": jid, "clip": cid})
+    region = str(body.get("region") or "US")[:8]
+    uid = ctx.uid()
+    with _UNIQUE_META_LOCK:
+        old = _UNIQUE_META_TASKS.get(uid, {})
+        if old.get("status") == "running":
+            return {key: old.get(key) for key in ("id", "status", "total", "completed", "errors")}
+        task_id = secrets.token_hex(8)
+        _UNIQUE_META_TASKS[uid] = {"id": task_id, "status": "running", "total": len(clean),
+                                   "completed": 0, "errors": [], "updated_at": time.time()}
+    threading.Thread(target=_run_unique_metadata, args=(uid, task_id, clean, region),
+                     name="unique-clip-metadata", daemon=True).start()
+    return {key: _UNIQUE_META_TASKS[uid][key] for key in ("id", "status", "total", "completed", "errors")}
+
+
+@app.get("/api/v12/autopilot-posts/unique-metadata")
+def get_unique_metadata(request: Request):
+    _admin(request)
+    with _UNIQUE_META_LOCK:
+        state = _UNIQUE_META_TASKS.get(ctx.uid(), {})
+        return {key: state.get(key) for key in ("id", "status", "total", "completed", "errors", "updated_at")}
+
+
+@app.post("/api/v12/autopilot-posts/schedule-batch")
+def schedule_autopilot_batch(request: Request, body: dict = Body(...)):
+    _admin(request)
+    items = body.get("clips")
+    try:
+        rows, skipped = posting.schedule_youtube_batch(
+            items, str(body.get("account") or ""), body.get("visibility") or "private")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": bool(rows), "queued": len(rows), "posts": [
+        {key: row.get(key) for key in ("id", "job", "clip", "status", "due_at", "title")}
+        for row in rows], "skipped": skipped}
 
 
 @app.post("/api/v12/autopilot-posts/auto-schedule-all")

@@ -191,15 +191,16 @@ def loud_zscore(db):
 def ask_ai(prompt, schema=None, purpose="AI call"):
     """Try the selected models, then opted-in independent providers on outages or throttles."""
     why = ""
+    selected_id = ai.current()["id"]
     for profile in ai.attempts():
         with ai.use(profile):
-            if ai.cooling():
-                why = f"{ai.label()} is waiting for its rate-limit cooldown."
-                continue
             for model in profile["models"]:
                 try:
                     out, sent, wrote = ai.call(model, prompt, schema or SCHEMA)
                     usage.record(sent, wrote, purpose)
+                    if profile["id"] != selected_id:
+                        # Stop starting every request with a provider already in cooldown.
+                        ai.manage(profile["id"], "activate")
                     ai.clear_problem()
                     return out, model, sent + wrote
                 except (ai.AIError, httpx.TransportError) as e:
@@ -207,7 +208,7 @@ def ask_ai(prompt, schema=None, purpose="AI call"):
                     why = ai.explain(e) or f"{ai.label()} could not answer with {model}."
                     if status in (400, 404, 422):
                         continue  # try the next selected model on this profile
-                    if status == 429 or status >= 500 or isinstance(e, httpx.TransportError):
+                    if status in (401, 403, 429) or status >= 500 or isinstance(e, httpx.TransportError):
                         break  # one request per service during this failure; try an opted-in independent provider
                     ai.note_problem(e)
                     raise RuntimeError(f"The AI did not answer: {why}") from None
@@ -522,9 +523,12 @@ def _words_key(value):
     return " ".join(re.findall(r"\w+", value.casefold()))
 
 
-def _seo_ideas(items, title, uploader, context, ideas, count, video_format):
+def _seo_ideas(items, title, uploader, context, ideas, count, video_format,
+               avoid_titles=(), avoid_descriptions=()):
     seen_titles = {_words_key(idea["title"]) for idea in ideas}
-    seen_descriptions = {idea["description"].casefold() for idea in ideas}
+    seen_descriptions = {_words_key(idea["description"]) for idea in ideas}
+    seen_titles.update(avoid_titles)
+    seen_descriptions.update(avoid_descriptions)
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
@@ -532,7 +536,7 @@ def _seo_ideas(items, title, uploader, context, ideas, count, video_format):
             continue
         title_text = _post_text(item.get("title"), title, uploader, 100)
         description = _post_description(item.get("description"), title, uploader, 1950)
-        title_key, description_key = _words_key(title_text), description.casefold()
+        title_key, description_key = _words_key(title_text), _words_key(description)
         if not title_text or len(description) < 1500 or title_key in seen_titles or description_key in seen_descriptions:
             continue
         if title_key in {"clip", "untitled", "untitled clip", "gameplay clip", "manual clip"}:
@@ -568,7 +572,7 @@ def _seo_ideas(items, title, uploader, context, ideas, count, video_format):
 
 
 def generate_title_ideas(title, uploader, transcript, hook="", references=(), count=10, *,
-                         video_format="short", notes=""):
+                         video_format="short", notes="", avoid=()):
     """Generate only complete AI drafts with a verifiable quote from the supplied material."""
     game = _game_label(title)
     clip = _post_text(transcript, title, uploader, 8400 if video_format == "long" else 3000)
@@ -576,6 +580,12 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
     if not (clip or notes):
         raise ValueError("Add captions or a note about what happens before generating post text.")
     context = f" {_words_key(clip)} {_words_key(notes)} "
+    avoid_rows = [row for row in avoid if isinstance(row, dict)][:120]
+    avoid_titles = {_words_key(_safe(row.get("title"), 100)) for row in avoid_rows if row.get("title")}
+    avoid_descriptions = {_words_key(_safe(row.get("description"), 4000)) for row in avoid_rows
+                          if row.get("description")}
+    avoid_titles.discard("")
+    avoid_descriptions.discard("")
     hook = _post_text(hook, title, uploader, 100) if video_format == "short" else ""
     if hook.casefold() in {"untitled clip", "wait for it", "gameplay clip"}:
         hook = ""
@@ -591,6 +601,7 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
         "readable paragraphs. Open with the strongest reason to watch, explain the actual clip and relevant gameplay "
         "context, and close with a genuine viewer question if it fits. For a sparse transcript, discuss viewer choices "
         "or what to listen for rather than inventing plot or repeating filler. Keep each package distinct in prose and angle. "
+        "Do not reuse an existing title or description listed below. Choose a fresh, clip-specific angle and write new prose. "
         "Provide 3–5 accurate hashtags without the # sign. Use terms specific to this game's mode, mechanic, challenge "
         "or moment when the material supports them. Omit Shorts-related tags for a full video. "
         "No generic Viral, FYP or unrelated trend names. Include a short angle. In evidence, give only an exact excerpt "
@@ -600,14 +611,15 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
         f"<game>{game}</game>\n<hook>{_safe(hook, 100)}</hook>\n"
         f"<transcript>{_safe(clip, 8400)}</transcript>\n"
         f"<scene_notes>{_safe(notes, 1000)}</scene_notes>\n"
-        f"<youtube_search_titles>{json.dumps(titles, ensure_ascii=False)}</youtube_search_titles>"
+        f"<youtube_search_titles>{json.dumps(titles, ensure_ascii=False)}</youtube_search_titles>\n"
+        f"<already_used>{json.dumps([{'title': _safe(row.get('title'), 100), 'description_opening': _safe(row.get('description'), 180)} for row in avoid_rows], ensure_ascii=False)}</already_used>"
     )
     ideas, models = [], []
     spent = 0
     warning = ""
     for _ in range((count + 3) // 4 + 1):
         remaining = min(4, count - len(ideas))
-        used = [_safe(i["title"], 100) for i in ideas]
+        used = list(avoid_titles) + [_safe(i["title"], 100) for i in ideas]
         request = (f"Return exactly {remaining} packages, best first, following the JSON schema. "
                    f"Find different angles from the options already written: {json.dumps(used, ensure_ascii=False)}.\n"
                    + prompt)
@@ -621,7 +633,8 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
         if model not in models:
             models.append(model)
         spent += tokens
-        _seo_ideas(out, title, uploader, context, ideas, count, video_format)
+        _seo_ideas(out, title, uploader, context, ideas, count, video_format,
+                   avoid_titles=avoid_titles, avoid_descriptions=avoid_descriptions)
         if len(ideas) == count:
             break
     if not ideas:
