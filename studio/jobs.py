@@ -261,11 +261,6 @@ def post_metadata(job, clip, overrides=None) -> dict:
                 break
     if not tags:
         tags = draft["hashtags"]
-    credit = values.get("source_credit") if isinstance(values.get("source_credit"), dict) else None
-    if credit and credit.get("name") and str(credit.get("url") or "").startswith("https://"):
-        url = str(credit["url"]).strip()
-        if url not in description:
-            description = (description + f"\n\nSource: {str(credit['name']).strip()[:80]}\n{url}").strip()[:4000]
     return {"title": title, "description": description, "hashtags": tags}
 
 

@@ -188,10 +188,14 @@ blocked = autopilot._empty()
 autopilot.consider_clip(blocked, {**job, "game": "gta5", "title": "GTA 5"}, {**agreed, "id": "old"})
 check("a GTA 5 moment is not uploaded", blocked["queue"][0]["status"], "skipped")
 
-check("post text keeps the source credit", "https://www.twitch.tv/xqc" in jobs.post_metadata(
+check("YouTube post text omits stream names and source links", "xqc" not in jobs.post_metadata(
     {"title": "GTA 6 night", "uploader": "xQc", "clips": [{"id": "c"}], "source": {"name": "GTA 6 night"}},
     {"id": "c", "start": 1, "end": 20, "title": "Last second escape", "description": "He makes the jump.",
-     "hashtags": ["GTA6"], "source_credit": {"name": "xQc", "url": "https://www.twitch.tv/xqc"}})["description"])
+     "hashtags": ["GTA6"], "source_credit": {"name": "xQc", "url": "https://www.twitch.tv/xqc"}})["description"].casefold() and
+      "twitch.tv" not in jobs.post_metadata(
+          {"title": "GTA 6 night", "uploader": "xQc", "clips": [{"id": "c"}], "source": {"name": "GTA 6 night"}},
+          {"id": "c", "start": 1, "end": 20, "title": "Last second escape", "description": "He makes the jump.",
+           "hashtags": ["GTA6"], "source_credit": {"name": "xQc", "url": "https://www.twitch.tv/xqc"}})["description"].casefold())
 
 print("\nFAILED: " + ", ".join(fails) if fails else "\nAll autopilot checks passed.")
 sys.exit(1 if fails else 0)
