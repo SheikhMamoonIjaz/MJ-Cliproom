@@ -116,6 +116,56 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
     assert isinstance(saved_worker["hashtags"], list) and saved_worker["hashtags"]
     assert server._UNIQUE_META_TASKS[owner]["status"] == "complete"
     print("PASS the unique-copy worker normalizes generated hashtag lists before saving clip metadata")
+
+    published_description = ("This published racing highlight has a distinct scene and a clear payoff. " * 25)
+    published_job = {"id": "published-meta-job", "status": "done", "title": "Test racing session",
+                     "source": {"type": "url", "title": "Test racing session"}, "uploader": "",
+                     "clips": [{"id": "published-clip", "status": "done", "title": "Old title",
+                                "description": "Old description", "hashtags": ["OldTag"],
+                                "start": 0, "end": 20}]}
+    published_post = {"id": "published-post", "job": "published-meta-job", "clip": "published-clip",
+                      "platform": "youtube", "status": "posted", "account": "yt",
+                      "remote_id": "abcdefghijk", "title": "Old title", "description": "Old description"}
+    metadata_events = []
+
+    def save_published_metadata(job, cid, changes):
+        metadata_events.append("local")
+        clip = job["clips"][0]
+        clip.update(title=changes["title"], description=changes["description"],
+                    hashtags=[tag.lstrip("#") for tag in changes["hashtags"].split()])
+        return clip
+
+    metadata_body = {"title": "Fresh published racing title", "description": published_description,
+                     "hashtags": "#GTA6 #RacingClips #Shorts"}
+    expected_remote = jobs.post_metadata(
+        published_job, published_job["clips"][0],
+        {**metadata_body, "hashtags": ["#GTA6", "#RacingClips", "#Shorts"]})
+    with ctx.as_user(owner), \
+            patch.object(server, "_job_or_404", return_value=published_job), \
+            patch.object(server, "_metadata_history", return_value=[]), \
+            patch.object(posting, "_mine", return_value=[published_post]), \
+            patch.object(posting, "_save"), patch.object(posting, "_sync_rows"), \
+            patch.object(accounts, "get", return_value={"id": "yt", "platform": "youtube"}), \
+            patch.object(accounts, "youtube_update_metadata", side_effect=lambda *args: metadata_events.append("youtube")) as update_youtube, \
+            patch.object(jobs, "update_metadata", side_effect=save_published_metadata), \
+            patch.object(jobs, "public", return_value={}):
+        result = server.save_clip_metadata("published-meta-job", "published-clip", metadata_body)
+        assert result["clip"]["title"] == metadata_body["title"]
+        assert metadata_events == ["youtube", "local"], metadata_events
+        assert update_youtube.call_args.args[1:] == (
+            "abcdefghijk", expected_remote["title"], expected_remote["description"],
+            expected_remote["hashtags"]), update_youtube.call_args
+        metadata_events.clear()
+        with patch.object(accounts, "youtube_update_metadata", side_effect=RuntimeError("Reconnect required")), \
+                patch.object(jobs, "update_metadata", side_effect=AssertionError("local save must wait for YouTube")):
+            try:
+                server.save_clip_metadata("published-meta-job", "published-clip", metadata_body)
+            except server.HTTPException as error:
+                assert error.status_code == 409 and "Reconnect required" in error.detail
+            else:
+                raise AssertionError("A published clip was reported saved when YouTube rejected its metadata update.")
+    print("PASS manual metadata edits sync published YouTube clips and keep local copy unchanged when sync fails")
+
     def post_text(cid):
         return {"title": f"{cid.title()} GTA race highlight",
                 "description": (f"{cid} GTA racing gameplay: a distinct moment with a different decision and outcome. " * 28),

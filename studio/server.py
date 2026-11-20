@@ -1239,7 +1239,11 @@ def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
     clip = next((item for item in job["clips"] if item["id"] == cid), None)
     if not clip:
         raise HTTPException(404, "No such clip")
-    proposed = jobs.post_metadata(job, clip, body)
+    proposed_values = dict(body)
+    hashtags = proposed_values.get("hashtags")
+    if isinstance(hashtags, str):
+        proposed_values["hashtags"] = hashtags.replace(",", " ").split()
+    proposed = jobs.post_metadata(job, clip, proposed_values)
     if len(proposed["description"]) < 1500:
         raise HTTPException(400, "Write a clip-specific description of at least 1,500 characters before saving.")
     title_key = brain._words_key(proposed["title"])
@@ -1249,11 +1253,25 @@ def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
                 description_key and description_key == brain._words_key(row.get("description"))):
             raise HTTPException(409, "That title or description is already used by another clip. Write distinct copy before saving.")
     try:
+        with posting._lock:
+            published = [dict(post) for post in posting._mine()
+                         if post.get("job") == jid and post.get("clip") == cid
+                         and post.get("platform") == "youtube" and post.get("status") == "posted"]
+        for post in published:
+            account = accounts.get(post.get("account", ""))
+            if not account or not post.get("remote_id"):
+                raise HTTPException(409, "Reconnect the YouTube channel before refreshing a published clip's metadata.")
+            try:
+                accounts.youtube_update_metadata(account, post["remote_id"], proposed["title"],
+                                                 proposed["description"], proposed["hashtags"])
+            except (RuntimeError, ValueError, httpx.HTTPError) as error:
+                raise HTTPException(409, f"Could not update the published YouTube metadata. {error}") from error
         clip = jobs.update_metadata(job, cid, body)
         changed = []
         with posting._lock:
             for post in posting._mine():
-                if post.get("job") == jid and post.get("clip") == cid and post.get("status") == "scheduled":
+                if (post.get("job") == jid and post.get("clip") == cid
+                        and post.get("platform") == "youtube" and post.get("status") in ("scheduled", "posted")):
                     post.update(title=clip["title"], description=clip["description"], hashtags=clip["hashtags"])
                     changed.append(post)
             if changed:
