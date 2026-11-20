@@ -582,7 +582,9 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
     context = f" {_words_key(clip)} {_words_key(notes)} "
     # Keep the prompt modest for providers with tight free-tier token windows.
     # The save and queue paths still compare against the complete channel history.
-    avoid_rows = [row for row in avoid if isinstance(row, dict)][-24:]
+    # The save path compares against the full channel history. Keep only recent examples in the prompt
+    # so a batch of longer descriptions stays within provider rate limits.
+    avoid_rows = [row for row in avoid if isinstance(row, dict)][-12:]
     avoid_titles = {_words_key(_safe(row.get("title"), 100)) for row in avoid_rows if row.get("title")}
     avoid_descriptions = {_words_key(_safe(row.get("description"), 4000)) for row in avoid_rows
                           if row.get("description")}

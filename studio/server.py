@@ -3091,7 +3091,7 @@ def _run_unique_metadata(uid, task_id, items, region):
                                                          proposed["hashtags"])
                 saved = jobs.update_metadata(job, cid, {
                     "title": proposed["title"], "description": proposed["description"],
-                    "hashtags": proposed["hashtags"],
+                    "hashtags": " ".join(f"#{tag}" for tag in proposed["hashtags"]),
                 })
                 changed = []
                 with posting._lock:
@@ -3112,7 +3112,7 @@ def _run_unique_metadata(uid, task_id, items, region):
                         state["completed"] += 1
                         state["updated_at"] = time.time()
                 if index + 1 < len(items):
-                    time.sleep(15)
+                    time.sleep(45)
             except Exception as exc:  # noqa: BLE001
                 with _UNIQUE_META_LOCK:
                     state = _UNIQUE_META_TASKS.get(uid, {})

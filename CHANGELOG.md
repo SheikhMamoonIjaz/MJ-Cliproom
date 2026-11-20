@@ -5,6 +5,7 @@ User-facing changes to MJ-Cliping are listed here.
 ## 1.3.2 — 2026-11-20
 
 - Added YouTube metadata updates for already-published clips to the unique-copy workflow. Reconnect YouTube once to grant the expanded `youtube.force-ssl` scope before using it on existing uploads.
+- Slowed unique-copy batches between AI requests and limited prompt examples while keeping full-history duplicate checks on every saved title and description.
 - Added AI provider failover that skips profiles in cooldown and promotes a successful, opted-in independent backup for later requests.
 - Added clip-specific, original title and description generation against existing channel copy. Metadata saves and YouTube scheduling reject repeated titles or descriptions.
 - Added a dashboard action to regenerate unique copy for waiting clips and a batch action that reuses scheduled rows, verifies each file is vertical 9:16 and schedules accepted clips in ten-minute slots.
