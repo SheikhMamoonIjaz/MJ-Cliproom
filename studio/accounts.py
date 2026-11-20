@@ -26,7 +26,7 @@ SECRET_KEYS = ("discord_webhook", "telegram_token")
 SETTING_DEFAULTS = {"discord_webhook": "", "telegram_token": "", "telegram_chat": "", "paused": False,
                     "digest_hour": 8, "last_digest": "", "tour_done": False}
 
-YT_SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
+YT_SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl"
 IG = "https://graph.instagram.com"
 IG_UPLOAD = "https://rupload.facebook.com/ig-api-upload/v21.0"
 IG_SCOPES = "instagram_business_basic,instagram_business_content_publish"
@@ -404,6 +404,40 @@ def check_youtube(aid: str) -> dict:
     if not channel:
         raise ValueError("The Google sign-in does not match this channel. Reconnect the intended YouTube channel.")
     return {"name": channel.get("snippet", {}).get("title") or acc["name"]}
+
+
+def youtube_update_metadata(acc, video_id: str, title: str, description: str, tags: list):
+    """Update only a connected channel's video title, description, and tags, preserving category/language."""
+    video_id = str(video_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise ValueError("YouTube did not provide a valid video ID for this published clip.")
+    clean_title = re.sub(r"[<>]", "", str(title or "")).strip()[:100]
+    if not clean_title:
+        raise ValueError("Add a unique title before updating YouTube.")
+    clean_description = re.sub(r"[<>]", "", str(description or ""))
+    clean_description = clean_description.encode("utf-8")[:5000].decode("utf-8", "ignore")
+    clean_tags = list(dict.fromkeys(re.sub(r"[^\w]", "", str(tag).lstrip("#"))[:30]
+                                    for tag in (tags or []) if str(tag).strip()))[:15]
+    token = _yt_token(acc)
+    headers = {"Authorization": f"Bearer {token}"}
+    current = _check(httpx.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"part": "snippet", "id": video_id,
+                "fields": "items(id,snippet(categoryId,defaultLanguage))"},
+        headers=headers, timeout=20), "Reading the YouTube video metadata").json()
+    item = next((row for row in current.get("items", []) if row.get("id") == video_id), None)
+    if not item:
+        raise ValueError("This YouTube video is not available on the connected channel.")
+    old = item.get("snippet") or {}
+    snippet = {"title": clean_title, "description": clean_description,
+               "tags": clean_tags, "categoryId": str(old.get("categoryId") or "20")}
+    if old.get("defaultLanguage"):
+        snippet["defaultLanguage"] = old["defaultLanguage"]
+    response = _check(httpx.put(
+        "https://www.googleapis.com/youtube/v3/videos", params={"part": "snippet"},
+        json={"id": video_id, "snippet": snippet}, headers=headers, timeout=30),
+        "Updating the YouTube video metadata")
+    return response.json()
 
 
 def session_location(resume, size: int) -> str:

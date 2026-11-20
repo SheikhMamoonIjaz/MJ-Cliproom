@@ -55,6 +55,7 @@ def main() -> int:
                 ("no sign-in, and the AI key from the dashboard", ["tests/test_local.py"]),
                 ("Hindi and Urdu captions in Roman letters", ["tests/test_roman.py"]),
                 ("connecting YouTube, Instagram and TikTok", ["tests/test_connect.py"]),
+                ("updating published YouTube metadata", ["tests/test_youtube_metadata_update.py"]),
                 ("the new-version notice", ["tests/test_updates.py"]),
                 ("prompt and posting queues", ["tests/test_beta_queue.py"]),
                 ("1.0 editor, music rights and dependencies", ["tests/test_100.py"]),

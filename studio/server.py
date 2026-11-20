@@ -3071,14 +3071,33 @@ def _run_unique_metadata(uid, task_id, items, region):
                 if any(title_key == brain._words_key(row.get("title")) or
                        description_key == brain._words_key(row.get("description")) for row in history):
                     raise ValueError("The model repeated a title or description; retry this clip.")
+                metadata = {"title": idea["title"], "description": idea["description"],
+                            "hashtags": " ".join(f"#{tag}" for tag in idea["hashtags"])}
+                proposed = jobs.post_metadata(job, clip, metadata)
+                if len(proposed["description"]) < 1500:
+                    raise ValueError("The generated description is under 1,500 characters; retry this clip.")
+                with posting._lock:
+                    published = [row for row in posting._mine()
+                                 if row.get("job") == jid and row.get("clip") == cid
+                                 and row.get("platform") == "youtube" and row.get("status") == "posted"]
+                if published:
+                    from . import accounts
+                    for post in published:
+                        account = accounts.get(post.get("account", ""))
+                        if not account:
+                            raise ValueError("Reconnect the YouTube channel before refreshing a published clip's metadata.")
+                        accounts.youtube_update_metadata(account, post.get("remote_id", ""),
+                                                         proposed["title"], proposed["description"],
+                                                         proposed["hashtags"])
                 saved = jobs.update_metadata(job, cid, {
-                    "title": idea["title"], "description": idea["description"],
-                    "hashtags": " ".join(f"#{tag}" for tag in idea["hashtags"]),
+                    "title": proposed["title"], "description": proposed["description"],
+                    "hashtags": proposed["hashtags"],
                 })
                 changed = []
                 with posting._lock:
                     for post in posting._mine():
-                        if post.get("job") == jid and post.get("clip") == cid and post.get("status") == "scheduled":
+                        if (post.get("job") == jid and post.get("clip") == cid and
+                                post.get("platform") == "youtube" and post.get("status") in ("scheduled", "posted")):
                             post.update(title=saved["title"], description=saved["description"],
                                         hashtags=saved["hashtags"])
                             changed.append(post)
