@@ -33,7 +33,7 @@ seen = []
 
 
 def fake_post(url, json=None, headers=None, timeout=None, **_k):  # noqa: A002
-    seen.append((url, json, headers or {}))
+    seen.append((url, json, headers or {}, timeout))
     if url.endswith(":generateContent"):
         return Reply(200, {"candidates": [{"content": {"parts": [{"text": globals()["json_text"]([CLIP])}]}}],
                            "usageMetadata": {"promptTokenCount": 100, "totalTokenCount": 130}})
@@ -65,6 +65,7 @@ out, sent, wrote = ai.call("model-a", "hello", brain.SCHEMA)
 check("gemini: answer and tokens", out == [CLIP] and (sent, wrote) == (100, 30), str((out, sent, wrote)))
 check("gemini: key in the header, schema passed as is", seen[0][2].get("x-goog-api-key") == "test-key-123456"
       and seen[0][1]["generationConfig"]["responseSchema"] is brain.SCHEMA and seen[0][0].endswith("/model-a:generateContent"))
+check("gemini requests fail over promptly on a stalled provider", seen[0][3] == 45)
 
 for name, host in (("openai", "api.openai.com"), ("xai", "api.x.ai"), ("grok", "api.x.ai"), ("groq", "api.groq.com"), ("openrouter", "openrouter.ai")):
     use(name)
@@ -72,12 +73,14 @@ for name, host in (("openai", "api.openai.com"), ("xai", "api.x.ai"), ("grok", "
     check(f"{name}: answer unwrapped from a code fence, tokens read", out == [CLIP] and (sent, wrote) == (90, 20), str((out, sent, wrote)))
     check(f"{name}: right address, key as a bearer token", host in seen[0][0] and seen[0][2].get("Authorization") == "Bearer test-key-123456")
 check("a refused extra setting is dropped and asked again", len(seen) == 2 and "temperature" not in seen[1][1])
+check("OpenAI-compatible retries keep the bounded timeout", all(call[3] == 45 for call in seen))
 check("the schema is told in the prompt for chat models", '"type": "array"' in seen[1][1]["messages"][0]["content"])
 
 use("anthropic")
 out, sent, wrote = ai.call("model-a", "hello", brain.SCHEMA)
 check("anthropic: answer found inside a sentence, tokens read", out == [CLIP] and (sent, wrote) == (70, 10), str((out, sent, wrote)))
 check("anthropic: key and version headers", seen[0][2].get("x-api-key") == "test-key-123456" and "anthropic-version" in seen[0][2])
+check("Anthropic requests keep the bounded timeout", seen[0][3] == 45)
 
 use("custom", "http://127.0.0.1:1234/v1")
 out, _s, _w = ai.call("model-a", "hello", brain.SCHEMA)
