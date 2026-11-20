@@ -343,6 +343,8 @@ def _check(r, what):
         _check_limit(r.status_code, data, getattr(r, "headers", {}), platform)
         if what in ("Starting the YouTube upload", "Uploading to YouTube", "Checking the YouTube upload") and r.status_code in (401, 403):
             raise ValueError(f"{what} failed ({r.status_code}). Reconnect the channel and check its upload permissions.")
+        if what == "Updating the YouTube video metadata" and r.status_code in (401, 403):
+            raise ValueError("Reconnect YouTube in Settings → Connected Apps and approve the youtube.force-ssl permission to edit published video metadata.")
         raise RuntimeError(f"{what} failed ({r.status_code}). Check the connection and app permissions.")
     return r
 

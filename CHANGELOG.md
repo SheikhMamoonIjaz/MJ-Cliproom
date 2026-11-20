@@ -6,6 +6,7 @@ User-facing changes to MJ-Cliping are listed here.
 
 - Added YouTube metadata updates for already-published clips to the unique-copy workflow. Reconnect YouTube once to grant the expanded `youtube.force-ssl` scope before using it on existing uploads.
 - Synced manual title, description and hashtag edits to already-published YouTube Shorts; failed remote updates now stop the local save and show a reconnect or permission error.
+- Made YouTube 401/403 metadata errors name the exact `youtube.force-ssl` permission needed to edit published Shorts.
 - Slowed unique-copy batches between AI requests and limited prompt examples while keeping full-history duplicate checks on every saved title and description.
 - Limited individual AI provider requests to 45 seconds so an unavailable service can fail over without leaving metadata work blocked for several minutes.
 - Added AI provider failover that skips profiles in cooldown and promotes a successful, opted-in independent backup for later requests.

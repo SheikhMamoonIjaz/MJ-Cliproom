@@ -50,3 +50,19 @@ assert request["snippet"] == {
 assert "youtube.force-ssl" in accounts.YT_SCOPES
 print("PASS updating published metadata preserves the video's category and language")
 print("PASS expanded YouTube edit scope is requested on reconnect")
+
+def denied_put(url, *, params, json, headers, timeout):
+    return Reply(403, {"error": {"code": 403, "message": "insufficientPermissions"}})
+
+with patch.object(accounts, "_yt_token", return_value="test-token"), \
+        patch.object(accounts.httpx, "get", side_effect=get), \
+        patch.object(accounts.httpx, "put", side_effect=denied_put):
+    try:
+        accounts.youtube_update_metadata(
+            {"id": "yt_test", "platform": "youtube"}, "abcdefghijk", "A different clip title",
+            "A unique description for this specific clip.", ["#GTA6", "#Shorts"])
+    except ValueError as error:
+        assert "Settings → Connected Apps" in str(error) and "youtube.force-ssl" in str(error)
+    else:
+        raise AssertionError("A rejected metadata permission did not provide reconnect instructions.")
+print("PASS YouTube metadata permission errors explain the exact reconnect scope")
