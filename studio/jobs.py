@@ -239,16 +239,18 @@ def post_metadata(job, clip, overrides=None) -> dict:
 
     title = str(values.get("title") or "").strip()
     if title.lower() in _GENERIC_POST_TITLES or _is_old_generated_text(title, source):
-        title = draft["title"][:100]
+        title = draft["title"][:brain.POST_TITLE_MAX_CHARS]
     else:
-        title = brain._post_text(title, source, job.get("uploader", ""), limit=100)[:100] or draft["title"][:100]
+        title = brain._post_text(title, source, job.get("uploader", ""),
+                                 limit=brain.POST_TITLE_MAX_CHARS)[:brain.POST_TITLE_MAX_CHARS] or draft["title"][:brain.POST_TITLE_MAX_CHARS]
 
     description = str(values.get("description") or "").strip()
     # Real descriptions can use words such as "gameplay moment". Replace only
     # the old canned copy; otherwise clean and preserve the saved paragraphs.
     old_description = re.match(r"^A gameplay moment from .+?, captured at \d{1,2}:\d{2}", description, re.I)
     description = (draft["description"] if old_description else
-                   brain._post_description(description, source, job.get("uploader", "")) or draft["description"])
+                   brain._post_description(description, source, job.get("uploader", ""),
+                                           brain.POST_DESCRIPTION_MAX_CHARS) or draft["description"])
     raw_tags = values.get("hashtags")
     tags = []
     if isinstance(raw_tags, list):
@@ -591,7 +593,8 @@ def clip_changes(job, clip, changes):
         raise ValueError("A clip can be 3 to 180 seconds long.")
     for k in ("hook", "title", "description", "style", "layout"):
         if k in changes:
-            new[k] = str(changes[k])[:{"hook": 60, "title": 100, "description": 2000}.get(k, 20)]
+            new[k] = str(changes[k])[:{"hook": 60, "title": brain.POST_TITLE_MAX_CHARS,
+                                       "description": brain.POST_DESCRIPTION_MAX_CHARS}.get(k, 20)]
     if new.get("style") not in render.STYLES:
         new["style"] = DEFAULTS["style"]
     if new.get("layout") == "split":
@@ -697,9 +700,9 @@ def update_metadata(job, cid: str, changes: dict):
         if clip.get("status") in ("queued", "rendering"):
             raise RuntimeError("Wait for this clip to finish before saving its post text.")
         if "title" in allowed:
-            clip["title"] = str(allowed["title"])[:100]
+            clip["title"] = str(allowed["title"])[:brain.POST_TITLE_MAX_CHARS]
         if "description" in allowed:
-            clip["description"] = str(allowed["description"])[:2000]
+            clip["description"] = str(allowed["description"])[:brain.POST_DESCRIPTION_MAX_CHARS]
         if "hashtags" in allowed:
             if not isinstance(allowed["hashtags"], str):
                 raise ValueError("Enter hashtags as text.")

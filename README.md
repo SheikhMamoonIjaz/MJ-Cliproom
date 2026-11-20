@@ -8,7 +8,7 @@ MJ-Cliping is a local gaming clip editor and YouTube Shorts scheduler. Import a 
 
 - Find highlights in local gameplay recordings and supported replays. Use AI for transcript-based selection or review picks based on activity signals.
 - Render 9:16 Shorts. The streamer layout puts gameplay above a detected facecam and places captions near the bottom. Re-render older clips to export them in the new layout.
-- Generate ranked YouTube titles, descriptions of at least 1,500 characters, and relevant hashtags using an active LLM profile. Add recent YouTube gaming results as research context and inspect the source links in the editor.
+- Generate ranked, clip-specific YouTube titles (up to 70 characters), concise descriptions (35–250 characters), and relevant hashtags using an active LLM profile. Add recent YouTube gaming results as research context and inspect the source links in the editor.
 - Generate clip-specific post text that avoids titles and descriptions already saved for the channel. A separate opted-in provider can take over when the active AI service is unavailable or cooling down.
 - Post a single rendered clip through the connected YouTube channel. Select up to 200 clips for a batch with a 10-minute interval after each successful upload. See [YouTube limits and scheduling](docs/YOUTUBE_AUTOMATION.md#4-review-the-queue-and-limits).
 - The Autopilot Posts batch scheduler probes each video file before queueing and only accepts vertical 9:16 clips up to three minutes. Existing scheduled rows are reused when a batch is rebuilt.

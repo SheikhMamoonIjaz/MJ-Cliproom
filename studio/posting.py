@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 import re
 
-from . import accounts, alerts, config, creators, ctx, jobs, live, media
+from . import accounts, alerts, brain, config, creators, ctx, jobs, live, media
 
 _lock = threading.RLock()
 _wake = threading.Event()
@@ -209,11 +209,15 @@ def youtube_batch(items, account_id="", visibility=None, delay=0):
                     raise ValueError("Enter title, description and hashtags as post text.")
                 if isinstance(overrides, dict):
                     overrides = dict(overrides)
+                    if "title" in overrides:
+                        overrides["title"] = brain.validate_post_title(overrides["title"])
+                    if "description" in overrides:
+                        overrides["description"] = brain.validate_post_description(overrides["description"])
                     if isinstance(overrides.get("hashtags"), str):
                         overrides["hashtags"] = overrides["hashtags"].replace(",", " ").split()
                 meta = jobs.post_metadata(job, clip, overrides)
-                if len(meta["description"]) < 1500:
-                    raise ValueError("Write a clip-specific description of at least 1,500 characters before queueing this Short.")
+                brain.validate_post_title(meta["title"])
+                brain.validate_post_description(meta["description"])
                 title_key, description_key = _text_key(meta["title"]), _text_key(meta["description"])
                 if not title_key or not description_key or title_key in used_titles or description_key in used_descriptions:
                     raise ValueError("This channel already has that title or description. Generate fresh post text first.")
@@ -293,9 +297,16 @@ def schedule_youtube_batch(items, account_id="", visibility="private"):
                 spec = media.probe(path, require_audio=False)
                 if spec["width"] * 16 != spec["height"] * 9 or spec["duration"] > 180:
                     raise ValueError("Re-make this clip as a 9:16 Short of three minutes or less before scheduling.")
-                metadata = jobs.post_metadata(job, clip, item.get("metadata"))
-                if len(metadata["description"]) < 1500:
-                    raise ValueError("Write a clip-specific description of at least 1,500 characters before scheduling this Short.")
+                overrides = item.get("metadata")
+                if isinstance(overrides, dict) and ("title" in overrides or "description" in overrides):
+                    overrides = dict(overrides)
+                    if "title" in overrides:
+                        overrides["title"] = brain.validate_post_title(overrides["title"])
+                    if "description" in overrides:
+                        overrides["description"] = brain.validate_post_description(overrides["description"])
+                metadata = jobs.post_metadata(job, clip, overrides)
+                brain.validate_post_title(metadata["title"])
+                brain.validate_post_description(metadata["description"])
                 title_key, description_key = _text_key(metadata["title"]), _text_key(metadata["description"])
                 if not title_key or not description_key or title_key in used_titles or description_key in used_descriptions:
                     raise ValueError("This channel already has that title or description. Generate fresh post text first.")

@@ -11,10 +11,11 @@ User-facing changes to MJ-Cliping are listed here.
 - Limited individual AI provider requests to 45 seconds so an unavailable service can fail over without leaving metadata work blocked for several minutes.
 - Added AI provider failover that skips profiles in cooldown and promotes a successful, opted-in independent backup for later requests.
 - Added clip-specific, original title and description generation against existing channel copy. Metadata saves and YouTube scheduling reject repeated titles or descriptions.
+- Kept Shorts copy concise: titles are capped at 70 characters and descriptions at 250, grounded in the clip and unique across the channel.
 - Added a dashboard action to regenerate unique copy for waiting clips and a batch action that reuses scheduled rows, verifies each file is vertical 9:16 and schedules accepted clips in ten-minute slots.
 - Reduced batch metadata prompt size, avoids redundant research calls, paces requests and pauses the batch when all configured providers are cooling down.
 - Kept stream names, source links and timestamps out of YouTube descriptions; source details remain available in the clip record.
-- Prevented short, reused or duplicate copy from being saved or queued for YouTube Shorts; descriptions must be at least 1,500 characters.
+- Replaced the earlier long-description requirement with short, clip-specific copy checks for editing, AI drafts and scheduling.
 - Cached the Autopilot Posts review data briefly to reduce repeated file and queue reads.
 - Reordered Settings so AI, connected accounts, Autopilot, appearance and storage are easier to reach.
 - Kept uploads private by default. Platform quotas, failed clip renders and rights checks still apply.
@@ -31,7 +32,7 @@ User-facing changes to MJ-Cliping are listed here.
 
 - Added Light, Dark, and System themes in **Settings → Appearance**. The browser remembers your selection.
 - Updated the vertical Short layout to put a detected streamer camera under gameplay and captions near the bottom. Re-render an existing clip to apply the new layout.
-- Added YouTube topic research for AI post text. The editor shows recent gaming search references and lets you review an original title, a description of at least 1,500 characters, and relevant hashtags.
+- Added YouTube topic research for AI post text. The editor shows recent gaming search references and lets you review an original title, description, and relevant hashtags.
 - Added direct posting to a chosen YouTube channel and scheduling for selections of up to 200 clips. The queue spaces successful uploads in each batch by at least 10 minutes and shows skipped, failed, and completed entries. Visibility starts at Private and YouTube limits apply.
 - Updated the installation and YouTube setup guides and added a [tournament workflow](docs/TOURNAMENT_WORKFLOW.md) for editors and agents.
 

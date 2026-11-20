@@ -2701,19 +2701,19 @@ function renderAutopilotCard(c) {
           <div class="ap-field">
             <label>
               <span>YouTube Shorts Title (Hook-Optimized)</span>
-              <small class="hint" id="char-title-${esc(c.jid)}-${esc(c.cid)}">${(c.title || '').length} / 100</small>
+              <small class="hint" id="char-title-${esc(c.jid)}-${esc(c.cid)}">${(c.title || '').length} / 70</small>
             </label>
-            <input class="ap-title-input" value="${esc(c.title || '')}" maxlength="100" 
-              oninput="$('#char-title-${esc(c.jid)}-${esc(c.cid)}').textContent = this.value.length + ' / 100'">
+            <input class="ap-title-input" value="${esc(c.title || '')}" maxlength="70"
+              oninput="$('#char-title-${esc(c.jid)}-${esc(c.cid)}').textContent = this.value.length + ' / 70'">
           </div>
 
           <div class="ap-field">
             <label>
               <span>Meta Description & Call to Action</span>
-              <small class="hint" id="char-desc-${esc(c.jid)}-${esc(c.cid)}">${(c.description || '').length} / 2000</small>
+              <small class="hint" id="char-desc-${esc(c.jid)}-${esc(c.cid)}">${(c.description || '').length} / 250</small>
             </label>
-            <textarea class="ap-desc-input" maxlength="2000" rows="3"
-              oninput="$('#char-desc-${esc(c.jid)}-${esc(c.cid)}').textContent = this.value.length + ' / 2000'">${esc(c.description || '')}</textarea>
+            <textarea class="ap-desc-input" maxlength="250" rows="3"
+              oninput="$('#char-desc-${esc(c.jid)}-${esc(c.cid)}').textContent = this.value.length + ' / 250'">${esc(c.description || '')}</textarea>
           </div>
 
           <div class="ap-field">
@@ -3217,8 +3217,8 @@ async function openMultiPlatformModal() {
   const dlg = $("#formdlg");
   dlg.innerHTML = `<div class="dlg" style="max-width:560px"><h2>${ic("send")} Multi-Platform Posting Formatter</h2>
     <p class="help">Format your post text for YouTube Shorts, TikTok, and Instagram Reels.</p>
-    <label class="f">Clip title<input id="mp_title" maxlength="100"></label>
-    <label class="f">Description<textarea id="mp_desc" rows="3" maxlength="2000"></textarea></label>
+    <label class="f">Clip title<input id="mp_title" maxlength="70"></label>
+    <label class="f">Description<textarea id="mp_desc" rows="3" maxlength="250"></textarea></label>
     <label class="f">Hashtags<input id="mp_tags"></label>
     <div class="row" style="margin:10px 0"><button class="btn sm primary" id="mp_gen">Format for All Platforms</button></div>
     <div id="mp_output"></div>
@@ -3853,8 +3853,8 @@ function drawClipDlg(full) {
         <div class="row"><button class="btn sm primary" data-act="titlegenerate" ${D.generating ? "disabled" : ""}>${D.generating ? "Generating…" : "Generate AI post text"}</button></div>
         <p id="metaresult" class="hint" role="status">${D.generating ? "Researching and writing drafts…" : "Uses captions, scene notes and recent YouTube search when available."}</p>
         <div id="titleideas">${titleIdeasHtml()}</div>
-        <label class="f">Title<input data-f="title" value="${esc(c.title || "Gameplay clip")}"></label>
-        <label class="f">Description<textarea data-f="description" rows="6" maxlength="2000">${esc(c.description || "")}</textarea></label>
+        <label class="f">Title<input data-f="title" maxlength="70" value="${esc(c.title || "Gameplay clip")}"></label>
+        <label class="f">Description<textarea data-f="description" rows="4" maxlength="250">${esc(c.description || "")}</textarea></label>
         <label class="f">Hashtags<input data-f="hashtags" value="${esc((c.hashtags || []).map(h => "#" + h).join(" "))}"></label>
         <button class="btn sm" data-act="savemeta">Save post text</button>
         ${j.source_deleted ? '<p class="hint">The original video was deleted. Download it again before editing or re-rendering this clip.</p>' : ""}

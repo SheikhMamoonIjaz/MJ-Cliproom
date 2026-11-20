@@ -227,7 +227,7 @@ def run_editor(client, root):
     from studio import youtube_research
     metadata_path = f"/api/jobs/{gameplay_id}/clips/{highlight['id']}"
     notes = "The driver takes the final turn and avoids the barrier."
-    fixture = {"title": "The Final Turn Changes the Race", "description": ("Close racing at the final corner. " * 48).strip(),
+    fixture = {"title": "The Final Turn Changes the Race", "description": "The driver holds a tight line through the final turn and avoids the barrier. Would you risk that move?",
                "hashtags": ["GTARacing", "RacingClips", "FinalTurn"], "evidence": "avoids the barrier"}
     research = {"status": "researched", "sources": [{"title": "Racing the last corner"}]}
     with patch.object(jobs, "editable_captions", return_value=[]), \
@@ -238,12 +238,15 @@ def run_editor(client, root):
                 error = client.post(metadata_path + suffix, json={"count": 1, "notes": notes})
                 assert error.status_code == 502 and "provider unavailable" in error.json()["detail"], error.text
         fabricated = {**fixture, "title": "The Driver Won", "evidence": "wins the championship"}
-        with patch.object(brain, "ask_ai", side_effect=[([fabricated, fixture], "test-model", 4),
+        too_short = {**fixture, "title": "Too Short Description", "description": "GTA clip"}
+        too_long = {**fixture, "title": "Too Long Description", "description": "GTA detail. " * 30}
+        with patch.object(brain, "ask_ai", side_effect=[([fabricated, too_short, too_long, fixture], "test-model", 4),
                                                       RuntimeError("provider unavailable")]):
             result = client.post(metadata_path + "/metadata", json={"count": 2, "notes": notes}).json()
             assert result["count"] == 1 and result["warning"] and result["model"] == "test-model", result
             assert result["ideas"][0]["title"] == fixture["title"] and result["ideas"][0]["hashtags"] == fixture["hashtags"]
-            assert len(result["ideas"][0]["description"]) >= 1500
+            assert len(result["ideas"][0]["title"]) <= 70
+            assert 35 <= len(result["ideas"][0]["description"]) <= 250
     print("PASS all AI post routes expose provider errors and retain genuine drafts with supporting scene notes")
 
     scan_job = {"options": {"max_clips": 2, "min_len": 5, "max_len": 20}}

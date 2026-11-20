@@ -11,6 +11,25 @@ import numpy as np
 from . import ai, config, usage, roman
 
 WINDOW_SEC, OVERLAP_SEC = 15 * 60, 60
+POST_TITLE_MAX_CHARS = 70
+POST_DESCRIPTION_MIN_CHARS = 35
+POST_DESCRIPTION_MAX_CHARS = 250
+
+
+def validate_post_description(text):
+    """Keep YouTube post copy short enough to read and useful enough to be specific."""
+    value = str(text or "").strip()
+    if not POST_DESCRIPTION_MIN_CHARS <= len(value) <= POST_DESCRIPTION_MAX_CHARS:
+        raise ValueError("Keep the clip-specific description between 35 and 250 characters.")
+    return value
+
+
+def validate_post_title(text):
+    """Keep Shorts titles brief and within the channel's copy policy."""
+    value = str(text or "").strip()
+    if not value or len(value) > POST_TITLE_MAX_CHARS:
+        raise ValueError("Keep the clip-specific title between 1 and 70 characters.")
+    return value
 
 SCHEMA = {
     "type": "ARRAY",
@@ -466,14 +485,14 @@ def gameplay_post(title, start=0, end=0, transcript="", use_ai=False, clip_index
     description = _GAMEPLAY_DESCRIPTIONS[offset].format(game=game.title() if game == "gaming" else game)
     if index > len(_GAMEPLAY_TITLES):
         title_text = f"{title_text} · Clip {index}"
-    draft = {"title": title_text[:100], "description": description[:2000], "hashtags": tags}
+    draft = {"title": title_text[:POST_TITLE_MAX_CHARS], "description": description[:2000], "hashtags": tags}
     if not use_ai or len(str(transcript or "").split()) < 5:
         return draft
     prompt = (
         "Write an editable, properly themed YouTube Shorts title, concise description, and relevant hashtags for this gaming clip. "
         "Theme the title to match what actually happens in the transcript: reactions/surprises ('His Reaction When This Happened'), "
         "secret places/discoveries ('The Secret Spot Nobody Knew About'), or clutches/fails ('He Regretted Doing This Instantly'). "
-        "Keep the title under 75 characters, punchy and clickable without being fake clickbait. "
+        "Keep the title under 70 characters, punchy and clickable without being fake clickbait. "
         "The description should be 1-2 sentences under 250 characters ending with an engaging question. "
         "Use only details supported by the supplied clip transcript and optional on-screen hook. You cannot see the footage. "
         "Do not invent wins, kills, records, characters, locations, outcomes, or reactions. Never include a stream title, "
@@ -485,10 +504,10 @@ def gameplay_post(title, start=0, end=0, transcript="", use_ai=False, clip_index
     try:
         out, _, _ = ask_ai(prompt, purpose="Gameplay: draft post text")
         item = _tidy(out[0], 0, 0)
-        generated_title = _post_text(item["title"], limit=100)
+        generated_title = _post_text(item["title"], limit=POST_TITLE_MAX_CHARS)
         generated_description = _post_text(item["description"], limit=2000)
         if generated_title and generated_description:
-            draft.update(title=generated_title[:100], description=generated_description,
+            draft.update(title=generated_title[:POST_TITLE_MAX_CHARS], description=generated_description,
                          hashtags=list(dict.fromkeys(item["hashtags"] + tags))[:6])
     except Exception:  # noqa: BLE001 - the grounded local draft remains available if the provider fails
         pass
@@ -534,10 +553,11 @@ def _seo_ideas(items, title, uploader, context, ideas, count, video_format,
             continue
         if not isinstance(item.get("title"), str) or not isinstance(item.get("description"), str):
             continue
-        title_text = _post_text(item.get("title"), title, uploader, 100)
+        title_text = _post_text(item.get("title"), title, uploader, POST_TITLE_MAX_CHARS)
         description = _post_description(item.get("description"), title, uploader, 1950)
         title_key, description_key = _words_key(title_text), _words_key(description)
-        if not title_text or len(description) < 1500 or title_key in seen_titles or description_key in seen_descriptions:
+        if (not title_text or not POST_DESCRIPTION_MIN_CHARS <= len(description) <= POST_DESCRIPTION_MAX_CHARS
+                or title_key in seen_titles or description_key in seen_descriptions):
             continue
         if title_key in {"clip", "untitled", "untitled clip", "gameplay clip", "manual clip"}:
             continue
@@ -601,9 +621,9 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
         "Use only the supplied transcript and the editor's scene notes for factual statements. You cannot see the footage. "
         "Do not invent reactions, people, locations, achievements, or outcomes; use questions when a detail is uncertain. "
         "Never include stream names, timestamps, uploader names, links, or claims of guaranteed reach. "
-        "Each title must fit within 100 characters. Write each description in English, 1,600–1,850 characters, in short, "
-        "readable paragraphs. Open with the strongest reason to watch, explain the actual clip and relevant gameplay "
-        "context, and close with a genuine viewer question if it fits. For a sparse transcript, discuss viewer choices "
+        "Each title must fit within 70 characters. Write each description in English as 1–2 concise sentences under 250 characters. "
+        "Open with the strongest grounded detail, explain the actual clip, and end with a natural viewer question when it fits. "
+        "For a sparse transcript, discuss viewer choices "
         "or what to listen for rather than inventing plot or repeating filler. Keep each package distinct in prose and angle. "
         "Do not reuse an existing title or description listed below. Choose a fresh, clip-specific angle and write new prose. "
         "Provide 3–5 accurate hashtags without the # sign. Use terms specific to this game's mode, mechanic, challenge "
@@ -642,8 +662,8 @@ def generate_title_ideas(title, uploader, transcript, hook="", references=(), co
         if len(ideas) == count:
             break
     if not ideas:
-        raise RuntimeError("The model returned no complete drafts with a supporting quote and a description of at "
-                           "least 1,500 characters. Try adding a note about the main moment or choosing another model.")
+        raise RuntimeError("The model returned no complete drafts with a supporting quote and a concise description "
+                           "between 35 and 250 characters. Try adding a note about the main moment or choosing another model.")
     if len(ideas) < count and not warning:
         warning = f"{len(ideas)} of {count} drafts met the description, hashtag and evidence checks."
     model = ", ".join(models)

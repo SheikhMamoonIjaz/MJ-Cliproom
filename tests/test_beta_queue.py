@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
         job["clips"].append({"id": "metadata-worker", "file": "ok.mp4", "status": "done",
                              "title": "An old title", "description": "An old description", "hashtags": ["OldTag"]})
         posting._limits.clear()
-    worker_description = ("This unique metadata-worker regression description stays tied to its selected gaming clip. " * 25)
+    worker_description = "The player tests a quick route through the GTA setup and has to adjust. Would you take the same approach?"
     server._UNIQUE_META_TASKS[owner] = {"id": "test-worker", "status": "running", "total": 1,
                                        "completed": 0, "errors": [], "updated_at": time.time()}
     with patch.object(server, "_research_clip_post_ideas", return_value={"ideas": [{
@@ -112,12 +112,12 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
     with ctx.as_user(owner):
         saved_worker = next(c for c in jobs.get(jid)["clips"] if c["id"] == "metadata-worker")
     assert saved_worker["title"] == "Fresh metadata worker regression title"
-    assert len(saved_worker["description"]) >= 1500 and saved_worker["hashtags"] == ["RegressionTag", "Gameplay", "Shorts"]
+    assert 35 <= len(saved_worker["description"]) <= 250 and saved_worker["hashtags"] == ["RegressionTag", "Gameplay", "Shorts"]
     assert isinstance(saved_worker["hashtags"], list) and saved_worker["hashtags"]
     assert server._UNIQUE_META_TASKS[owner]["status"] == "complete"
     print("PASS the unique-copy worker normalizes generated hashtag lists before saving clip metadata")
 
-    published_description = ("This published racing highlight has a distinct scene and a clear payoff. " * 25)
+    published_description = "A clean racing line carries the car through a tight finish. Would you take the same route?"
     published_job = {"id": "published-meta-job", "status": "done", "title": "Test racing session",
                      "source": {"type": "url", "title": "Test racing session"}, "uploader": "",
                      "clips": [{"id": "published-clip", "status": "done", "title": "Old title",
@@ -168,7 +168,7 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
 
     def post_text(cid):
         return {"title": f"{cid.title()} GTA race highlight",
-                "description": (f"{cid} GTA racing gameplay: a distinct moment with a different decision and outcome. " * 28),
+                "description": f"{cid.title()} takes a different line through the GTA race and faces a tight finish. Would you make the same call?",
                 "hashtags": ["GTA6", "Shorts"]}
 
     batch = [{"job": jid, "clip": cid, "metadata": post_text(cid)} for cid in ("second", "missing", "first")]
@@ -183,9 +183,20 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
     oversized = app.post(endpoint, headers=origin, json={**requested,
                            "clips": [{"job": jid, "clip": "missing"}] * 201})
     assert oversized.status_code == 400
+    with ctx.as_user(owner):
+        jobs.get(jid)["clips"].append({"id": "short-description-check", "file": "ok.mp4",
+                                       "status": "done", "title": "Short description check"})
+    short_copy = app.post(endpoint, headers=origin, json={"account": "yt", "clips": [{
+        "job": jid, "clip": "short-description-check", "metadata": {
+            "title": "A concise GTA title", "description": "Too short", "hashtags": "#GTA5"}}]})
+    assert short_copy.json()["queued"] == 0 and "between 35 and 250" in short_copy.json()["skipped"][0]["reason"]
+    long_copy = app.post(endpoint, headers=origin, json={"account": "yt", "clips": [{
+        "job": jid, "clip": "short-description-check", "metadata": {
+            "title": "A second concise GTA title", "description": "GTA detail. " * 30, "hashtags": "#GTA5"}}]})
+    assert long_copy.json()["queued"] == 0 and "between 35 and 250" in long_copy.json()["skipped"][0]["reason"]
     sent = app.post(endpoint, headers=origin, json={
         "account": "yt", "clips": [{"job": jid, "clip": "now", "metadata": {
-            "title": "The last corner", "description": "Close racing. " * 120, "hashtags": "#GTA5 #Shorts"}}]
+            "title": "The last corner", "description": "The final corner leaves almost no room for error. Would you hold the line?", "hashtags": "#GTA5 #Shorts"}}]
     }).json()
     assert sent["queued"] == 1 and abs(sent["posts"][0]["due_at"] - time.time()) < 2
     with ctx.as_user(owner):
@@ -194,7 +205,7 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
                 patch.object(accounts, "youtube_upload", return_value=("remote", "https://www.youtube.com/shorts/remote")) as upload:
             posting._post(single)
         assert single["status"] == "posted" and upload.call_args.args[5] == "private"
-        assert len(upload.call_args.args[3]) >= 1500 and upload.call_args.args[3].count("#Shorts") == 1
+        assert len(upload.call_args.args[3]) < 350 and upload.call_args.args[3].count("#Shorts") == 1
         earlier = next(p for p in posting._mine() if p["id"] == first["id"])
         later = next(p for p in posting._mine() if p["id"] == second["id"])
         earlier["due_at"] = later["due_at"] + 90

@@ -1240,12 +1240,26 @@ def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
     if not clip:
         raise HTTPException(404, "No such clip")
     proposed_values = dict(body)
+    if "title" in proposed_values:
+        try:
+            proposed_values["title"] = brain.validate_post_title(proposed_values["title"])
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+    if "description" in proposed_values:
+        try:
+            proposed_values["description"] = brain.validate_post_description(proposed_values["description"])
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
     hashtags = proposed_values.get("hashtags")
     if isinstance(hashtags, str):
         proposed_values["hashtags"] = hashtags.replace(",", " ").split()
     proposed = jobs.post_metadata(job, clip, proposed_values)
-    if len(proposed["description"]) < 1500:
-        raise HTTPException(400, "Write a clip-specific description of at least 1,500 characters before saving.")
+    try:
+        proposed["title"] = brain.validate_post_title(proposed["title"])
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    if not brain.POST_DESCRIPTION_MIN_CHARS <= len(proposed["description"]) <= brain.POST_DESCRIPTION_MAX_CHARS:
+        raise HTTPException(400, "Keep the clip-specific description between 35 and 250 characters before saving.")
     title_key = brain._words_key(proposed["title"])
     description_key = brain._words_key(proposed["description"])
     for row in _metadata_history(exclude=(jid, cid)):
@@ -3092,8 +3106,8 @@ def _run_unique_metadata(uid, task_id, items, region):
                 metadata = {"title": idea["title"], "description": idea["description"],
                             "hashtags": idea["hashtags"]}
                 proposed = jobs.post_metadata(job, clip, metadata)
-                if len(proposed["description"]) < 1500:
-                    raise ValueError("The generated description is under 1,500 characters; retry this clip.")
+                brain.validate_post_title(proposed["title"])
+                brain.validate_post_description(proposed["description"])
                 with posting._lock:
                     published = [row for row in posting._mine()
                                  if row.get("job") == jid and row.get("clip") == cid
