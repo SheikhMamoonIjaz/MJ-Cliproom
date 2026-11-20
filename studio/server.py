@@ -3099,7 +3099,8 @@ def _run_unique_metadata(uid, task_id, items, region):
                         state["completed"] += 1
                         state["errors"].append({"job": jid, "clip": cid, "message": safe.friendly(exc, 240)})
                         state["updated_at"] = time.time()
-                if isinstance(exc, RuntimeError) and not ai.can_answer():
+                provider_failure = isinstance(exc, RuntimeError) or getattr(exc, "status_code", None) in (502, 503)
+                if provider_failure and not ai.can_answer():
                     waiting_provider = True
                     break
         with _UNIQUE_META_LOCK:
