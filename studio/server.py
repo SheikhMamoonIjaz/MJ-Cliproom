@@ -3072,7 +3072,7 @@ def _run_unique_metadata(uid, task_id, items, region):
                        description_key == brain._words_key(row.get("description")) for row in history):
                     raise ValueError("The model repeated a title or description; retry this clip.")
                 metadata = {"title": idea["title"], "description": idea["description"],
-                            "hashtags": " ".join(f"#{tag}" for tag in idea["hashtags"])}
+                            "hashtags": idea["hashtags"]}
                 proposed = jobs.post_metadata(job, clip, metadata)
                 if len(proposed["description"]) < 1500:
                     raise ValueError("The generated description is under 1,500 characters; retry this clip.")

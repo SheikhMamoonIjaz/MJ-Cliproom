@@ -99,7 +99,23 @@ with tempfile.TemporaryDirectory(prefix="mj-beta-") as data:
         job = jobs.get(jid)
         job["clips"].extend({"id": cid, "file": "ok.mp4", "status": "done", "title": f"GTA racing: {cid}"}
                             for cid in ("first", "second", "now"))
+        job["clips"].append({"id": "metadata-worker", "file": "ok.mp4", "status": "done",
+                             "title": "An old title", "description": "An old description", "hashtags": ["OldTag"]})
         posting._limits.clear()
+    worker_description = ("This unique metadata-worker regression description stays tied to its selected gaming clip. " * 25)
+    server._UNIQUE_META_TASKS[owner] = {"id": "test-worker", "status": "running", "total": 1,
+                                       "completed": 0, "errors": [], "updated_at": time.time()}
+    with patch.object(server, "_research_clip_post_ideas", return_value={"ideas": [{
+            "title": "Fresh metadata worker regression title", "description": worker_description,
+            "hashtags": ["RegressionTag", "Gameplay", "Shorts"]}]}):
+        server._run_unique_metadata(owner, "test-worker", [{"job": jid, "clip": "metadata-worker"}], "US")
+    with ctx.as_user(owner):
+        saved_worker = next(c for c in jobs.get(jid)["clips"] if c["id"] == "metadata-worker")
+    assert saved_worker["title"] == "Fresh metadata worker regression title"
+    assert len(saved_worker["description"]) >= 1500 and saved_worker["hashtags"] == ["RegressionTag", "Gameplay", "Shorts"]
+    assert isinstance(saved_worker["hashtags"], list) and saved_worker["hashtags"]
+    assert server._UNIQUE_META_TASKS[owner]["status"] == "complete"
+    print("PASS the unique-copy worker normalizes generated hashtag lists before saving clip metadata")
     def post_text(cid):
         return {"title": f"{cid.title()} GTA race highlight",
                 "description": (f"{cid} GTA racing gameplay: a distinct moment with a different decision and outcome. " * 28),
