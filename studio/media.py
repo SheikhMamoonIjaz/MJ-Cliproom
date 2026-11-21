@@ -77,6 +77,137 @@ def site_allowed(url: str) -> bool:
     return u.scheme in ("http", "https") and any(host == s or host.endswith("." + s) for s in config.ALLOWED_SITES)
 
 
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "si", "feature", "pp", "fbclid", "gclid", "igshid", "ref", "tt_medium", "tt_content"
+}
+
+
+def normalize_source_url(url: str) -> str:
+    """Normalize and deduplicate supported video and live URLs while preserving essential identifiers."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", raw):
+        raw = "https://" + raw
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    elif host.startswith("m."):
+        host = host[2:]
+    path = re.sub(r"/{2,}", "/", parts.path or "/").rstrip("/") or "/"
+    query_pairs = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=False)
+                   if k.lower() not in _TRACKING_PARAMS]
+    if host in ("youtube.com", "youtu.be"):
+        if host == "youtu.be" and len(path) > 1:
+            vid = path.lstrip("/").split("/")[0]
+            host, path = "www.youtube.com", "/watch"
+            query_pairs = [("v", vid)] + [(k, v) for k, v in query_pairs if k != "v"]
+        elif path.startswith("/shorts/") or path.startswith("/live/"):
+            segs = [s for s in path.split("/") if s]
+            if len(segs) >= 2 and re.fullmatch(r"[\w-]{11}", segs[1]):
+                host, path = "www.youtube.com", "/watch"
+                query_pairs = [("v", segs[1])] + [(k, v) for k, v in query_pairs if k != "v"]
+            else:
+                host = "www.youtube.com"
+        else:
+            host = "www.youtube.com"
+    elif host == "twitch.tv":
+        host = "www.twitch.tv"
+    elif host == "kick.com":
+        host = "kick.com"
+    port = f":{parts.port}" if parts.port and parts.port not in (80, 443) else ""
+    clean_query = urlencode(query_pairs)
+    return urlunsplit((scheme, host + port, path, clean_query, ""))
+
+
+def source_fingerprint(url: str = "", file_path: Path = None) -> str:
+    """Compute a deterministic fingerprint for URL or local file deduplication."""
+    import hashlib
+    if file_path and Path(file_path).is_file():
+        p = Path(file_path)
+        size = p.stat().st_size
+        h = hashlib.sha256(f"file:{size}:".encode("utf-8"))
+        with p.open("rb") as f:
+            h.update(f.read(1024 * 1024))
+            if size > 2 * 1024 * 1024:
+                f.seek(max(0, size - 1024 * 1024))
+                h.update(f.read(1024 * 1024))
+        return h.hexdigest()
+    norm = normalize_source_url(url)
+    return hashlib.sha256(f"url:{norm}".encode("utf-8")).hexdigest() if norm else ""
+
+
+def classify_source(url: str) -> dict:
+    """Resolve and classify a URL before starting work, separating invalid, unsupported, restricted, offline, and expired sources."""
+    from urllib.parse import urlsplit
+    raw = (url or "").strip()
+    if not raw:
+        return {"ok": False, "status": "invalid", "code": "empty_url", "normalized_url": "",
+                "message": "Paste a video link or choose a local video file."}
+    norm = normalize_source_url(raw)
+    try:
+        parsed = urlsplit(norm)
+    except ValueError:
+        return {"ok": False, "status": "invalid", "code": "malformed_url", "normalized_url": norm,
+                "message": "That link is not a valid web address."}
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or "." not in parsed.hostname:
+        return {"ok": False, "status": "invalid", "code": "invalid_scheme", "normalized_url": norm,
+                "message": "Use a full https:// link to a supported video or stream."}
+    if not site_allowed(norm):
+        return {"ok": False, "status": "unsupported", "code": "unsupported_site", "normalized_url": norm,
+                "message": f"Only links from {', '.join(config.ALLOWED_SITES)} are supported on this server."}
+    try:
+        meta = info(norm)
+    except YouTubeBlocked as exc:
+        return {"ok": False, "status": "restricted", "code": "youtube_refused", "normalized_url": norm,
+                "message": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        low = msg.lower()
+        if any(k in low for k in ("private", "members-only", "members only", "age", "sign in", "login", "403", "forbidden", "geo", "country", "copyright", "drm")):
+            return {"ok": False, "status": "restricted", "code": "restricted_access", "normalized_url": norm,
+                    "message": "This video or stream is private, age-restricted, or requires subscriber access."}
+        if any(k in low for k in ("not live", "offline", "is_upcoming", "scheduled", "premiere")):
+            return {"ok": False, "status": "offline", "code": "stream_offline", "normalized_url": norm,
+                    "message": "This channel is currently offline or scheduled for later."}
+        if any(k in low for k in ("404", "not found", "unavailable", "removed", "deleted", "expired", "does not exist")):
+            return {"ok": False, "status": "expired", "code": "source_expired", "normalized_url": norm,
+                    "message": "This replay or video has expired, been deleted, or is no longer available."}
+        return {"ok": False, "status": "invalid", "code": "lookup_failed", "normalized_url": norm,
+                "message": "Could not open that link. Check that it is public and complete."}
+
+    live_status = meta.get("live_status") or ("is_live" if meta.get("is_live") else "not_live")
+    if live_status == "is_upcoming":
+        return {"ok": False, "status": "offline", "code": "stream_upcoming", "normalized_url": norm,
+                "title": meta.get("title") or "", "uploader": meta.get("uploader") or "",
+                "message": "This stream is scheduled and has not started yet."}
+    if meta.get("kind") != "video" or not meta.get("title"):
+        return {"ok": False, "status": "channel_or_playlist", "code": "not_single_video", "normalized_url": norm,
+                "message": "That link is a channel or playlist. Pick a specific replay or start live monitoring."}
+    source_type = "live_url" if meta.get("is_live") or live_status == "is_live" else "replay_url"
+    return {
+        "ok": True,
+        "status": "ready",
+        "code": "ok",
+        "source_type": source_type,
+        "normalized_url": norm,
+        "fingerprint": source_fingerprint(url=norm),
+        "title": meta.get("title") or "",
+        "uploader": meta.get("uploader") or "",
+        "duration": float(meta.get("duration") or 0),
+        "is_live": bool(meta.get("is_live")),
+        "live_status": live_status,
+        "thumbnail": meta.get("thumbnail") or "",
+    }
+
+
 def run(cmd, cwd=None, timeout=3600):
     try:
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
@@ -178,8 +309,10 @@ def youtube_words(url: str):
         i = ydl.extract_info(url, download=False)
         auto = i.get("automatic_captions") or {}
         key = next((k for k in auto if k.endswith("-orig")), None)
-        if not key and i.get("language") in auto:
-            key = i["language"]
+        lang = (i.get("language") or "").strip()
+        if not key and lang:
+            key = (lang if lang in auto else
+                   next((k for k in auto if k.split("-")[0].lower() == lang.split("-")[0].lower()), None))
         track = next((f for f in auto.get(key) or [] if f.get("ext") == "json3" and f.get("url")), None) if key else None
         if not track:
             return None
@@ -188,17 +321,17 @@ def youtube_words(url: str):
 
 
 def youtube_english_words(url: str):
-    """YouTube's English captions of a video spoken in another language: ones a person wrote if there are any,
-    otherwise YouTube's own translation of its transcript. Word list like youtube_words, or None."""
+    """YouTube's English captions of a video spoken in another language: ones a person wrote if there are any.
+    Word list like youtube_words, or None."""
     if not is_youtube(url):
         return None
     import json
     with _youtube_guard(url), _ydl({}) as ydl:
         i = ydl.extract_info(url, download=False)
         tracks = []
-        for group in (i.get("subtitles") or {}, i.get("automatic_captions") or {}):
-            for k in ("en", "en-US", "en-GB"):
-                tracks.append(next((f for f in group.get(k) or [] if f.get("ext") == "json3" and f.get("url")), None))
+        subtitles = i.get("subtitles") or {}
+        for k in ("en", "en-US", "en-GB"):
+            tracks.append(next((f for f in subtitles.get(k) or [] if f.get("ext") == "json3" and f.get("url")), None))
         track = next((t for t in tracks if t), None)
         if not track:
             return None
@@ -301,9 +434,40 @@ def download_audio(url: str, job_dir: Path, on_progress=None) -> Path:
     return _biggest(job_dir, "audio_src")
 
 
+def quarantine_partials(job_dir: Path) -> list:
+    """Move any partial or interrupted download artifacts into job_dir/quarantine for review or resume."""
+    qdir = job_dir / "quarantine"
+    moved = []
+    for partial in list(job_dir.glob("source.*.part")) + list(job_dir.glob("source.*.ytdl")) + list(job_dir.glob("audio_src.*.part")):
+        try:
+            qdir.mkdir(parents=True, exist_ok=True)
+            dest = qdir / partial.name
+            partial.replace(dest)
+            moved.append({"name": dest.name, "size": dest.stat().st_size})
+        except OSError:
+            pass
+    return moved
+
+
+def restore_quarantined_partials(job_dir: Path) -> int:
+    """Restore quarantined partial files back to job_dir before a resumed download attempt."""
+    qdir = job_dir / "quarantine"
+    if not qdir.is_dir():
+        return 0
+    restored = 0
+    for f in list(qdir.glob("*.part")) + list(qdir.glob("*.ytdl")):
+        try:
+            f.replace(job_dir / f.name)
+            restored += 1
+        except OSError:
+            pass
+    return restored
+
+
 def download(url: str, job_dir: Path, height=720, on_progress=None, cancel_event=None) -> Path:
     """The whole video. Used for shorter videos, where this is quicker than fetching pieces."""
     last_report = float("-inf")
+    restore_quarantined_partials(job_dir)
 
     def report(data):
         nonlocal last_report
@@ -317,9 +481,14 @@ def download(url: str, job_dir: Path, height=720, on_progress=None, cancel_event
             return
         last_report = now
         info = data.get("info_dict") or {}
-        on_progress({"track": "audio" if info.get("vcodec") == "none" else "video",
-                     "bytes": data.get("downloaded_bytes") or 0,
-                     "total": data.get("total_bytes") or data.get("total_bytes_estimate")})
+        payload = {"track": "audio" if info.get("vcodec") == "none" else "video",
+                   "bytes": data.get("downloaded_bytes") or 0,
+                   "total": data.get("total_bytes") or data.get("total_bytes_estimate")}
+        if data.get("speed") is not None:
+            payload["speed"] = round(float(data["speed"]), 1)
+        if data.get("eta") is not None:
+            payload["eta"] = max(0, int(data["eta"]))
+        on_progress(payload)
 
     def postprocess(data):
         if on_progress and data.get("status") == "started" and data.get("postprocessor") == "Merger":
@@ -341,6 +510,8 @@ def download(url: str, job_dir: Path, height=720, on_progress=None, cancel_event
         if cancel_event and cancel_event.is_set():
             for partial in list(job_dir.glob("source.*.part")) + list(job_dir.glob("source.*.ytdl")):
                 partial.unlink(missing_ok=True)
+        else:
+            quarantine_partials(job_dir)
         raise
     return _biggest(job_dir, "source")
 
@@ -375,7 +546,8 @@ def probe(path: Path, require_audio=True) -> dict:
     v = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
     if not v:
         raise RuntimeError("This file has no video track.")
-    has_audio = any(s["codec_type"] == "audio" for s in data["streams"])
+    a_stream = next((s for s in data["streams"] if s["codec_type"] == "audio"), None)
+    has_audio = a_stream is not None
     if require_audio and not has_audio:
         raise RuntimeError("This file has no audio track, so there is nothing to transcribe.")
     w, h = int(v["width"]), int(v["height"])
@@ -387,7 +559,9 @@ def probe(path: Path, require_audio=True) -> dict:
     rate = v.get("avg_frame_rate", "0/1").split("/")
     fps = float(rate[0]) / float(rate[1]) if len(rate) == 2 and float(rate[1]) else 0
     return {"width": w, "height": h, "duration": float(data["format"]["duration"]),
-            "has_audio": has_audio, "fps": fps}
+            "has_audio": has_audio, "fps": fps,
+            "vcodec": v.get("codec_name", ""), "acodec": (a_stream or {}).get("codec_name", ""),
+            "pix_fmt": v.get("pix_fmt", "")}
 
 
 def extract_audio(src: Path, wav: Path):
@@ -397,17 +571,38 @@ def extract_audio(src: Path, wav: Path):
          "-af", "aresample=async=1:first_pts=0", "-c:a", "pcm_s16le", str(wav)])
 
 
-def load_audio(wav: Path) -> np.ndarray:
-    data, sr = sf.read(str(wav), dtype="int16")
+def load_audio(wav: Path, start_sec: float = 0.0, end_sec: float = None) -> np.ndarray:
+    start_frame = max(0, int(start_sec * 16000))
+    frames = max(0, int((end_sec - start_sec) * 16000)) if end_sec is not None else -1
+    data, sr = sf.read(str(wav), dtype="int16", start=start_frame, frames=frames)
     assert sr == 16000
     return data
 
 
 def loudness_per_second(audio: np.ndarray) -> np.ndarray:
-    """RMS level in dB for each second of audio."""
+    """RMS level in dB for each second of audio (accepts an array or a Path to a 16kHz WAV file for 12h streams)."""
+    if isinstance(audio, (str, Path)):
+        return loudness_from_wav(Path(audio))
     n = len(audio) // 16000
     if n == 0:
         return np.zeros(1, dtype=np.float32)
     x = audio[: n * 16000].reshape(n, 16000).astype(np.float32) / 32768.0
     rms = np.sqrt((x ** 2).mean(axis=1) + 1e-10)
     return (20 * np.log10(rms)).astype(np.float32)
+
+
+def loudness_from_wav(wav: Path, start_sec: float = 0.0, end_sec: float = None) -> np.ndarray:
+    """Stream a WAV file in 60-second chunks so a 12-hour recording uses <5 MB of RAM instead of gigabytes."""
+    start_frame = max(0, int(start_sec * 16000))
+    info = sf.info(str(wav))
+    stop_frame = min(info.frames, int(end_sec * 16000)) if end_sec is not None else info.frames
+    if stop_frame <= start_frame:
+        return np.zeros(1, dtype=np.float32)
+    chunks = []
+    for block in sf.blocks(str(wav), blocksize=16000 * 60, start=start_frame, stop=stop_frame, dtype="int16"):
+        sec = len(block) // 16000
+        if sec > 0:
+            x = block[: sec * 16000].reshape(sec, 16000).astype(np.float32) / 32768.0
+            rms = np.sqrt((x ** 2).mean(axis=1) + 1e-10)
+            chunks.append((20 * np.log10(rms)).astype(np.float32))
+    return np.concatenate(chunks) if chunks else np.zeros(1, dtype=np.float32)

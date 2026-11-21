@@ -1,10 +1,53 @@
 # Changelog
 
-User-facing changes to MJ-Cliping are listed here.
+User-facing changes to MJ Cliproom are listed here.
 
-## 1.3.2 — 2026-11-20
+## 2.0.0 — 2026-11-22
 
-- Added YouTube metadata updates for already-published clips to the unique-copy workflow. Reconnect YouTube once to grant the expanded `youtube.force-ssl` scope before using it on existing uploads.
+- **Six-Section All-in-One Workstation (`web/index.html`, `web/timeline.js`):**
+  - Reorganized navigation around **Home**, **All Videos and Live**, **Editor**, **Summaries**, **Publishing**, and **Settings** while preserving creator workspaces, live HUD monitoring, and the **MJ Plays GTA** workflow.
+  - Added multi-genre **Content Presets** (`mj_gta`, `gaming`, `podcast`, `interview`, `tutorial`, `highlights`) to tailor candidate scoring signals, hook styles, and metadata language across gaming streams, podcasts, interviews, tutorials, and creator highlights.
+  - Fixed responsive layout and text-overlap edge cases across `320px`, `390px`, `768px`, `1024px`, and desktop viewports with `min-width: 0`, `overflow-wrap: anywhere`, and auto-fitting layout tiles.
+- **Canonical 9:16 Vertical Rendering & Non-Overlapping Safe Zones (`studio/render.py`, `studio/jobs.py`):**
+  - Restored **Fit with blur (`layout="blur"`)** as a first-class default `9:16` (`1080×1920`) composition alongside **9:16 Full-screen crop (`crop`)** and **Streamer facecam stack (`auto`/`stack`)**, with post-render `1080×1920` FFprobe verification.
+  - Added `render.solve_safe_layout()` to guarantee non-overlapping bounding boxes for brand headers, corner watermarks, hook banners, lower-thirds, and captions across `bottom`, `middle`, and `top` placements.
+  - Added translucent rounded caption backing pills on ASS Layer 0 (`Style: Box`), 7 original FFmpeg/ASS motion presets (`none`, `highlight`, `kinetic`, `lower_third`, `punch_zoom`, `swipe_reveal`, `parallax`), and companion `.vtt` (`WebVTT`) subtitle export alongside `.srt` and clean MP4 exports.
+- **Sensitive AI Provider Failover & Bounded 3×4 Retries (`studio/ai.py`, `studio/brain.py`):**
+  - Implemented `ai.execute_with_failover()` trying up to **3 eligible, distinct providers per round** across up to **4 bounded rounds** (`0s, 5s, 10s, 15s` inter-round delays; max 12 requests per operation).
+  - Added `Retry-After` header parsing and per-provider cooldown obedience, immediate `requires_config` marking for `401/403` authentication or model configuration errors, 1-retry malformed JSON recovery within the same operation budget, per-provider concurrency semaphores, `allow_clip_text` privacy enforcement, and `AIWaitError` persisted waiting state.
+- **Video Summarizer, Clip Intelligence & Near-Duplicate Copy Guard (`studio/summarize.py`, `studio/brain.py`):**
+  - Added `studio/summarize.py` and the **Summaries** workstation (`GET /api/summaries`, `GET/POST /api/jobs/{jid}/summaries`, `GET /api/jobs/{jid}/summaries/{sid}/export?fmt=md|txt|json`) supporting whole-source, time-range, and clip-set summaries with 20-minute batch reconciliation, version history, clickable jump-to-play timecodes, and coverage/inaudible/uncertainty flags without mutating `words.json`.
+  - Extended clip candidates with `hook`, `setup`, `payoff`, `evidence`, `standalone_reason`, and `source_relevance_score`, plus overlap and semantic similarity deduplication (`brain.is_similar_candidate`) and trigram Jaccard near-duplicate title/description detection (`brain.is_near_duplicate_copy`).
+- **Intake Classification, Debounced Live Monitoring & 12-Hour Recordings (`studio/media.py`, `studio/live.py`, `studio/jobs.py`):**
+  - Added `media.normalize_source_url()`, `media.source_fingerprint()`, and `media.classify_source()` (`POST /api/sources/resolve`) to distinguish `invalid`, `unsupported`, `restricted`, `offline`, `expired`, `channel_or_playlist`, `live_url`, and `replay_url` sources.
+  - Added `live.verify_live_transition()` with configurable debounce checks and start lock to prevent duplicate live recordings on transient signals.
+  - Ported spoken-language auto-caption track resolution (`media.youtube_words`), streaming WAV loudness analysis (`media.loudness_from_wav` using `sf.blocks()` for <5 MB RAM on 12-hour recordings), Windows atomic `job.json` save retries (`jobs._write_job`), and quarantined partial download isolation (`media.quarantine_partials`).
+- **9-Stage Publishing Pipeline & 7 Distinct Statuses (`studio/posting.py`):**
+  - Added `PIPELINE_STAGES`, `idempotency_key()`, `display_status()` (`Scheduled`, `Uploading`, `Processing`, `Public`, `Private`, `Held`, `Failed`), pre-enqueue eligibility verification (`POST /api/publishing/check-eligibility`), and Hold/Approve endpoints (`POST /api/posts/{pid}/hold`, `POST /api/posts/{pid}/approve`).
+- **Idempotent 1.3.2 → 2.0.0 Migration & Original SVG Graphics (`studio/migrate.py`, `web/brand/`):**
+  - Added `studio/migrate.py` with pre-migration backup snapshots (`data/backups/pre-2.0.0-<timestamp>/`), idempotent schema upgrades, and rollback restoration while keeping all existing private/held items private or held.
+  - Added original SVG diagrams (`mj-hero-banner.svg`, `mj-pipeline-diagram.svg`, `mj-layout-comparison.svg`) and updated Windows installer/shortcut scripts.
+
+## 1.3.2 — 2026-11-22
+
+- **Live Studio Render Presets (`studio_presets.json` & `ffmpeg` pipeline):**
+  - Connected Map & Location Overlays, Custom Intro/Outro Branding, Corner Watermarks, ASS Caption Word-Group Limits (1–6 words), Reaction Auto-Zoom, and Silence Trimming directly to the server (`GET/POST /api/v12/presets`) and `studio/render.py` so configured presets burn directly into rendered 9:16 Shorts.
+- **YouTube Performance & Viral Feedback Loop (`/api/v12/top-performers`):**
+  - Added the **Top Performers & Viral Loop** dashboard ranking published Shorts, top hooks, top streamers, and best publishing hours by live YouTube view statistics.
+  - Automatically feeds your highest-viewed hook styles back into `studio/brain.py` as style references when generating new AI title and metadata drafts.
+- **Peak-Hour Publishing Windows & Multi-Platform Cross-Posting:**
+  - Added configurable active upload hours (`publishing_window` in `studio/posting.py`) so 24/7 Autopilot continues recording and rendering around the clock while holding overnight uploads until daytime peak Shorts traffic.
+  - Added 1-click **Multi-Platform Staggered Cross-Posting** (`/api/v12/autopilot-posts/cross-post`) to queue ready Shorts across connected YouTube, Instagram Reels, and TikTok accounts.
+- **Silence Trimmer & Loading-Screen Guard (`/api/v12/quality-guard`):**
+  - Added `trim_dead_air()` in `studio/render.py` to automatically trim leading and trailing dead air (> 1.2s) around spoken words with configurable speech padding, plus a 1-click clip scanner and bulk trimmer.
+- **Auto-Storage Retention & Raw Source Cleanup (`/api/v12/storage-cleanup`):**
+  - Added configurable retention rules (24h / 48h / 72h / 7d) and 1-click cleanup to purge large raw source recordings after clips finish rendering while preserving all rendered 9:16 Shorts and captions.
+- **Custom Branding & Per-Channel Watermarks:**
+  - Added customizable intro/outro brand title cards, corner watermark text, 4-corner positioning (`top-left`, `top-right`, `bottom-left`, `bottom-right`), and adjustable opacity (`15–100%`) in `studio/render.py`.
+- **UI/UX, Dark-Mode & Reliability Polish:**
+  - Replaced deprecated FastAPI startup hooks with `lifespan`, fixed user-scoped job queries across all v12 endpoints, aligned all banners, status pills, countdown timers, and hover states to the Light/Dark palette tokens without shadows, preserved search input focus in Autopilot Posts, and replaced browser `prompt()`/`confirm()` dialogs with in-app modals.
+- **Unique Shorts Metadata & Published YouTube Sync:**
+  - Added YouTube metadata updates for already-published clips to the unique-copy workflow. Reconnect YouTube once to grant the expanded `youtube.force-ssl` scope before using it on existing uploads.
 - Synced manual title, description and hashtag edits to already-published YouTube Shorts; failed remote updates now stop the local save and show a reconnect or permission error.
 - Made YouTube 401/403 metadata errors name the exact `youtube.force-ssl` permission needed to edit published Shorts.
 - Slowed unique-copy batches between AI requests and limited prompt examples while keeping full-history duplicate checks on every saved title and description.

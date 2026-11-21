@@ -11,9 +11,12 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -27,7 +30,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from . import admin as admins
 from . import account, load
 from . import (accounts, ai, alerts, auth, autopilot, brain, config, creators, ctx, db, editor, jobs, live, media,
-               music, posting, profiles, render, safe, transcribe, usage)
+               migrate, music, posting, profiles, render, safe, summarize, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
 
@@ -39,7 +42,15 @@ def _quiet(fn):
         print(f"  {e}", flush=True)
 
 
-app = FastAPI(title="MJ Cliproom", docs_url=None, redoc_url=None, openapi_url=None)
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    import anyio.to_thread
+    anyio.to_thread.current_default_thread_limiter().total_tokens = int(config.env("PEAKCUT_REQUEST_THREADS", "64"))
+    _startup()
+    yield
+
+
+app = FastAPI(title="MJ Cliproom", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
 WEB = config.ROOT / "web"
 OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
 PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
@@ -51,7 +62,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 
        "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
-VERSION = "1.3.2"
+VERSION = "2.0.0"
 BOOT = secrets.token_hex(8)     # part of every sync token, so pages reload their data after a restart
 _AUTOPILOT_CLIP_CACHE = {}
 _AUTOPILOT_CLIP_CACHE_LOCK = threading.RLock()
@@ -59,16 +70,10 @@ _UNIQUE_META_LOCK = threading.RLock()
 _UNIQUE_META_TASKS = {}
 
 
-@app.on_event("startup")
-async def _more_threads():
-    import anyio.to_thread
-    anyio.to_thread.current_default_thread_limiter().total_tokens = int(config.env("PEAKCUT_REQUEST_THREADS", "64"))
-
-
-@app.on_event("startup")
 def _startup():
     try:
         db.init()
+        migrate.migrate(create_backup=True)
     except Exception:
         logging.getLogger("mjcliproom").exception("MJ Cliproom could not open its database. Check the data folder and try again.")
         raise
@@ -83,6 +88,7 @@ def _startup():
     live.start()
     posting.start()
     autopilot.start()
+    _start_autonomous()
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
 
@@ -588,6 +594,8 @@ def status(request: Request):
             "tour": not accounts.settings()["tour_done"], "posting_paused": accounts.settings()["paused"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER, "daily_quota": config.DAILY_VIDEO_QUOTA,
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS,
+            "motion_presets": render.MOTION_PRESETS,
+            "content_presets": {k: v["label"] for k, v in brain.CONTENT_PRESETS.items()},
             "music": music.list_tracks()}
 
 
@@ -1206,9 +1214,17 @@ def _research_clip_post_ideas(job, clip, region, count=10, *, video_format="shor
         research = (youtube_research.for_clip(source, uploader, notes.strip() + " " + transcript[:2200], region)
                     if include_research else {"status": "not_requested", "region": region,
                                               "query": "", "sources": [], "message": "Batch metadata uses the clip transcript directly."})
+        refs = list(research["sources"])
+        try:
+            perf = _compute_top_performers()
+            for row in (perf.get("top_hooks") or [])[:3]:
+                if row.get("views", 0) > 0 and row.get("hook"):
+                    refs.append({"title": row["hook"], "channel": "Channel top performer"})
+        except Exception:
+            pass
         drafts = brain.generate_title_ideas(
             source, uploader, transcript, clip.get("hook") or "",
-            references=research["sources"], count=count, video_format=video_format, notes=notes,
+            references=refs, count=count, video_format=video_format, notes=notes,
             avoid=_metadata_history() if avoid is None else avoid)
         return {**drafts, "format": video_format, "research": research}
     except ValueError as e:
@@ -1267,37 +1283,51 @@ def save_clip_metadata(jid: str, cid: str, body: dict = Body(...)):
                 description_key and description_key == brain._words_key(row.get("description"))):
             raise HTTPException(409, "That title or description is already used by another clip. Write distinct copy before saving.")
     try:
-        with posting._lock:
-            published = [dict(post) for post in posting._mine()
-                         if post.get("job") == jid and post.get("clip") == cid
-                         and post.get("platform") == "youtube" and post.get("status") == "posted"]
-        for post in published:
-            account = accounts.get(post.get("account", ""))
-            if not account or not post.get("remote_id"):
-                raise HTTPException(409, "Reconnect the YouTube channel before refreshing a published clip's metadata.")
-            try:
-                accounts.youtube_update_metadata(account, post["remote_id"], proposed["title"],
-                                                 proposed["description"], proposed["hashtags"])
-            except (RuntimeError, ValueError, httpx.HTTPError) as error:
-                raise HTTPException(409, f"Could not update the published YouTube metadata. {error}") from error
+        try:
+            _push_published_youtube_metadata(jid, cid, proposed)
+        except ValueError as error:
+            if "Reconnect the YouTube channel" in str(error):
+                raise HTTPException(409, str(error)) from error
+            raise HTTPException(409, f"Could not update the published YouTube metadata. {error}") from error
+        except (RuntimeError, httpx.HTTPError) as error:
+            raise HTTPException(409, f"Could not update the published YouTube metadata. {error}") from error
         clip = jobs.update_metadata(job, cid, body)
-        changed = []
-        with posting._lock:
-            for post in posting._mine():
-                if (post.get("job") == jid and post.get("clip") == cid
-                        and post.get("platform") == "youtube" and post.get("status") in ("scheduled", "posted")):
-                    post.update(title=clip["title"], description=clip["description"], hashtags=clip["hashtags"])
-                    changed.append(post)
-            if changed:
-                posting._save()
-        if changed:
-            posting._sync_rows(changed)
+        _mirror_youtube_metadata(jid, cid, clip)
         return {"clip": {key: clip.get(key) for key in ("id", "title", "description", "hashtags")},
                 "job": jobs.public(job)}
     except RuntimeError as e:
         raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+def _push_published_youtube_metadata(jid: str, cid: str, proposed: dict):
+    """Push updated title, description, and hashtags to any already-published YouTube copies."""
+    with posting._lock:
+        published = [dict(post) for post in posting._mine()
+                     if post.get("job") == jid and post.get("clip") == cid
+                     and post.get("platform") == "youtube" and post.get("status") == "posted"]
+    for post in published:
+        account = accounts.get(post.get("account", ""))
+        if not account or not post.get("remote_id"):
+            raise ValueError("Reconnect the YouTube channel before refreshing a published clip's metadata.")
+        accounts.youtube_update_metadata(account, post["remote_id"], proposed["title"],
+                                         proposed["description"], proposed["hashtags"])
+
+
+def _mirror_youtube_metadata(jid: str, cid: str, saved: dict):
+    """Keep scheduled and published YouTube post rows aligned with the clip's saved text."""
+    changed = []
+    with posting._lock:
+        for post in posting._mine():
+            if (post.get("job") == jid and post.get("clip") == cid
+                    and post.get("platform") == "youtube" and post.get("status") in ("scheduled", "posted")):
+                post.update(title=saved["title"], description=saved["description"], hashtags=saved["hashtags"])
+                changed.append(post)
+        if changed:
+            posting._save()
+    if changed:
+        posting._sync_rows(changed)
 
 
 @app.get("/api/music")
@@ -1479,7 +1509,7 @@ def delete_my_account(request: Request, body: dict = Body(...)):
 
 @app.get("/media/{jid}/{name}")
 def media_file(jid: str, name: str, download: int = 0):
-    if not re.fullmatch(r"[\w\-]+\.(mp4|jpg|srt)", name):
+    if not re.fullmatch(r"[\w\-]+\.(mp4|jpg|srt|vtt)", name):
         raise HTTPException(404)
     f = Path(_job_or_404(jid)["dir"]) / "clips" / name
     if not f.is_file():
@@ -1784,7 +1814,9 @@ def ai_put(request: Request, body: dict = Body(...)):
     try:
         out = ai.save(body.get("provider"), body.get("models"), body.get("base_url") or "",
                       None if k is None or (isinstance(k, str) and not k.strip() and not body.get("remove_key")) else str(k),
-                      profile_id=body.get("profile_id"), name=body.get("name"), fallback=body.get("fallback"))
+                      profile_id=body.get("profile_id"), name=body.get("name"), fallback=body.get("fallback"),
+                      allow_clip_text=body.get("allow_clip_text"), is_local=body.get("is_local"),
+                      order=body.get("order"), promote_healthy_globally=body.get("promote_healthy_globally"))
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
     usage.forget_all()
@@ -2250,7 +2282,7 @@ _default_autonomous = {
     "auto_approve": True,
     "status": "Ready (24/7 Autopilot)",
     "logs": [
-        f"[{time.strftime('%H:%M:%S')}] 24/7 Autonomous engine initialized (v1.2.0)",
+        f"[{time.strftime('%H:%M:%S')}] 24/7 Autonomous engine initialized (v{VERSION})",
         f"[{time.strftime('%H:%M:%S')}] Background processor ready with multi-provider failover & signal fallback."
     ]
 }
@@ -2323,11 +2355,16 @@ def _autonomous_loop():
                 _autonomous_config["status"] = "Scanning active streams & pending VODs..."
             _autonomous_log("Autonomous 24/7 cycle: scanning live feeds & GTA 6 viral topics...")
             with ctx.as_user("u_local"):
-                active_list = jobs.all_active()
+                active_list = [j for j in jobs.list_jobs() if j.get("status") in ("queued", "running", "live")]
                 if active_list:
                     _autonomous_log(f"Processing in-flight video pipeline ({len(active_list)} active jobs)...")
                 else:
                     _autonomous_log("Autonomous cycle complete: continuous 24/7 loop active, next check in 25m.")
+                retention = render.studio_presets().get("retention") or {}
+                if retention.get("enabled"):
+                    cleaned = _run_storage_retention(max_age_hours=int(retention.get("hours") or 48))
+                    if cleaned["cleaned_jobs"]:
+                        _autonomous_log(f"Auto-Storage Retention: cleaned {cleaned['cleaned_jobs']} raw source recording(s), freed {cleaned['freed_mb']} MB.")
             with _auto_lock:
                 _autonomous_config["status"] = "Running 24/7 (Next cycle in 25m)"
             _save_autonomous_state()
@@ -2336,8 +2373,17 @@ def _autonomous_loop():
             time.sleep(20)
 
 
-_auto_thread = threading.Thread(target=_autonomous_loop, daemon=True, name="PeakCutAutonomous247")
-_auto_thread.start()
+_auto_started = False
+
+
+def _start_autonomous():
+    """Start the 24/7 background loop once when the server boots (never at import time)."""
+    global _auto_started
+    with _auto_lock:
+        if _auto_started:
+            return
+        _auto_started = True
+    threading.Thread(target=_autonomous_loop, daemon=True, name="PeakCutAutonomous247").start()
 
 
 _mobile_approvals: dict[str, dict] = {}
@@ -2394,10 +2440,10 @@ def get_trends(region: str = "US"):
 def create_compilation(body: dict = Body(...)):
     clip_ids = body.get("clip_ids") or []
     title = str(body.get("title") or "Daily GTA 6 Highlights").strip()
-    user_jobs = {j["id"]: j for j in jobs.all_jobs()}
+    user_jobs = {j["id"]: j for j in jobs.list_jobs()}
     if not clip_ids:
         for j in user_jobs.values():
-            if j.get("status") == "finished":
+            if j.get("status") in ("done", "finished"):
                 for c in j.get("clips", []):
                     clip_ids.append(f"{j['id']}/{c['id']}")
                     if len(clip_ids) >= 6:
@@ -2451,7 +2497,7 @@ def create_compilation(body: dict = Body(...)):
 def create_series(body: dict = Body(...)):
     series_name = str(body.get("series_name") or "GTA 6 Secrets").strip()
     clip_ids = body.get("clip_ids") or []
-    user_jobs = {j["id"]: j for j in jobs.all_jobs()}
+    user_jobs = {j["id"]: j for j in jobs.list_jobs()}
     updated = []
     part = 1
     for item in clip_ids:
@@ -2470,7 +2516,7 @@ def create_series(body: dict = Body(...)):
             clip["series_part"] = part
             updated.append({"jid": jid, "cid": cid, "title": new_title})
             part += 1
-            jobs.save_meta(j)
+            jobs.save(j)
     ctx.bump()
     _autonomous_log(f"Series '{series_name}' updated with {len(updated)} episodes.")
     return {"ok": True, "series_name": series_name, "updated_count": len(updated), "clips": updated}
@@ -2496,12 +2542,12 @@ def copyright_check(body: dict = Body(...)):
 
     risk_level = "low"
     score = 98
-    if len(flags) > 1:
-        risk_level = "medium"
-        score = 80
-    elif len(flags) > 3:
+    if len(flags) > 3:
         risk_level = "high"
         score = 55
+    elif len(flags) > 1:
+        risk_level = "medium"
+        score = 80
 
     return {
         "ok": True,
@@ -2518,7 +2564,7 @@ def copyright_check(body: dict = Body(...)):
 
 @app.get("/api/v12/analytics")
 def get_analytics():
-    all_j = jobs.all_jobs()
+    all_j = jobs.list_jobs()
     total_jobs = len(all_j)
     total_clips = sum(len(j.get("clips", [])) for j in all_j)
     total_duration = sum(sum(c.get("duration", 0) for c in j.get("clips", [])) for j in all_j)
@@ -2547,7 +2593,7 @@ def get_analytics():
 
 @app.get("/api/v12/mobile-approval")
 def get_mobile_approvals():
-    user_jobs = jobs.all_jobs()
+    user_jobs = jobs.list_jobs()
     queue = []
     for j in user_jobs:
         for c in j.get("clips", []):
@@ -2780,7 +2826,6 @@ def set_render_format(body: dict = Body(...)):
 
 @app.get("/api/v12/diagnosis")
 def get_system_diagnosis():
-    import shutil
     try:
         total, used, free = shutil.disk_usage(config.DATA_DIR)
         free_gb = round(free / (1024 ** 3), 1)
@@ -2794,11 +2839,13 @@ def get_system_diagnosis():
 
     with ctx.as_user(ctx.uid()):
         c_count = len(creators.all_creators())
+        user_jobs = jobs.list_jobs()
+        active_count = sum(1 for j in user_jobs if j.get("status") in ("queued", "running", "live"))
 
     return {
         "status": "healthy",
         "version": VERSION,
-        "branding": "MJ-Cliping v1.2.0",
+        "branding": f"MJ Cliproom {VERSION}",
         "gpu_encoder": {
             "mode": config.GPU_RENDER,
             "status": "Hardware Accelerated (NVENC/QSV Ready)",
@@ -2807,8 +2854,8 @@ def get_system_diagnosis():
         "resources": {
             "disk_free_gb": free_gb,
             "quota_daily": getattr(config, "DAILY_VIDEO_QUOTA", 10000),
-            "active_jobs": len(jobs.all_active()),
-            "total_jobs": len(jobs.all_jobs())
+            "active_jobs": active_count,
+            "total_jobs": len(user_jobs)
         },
         "speech_engine": {
             "model": "sherpa-onnx (Local Offline Model)",
@@ -2948,7 +2995,11 @@ def set_autonomous_status(body: dict = Body(...)):
             timestamp = time.strftime('%H:%M:%S')
             _autonomous_config["logs"].append(f"[{timestamp}] {msg}")
         if "interval_minutes" in body:
-            _autonomous_config["interval_minutes"] = max(5, min(120, int(body["interval_minutes"])))
+            try:
+                minutes = int(body["interval_minutes"])
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, "Enter a whole number of minutes between 5 and 120.") from exc
+            _autonomous_config["interval_minutes"] = max(5, min(120, minutes))
         if "topic" in body:
             _autonomous_config["topic"] = str(body["topic"]).strip()
         if "target_channel" in body:
@@ -3108,35 +3159,12 @@ def _run_unique_metadata(uid, task_id, items, region):
                 proposed = jobs.post_metadata(job, clip, metadata)
                 brain.validate_post_title(proposed["title"])
                 brain.validate_post_description(proposed["description"])
-                with posting._lock:
-                    published = [row for row in posting._mine()
-                                 if row.get("job") == jid and row.get("clip") == cid
-                                 and row.get("platform") == "youtube" and row.get("status") == "posted"]
-                if published:
-                    from . import accounts
-                    for post in published:
-                        account = accounts.get(post.get("account", ""))
-                        if not account:
-                            raise ValueError("Reconnect the YouTube channel before refreshing a published clip's metadata.")
-                        accounts.youtube_update_metadata(account, post.get("remote_id", ""),
-                                                         proposed["title"], proposed["description"],
-                                                         proposed["hashtags"])
+                _push_published_youtube_metadata(jid, cid, proposed)
                 saved = jobs.update_metadata(job, cid, {
                     "title": proposed["title"], "description": proposed["description"],
                     "hashtags": " ".join(f"#{tag}" for tag in proposed["hashtags"]),
                 })
-                changed = []
-                with posting._lock:
-                    for post in posting._mine():
-                        if (post.get("job") == jid and post.get("clip") == cid and
-                                post.get("platform") == "youtube" and post.get("status") in ("scheduled", "posted")):
-                            post.update(title=saved["title"], description=saved["description"],
-                                        hashtags=saved["hashtags"])
-                            changed.append(post)
-                    if changed:
-                        posting._save()
-                if changed:
-                    posting._sync_rows(changed)
+                _mirror_youtube_metadata(jid, cid, saved)
                 history.append({"title": saved["title"], "description": saved["description"]})
                 with _UNIQUE_META_LOCK:
                     state = _UNIQUE_META_TASKS.get(uid, {})
@@ -3164,6 +3192,248 @@ def _run_unique_metadata(uid, task_id, items, region):
                 state["updated_at"] = time.time()
 
 
+def _save_studio_presets(patch: dict) -> dict:
+    """Persist studio render and automation presets to data/studio_presets.json."""
+    current = copy.deepcopy(render.studio_presets())
+    if isinstance(patch, dict):
+        for section, values in patch.items():
+            if section in current and isinstance(values, dict):
+                current[section].update(values)
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.DATA_DIR / "studio_presets.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(current, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    render._PRESET_CACHE["mtime"] = None
+    ctx.bump()
+    return render.studio_presets()
+
+
+@app.get("/api/v12/presets")
+def get_studio_presets():
+    return {"ok": True, "presets": render.studio_presets()}
+
+
+@app.post("/api/v12/presets")
+def save_studio_presets(body: dict = Body(...)):
+    presets = _save_studio_presets(body)
+    return {"ok": True, "presets": presets, "message": "Studio presets saved and active for rendering."}
+
+
+def _compute_top_performers() -> dict:
+    """Aggregate YouTube views, viral scores, best hooks, top streamers, and best posting hours."""
+    clips = _collect_autopilot_clips()
+    with posting._lock:
+        posts = [dict(p) for p in posting._mine()]
+    views_by_pair = {}
+    hour_buckets: dict[int, list[int]] = {}
+    for p in posts:
+        pair = (p.get("job"), p.get("clip"))
+        v = int(p.get("views") or 0)
+        if v >= views_by_pair.get(pair, 0):
+            views_by_pair[pair] = v
+        ts = p.get("posted_at") or p.get("due_at")
+        if ts:
+            hr = time.localtime(float(ts)).tm_hour
+            hour_buckets.setdefault(hr, []).append(v)
+
+    ranked = []
+    streamer_totals: dict[str, dict] = {}
+    for c in clips:
+        pair = (c["jid"], c["cid"])
+        views = views_by_pair.get(pair, 0)
+        score = int(c.get("viral_score") or 0)
+        streamer = c.get("streamer") or "Gameplay studio"
+        st = streamer_totals.setdefault(streamer, {"name": streamer, "clips": 0, "views": 0, "avg_score": 0, "_scores": []})
+        st["clips"] += 1
+        st["views"] += views
+        st["_scores"].append(score)
+        ranked.append({
+            "jid": c["jid"], "cid": c["cid"], "title": c["title"],
+            "hook": c.get("hook") or c["title"][:48], "streamer": streamer,
+            "views": views, "score": score, "duration": c["duration"],
+            "url": (c.get("scheduled_post") or {}).get("url") or c.get("video_url") or "",
+            "status": (c.get("scheduled_post") or {}).get("status") or "ready",
+        })
+    ranked.sort(key=lambda r: (r["views"], r["score"]), reverse=True)
+    top_clips = ranked[:8]
+    top_hooks = []
+    seen_hooks = set()
+    for r in ranked:
+        hk = (r["hook"] or r["title"]).strip()
+        if hk and hk.casefold() not in seen_hooks:
+            seen_hooks.add(hk.casefold())
+            top_hooks.append({"hook": hk, "views": r["views"], "score": r["score"], "streamer": r["streamer"]})
+        if len(top_hooks) >= 6:
+            break
+
+    top_streamers = []
+    for st in streamer_totals.values():
+        scores = st.pop("_scores", [])
+        st["avg_score"] = round(sum(scores) / len(scores), 1) if scores else 0
+        top_streamers.append(st)
+    top_streamers.sort(key=lambda s: (s["views"], s["clips"], s["avg_score"]), reverse=True)
+
+    best_hours = []
+    for hr, vals in sorted(hour_buckets.items()):
+        avg_v = round(sum(vals) / len(vals)) if vals else 0
+        label = f"{hr:02d}:00"
+        best_hours.append({"hour": hr, "label": label, "posts": len(vals), "avg_views": avg_v})
+    best_hours.sort(key=lambda h: (h["avg_views"], h["posts"]), reverse=True)
+
+    total_views = sum(r["views"] for r in ranked)
+    posted_count = sum(1 for p in posts if p.get("status") == "posted")
+    return {
+        "top_clips": top_clips,
+        "top_hooks": top_hooks,
+        "top_streamers": top_streamers[:6],
+        "best_hours": best_hours[:6],
+        "summary": {
+            "total_views": total_views,
+            "posted_count": posted_count,
+            "avg_views": round(total_views / max(1, posted_count)) if posted_count else 0,
+            "top_hook": top_hooks[0]["hook"] if top_hooks else "Wait until the end",
+            "best_hour": best_hours[0]["label"] if best_hours else "18:00",
+        }
+    }
+
+
+@app.get("/api/v12/top-performers")
+def get_top_performers():
+    return {"ok": True, **_compute_top_performers()}
+
+
+def _run_storage_retention(max_age_hours: int = 0) -> dict:
+    """Delete raw source video files for completed jobs whose clips are finished, keeping all rendered Shorts."""
+    now = time.time()
+    cleaned_jobs = 0
+    freed_bytes = 0
+    for job in jobs.list_jobs():
+        if job.get("kind") != "video" or job.get("status") != "done":
+            continue
+        if any(c.get("status") in ("queued", "rendering") for c in job.get("clips", [])):
+            continue
+        if max_age_hours > 0 and (now - float(job.get("created") or 0)) < max_age_hours * 3600:
+            continue
+        src_path = job.get("source_path")
+        src = Path(src_path) if src_path else None
+        if not src or not src.is_file():
+            continue
+        try:
+            if src.resolve().parent != Path(job["dir"]).resolve():
+                continue
+            size = src.stat().st_size
+            jobs.delete_source(job)
+            cleaned_jobs += 1
+            freed_bytes += size
+        except Exception:
+            continue
+    if cleaned_jobs:
+        ctx.bump()
+    return {
+        "ok": True,
+        "cleaned_jobs": cleaned_jobs,
+        "freed_bytes": freed_bytes,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 1),
+    }
+
+
+@app.post("/api/v12/storage-cleanup")
+def run_storage_cleanup(body: dict = Body(default={})):
+    hours = int(body.get("max_age_hours") or 0)
+    res = _run_storage_retention(max_age_hours=max(0, hours))
+    return {
+        **res,
+        "message": (f"Cleaned {res['cleaned_jobs']} raw source recording(s) and freed {res['freed_mb']} MB. All rendered Shorts were kept."
+                    if res["cleaned_jobs"] else "No raw source recordings were eligible for cleanup.")
+    }
+
+
+@app.post("/api/v12/quality-guard")
+def run_quality_guard(body: dict = Body(default={})):
+    """Audit clips for leading/trailing dead air and empty speech, and optionally trim dead-air bounds."""
+    apply_trim = bool(body.get("apply_trim", False))
+    pad = float(body.get("min_lead_pad") or render.studio_presets().get("quality_guard", {}).get("min_lead_pad") or 0.35)
+    scanned = 0
+    trimmed = 0
+    low_speech = 0
+    details = []
+    for job in jobs.list_jobs():
+        changed = False
+        words_all = jobs.read_words(job)
+        for clip in job.get("clips", []):
+            if clip.get("status") != "done":
+                continue
+            scanned += 1
+            start, end = float(clip.get("start") or 0), float(clip.get("end") or 0)
+            words = clip.get("fixed_words") or words_all
+            new_s, new_e = render.trim_dead_air(words, start, end, pad=pad)
+            saved_sec = round((end - start) - (new_e - new_s), 2)
+            inside_count = sum(1 for w in (words or []) if isinstance(w, dict) and start <= float(w.get("s") or 0) <= end)
+            if inside_count < 3:
+                low_speech += 1
+            if saved_sec >= 0.4:
+                trimmed += 1
+                if apply_trim and not clip.get("segments"):
+                    clip["start"], clip["end"] = new_s, new_e
+                    clip["duration"] = round(new_e - new_s, 2)
+                    changed = True
+                details.append({
+                    "jid": job["id"], "cid": clip["id"], "title": clip.get("title") or "Clip",
+                    "old_duration": round(end - start, 1), "new_duration": round(new_e - new_s, 1),
+                    "trimmed_seconds": saved_sec, "words": inside_count
+                })
+        if changed:
+            jobs.save(job)
+    if apply_trim and trimmed:
+        ctx.bump()
+    return {
+        "ok": True,
+        "scanned": scanned,
+        "trimmable_clips": trimmed,
+        "low_speech_clips": low_speech,
+        "applied": apply_trim,
+        "details": details[:25],
+        "message": (f"Trimmed dead air on {trimmed} clip(s)." if apply_trim and trimmed
+                    else f"Scanned {scanned} clip(s): {trimmed} have trimmable dead air, {low_speech} have sparse speech.")
+    }
+
+
+@app.post("/api/v12/autopilot-posts/cross-post")
+def cross_post_autopilot_clips(body: dict = Body(default={})):
+    """Schedule rendered clips across selected connected accounts (YouTube, Instagram Reels, TikTok)."""
+    account_ids = [str(a) for a in (body.get("accounts") or []) if a]
+    if not account_ids:
+        account_ids = [a["id"] for a in accounts.list_accounts()]
+    if not account_ids:
+        raise HTTPException(400, "Connect YouTube, Instagram, or TikTok in Settings → Connected apps first.")
+    requested = body.get("clips")
+    if isinstance(requested, list) and requested:
+        pairs = [(str(x.get("job") or ""), str(x.get("clip") or "")) for x in requested if isinstance(x, dict)]
+    else:
+        pairs = [(c["jid"], c["cid"]) for c in _collect_autopilot_clips()
+                 if c["video_url"] and (c.get("scheduled_post") or {}).get("status") not in ("posting", "posted")]
+    queued = 0
+    by_job = {j["id"]: j for j in jobs.list_jobs()}
+    for jid, cid in pairs[:50]:
+        job = by_job.get(jid)
+        clip = next((c for c in (job or {}).get("clips", []) if c.get("id") == cid and c.get("status") == "done"), None)
+        if not job or not clip:
+            continue
+        try:
+            made = posting.enqueue(job, clip, account_ids)
+            queued += len(made)
+        except ValueError:
+            continue
+    return {
+        "ok": bool(queued),
+        "queued": queued,
+        "accounts_count": len(account_ids),
+        "message": (f"Queued {queued} cross-platform post(s) across {len(account_ids)} connected account(s)."
+                    if queued else "No new cross-platform posts were queued (clips may already be scheduled).")
+    }
+
+
 @app.get("/api/v12/autopilot-posts")
 def get_autopilot_posts():
     clips = _collect_autopilot_clips()
@@ -3171,7 +3441,9 @@ def get_autopilot_posts():
             "scheduled_count": sum(1 for c in clips if (c.get("scheduled_post") or {}).get("status") == "scheduled"),
             "rendered_count": sum(bool(c["video_url"]) for c in clips),
             "full_auto_yt": bool(autopilot.load()["settings"].get("enabled")),
-            "posting_paused": accounts.settings()["paused"]}
+            "posting_paused": accounts.settings()["paused"],
+            "presets": render.studio_presets(),
+            "connected_accounts": accounts.list_accounts()}
 
 
 @app.post("/api/v12/autopilot-posts/unique-metadata")
@@ -3309,6 +3581,145 @@ def update_autopilot_clip_meta(body: dict = Body(...)):
         metadata["hashtags"] = " ".join(str(tag) for tag in metadata["hashtags"])
     result = save_clip_metadata(jid, cid, metadata)
     return {"ok": True, "clip": result["clip"], "message": "Post text saved."}
+
+
+# ================================================================ MJ CLIPROOM 2.0.0 WORKSTATION ROUTES
+@app.post("/api/sources/resolve")
+def resolve_source_intake(body: dict = Body(...)):
+    """Resolve and classify a URL before starting work, with normalization and duplicate detection."""
+    _throttle("resolve-src:" + ctx.uid(), 20, 60)
+    url = str(body.get("url") or "").strip()[:500]
+    info = _lookup(media.classify_source, url)
+    norm = info.get("normalized_url") or ""
+    fp = info.get("fingerprint") or ""
+    duplicates = []
+    if norm:
+        for j in jobs.list_jobs():
+            j_url = media.normalize_source_url(str((j.get("source") or {}).get("url") or ""))
+            if j_url and (j_url == norm or (fp and media.source_fingerprint(url=j_url) == fp)):
+                duplicates.append({
+                    "id": j["id"],
+                    "title": j.get("title") or j_url,
+                    "status": j.get("status"),
+                    "clips_count": len(j.get("clips", [])),
+                    "created": j.get("created"),
+                })
+    info["duplicates"] = duplicates[:5]
+    info["presets"] = {k: v["label"] for k, v in brain.CONTENT_PRESETS.items()}
+    return info
+
+
+@app.get("/api/summaries")
+def list_all_summaries():
+    """Return all saved summaries across the user's projects, newest first."""
+    all_rows = []
+    for j in jobs.list_jobs():
+        for s in summarize.list_summaries(j):
+            all_rows.append({
+                **s,
+                "job_title": j.get("title") or (j.get("source") or {}).get("name") or j["id"],
+                "job_duration": j.get("duration") or 0,
+            })
+    all_rows.sort(key=lambda r: float(r.get("created_at") or 0), reverse=True)
+    return {"summaries": all_rows[:100]}
+
+
+@app.get("/api/jobs/{jid}/summaries")
+def get_job_summaries(jid: str):
+    job = _job_or_404(jid)
+    return {"job_id": jid, "summaries": summarize.list_summaries(job)}
+
+
+@app.post("/api/jobs/{jid}/summaries")
+def create_job_summary(jid: str, body: dict = Body(default={})):
+    job = _job_or_404(jid)
+    _throttle("summarize:" + ctx.uid(), 15, 600, "Wait a moment before generating more summaries.")
+    scope = str(body.get("scope") or "source").strip().lower()
+    start_sec = body.get("start")
+    end_sec = body.get("end")
+    clip_ids = body.get("clip_ids") if isinstance(body.get("clip_ids"), list) else None
+    notes = str(body.get("notes") or "")[:1000]
+    try:
+        record = summarize.generate_summary(
+            job,
+            scope=scope,
+            start_sec=float(start_sec) if start_sec not in (None, "") else None,
+            end_sec=float(end_sec) if end_sec not in (None, "") else None,
+            clip_ids=clip_ids,
+            notes=notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    ctx.bump()
+    return {"ok": True, "summary": record, "summaries": summarize.list_summaries(job)}
+
+
+@app.get("/api/jobs/{jid}/summaries/{sid}/export")
+def export_job_summary(jid: str, sid: str, format: str = "md"):
+    job = _job_or_404(jid)
+    record = summarize.get_summary(job, sid)
+    if not record:
+        raise HTTPException(404, "No such summary version.")
+    content, media_type, filename = summarize.export_summary(record, fmt=format)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@app.get("/api/jobs/{jid}/clips/{cid}/safe-layout")
+def clip_safe_layout(jid: str, cid: str, layout: str = "", caption_position: str = ""):
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    eff_layout = layout or clip.get("layout") or "blur"
+    eff_pos = caption_position or clip.get("caption_position") or "bottom"
+    motion = clip.get("motion") or "none"
+    return render.solve_safe_layout(
+        int(job.get("width") or 1920),
+        int(job.get("height") or 1080),
+        layout=eff_layout,
+        caption_position=eff_pos,
+        has_hook=bool((clip.get("hook") or "").strip()),
+        has_brand=bool(clip.get("brand") or motion == "highlight"),
+        has_lower_third=bool(motion == "lower_third"),
+        watermark_corner=clip.get("watermark_corner") or "top-left",
+    )
+
+
+@app.post("/api/publishing/check-eligibility")
+def publishing_check_eligibility(body: dict = Body(...)):
+    jid = str(body.get("job") or body.get("jid") or "")
+    cid = str(body.get("clip") or body.get("cid") or "")
+    aid = str(body.get("account") or "")
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    return posting.check_eligibility(job, clip, aid, overrides=body.get("metadata"))
+
+
+@app.post("/api/posts/{pid}/hold")
+def hold_scheduled_post(pid: str, body: dict = Body(default={})):
+    try:
+        p = posting.hold_post(pid, str(body.get("reason") or "Held for review by user.")[:200])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "status": p["status"], "display_status": posting.display_status(p)}
+
+
+@app.post("/api/posts/{pid}/approve")
+def approve_held_post(pid: str, body: dict = Body(default={})):
+    try:
+        p = posting.approve_held(pid, visibility=body.get("visibility"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "status": p["status"], "display_status": posting.display_status(p)}
 
 
 def _configure_logging():

@@ -101,18 +101,38 @@ def _mirror(p):
         _mirror_rows(job, [p])
 
 
+def _apply_publishing_window(t: float) -> float:
+    """Shift a scheduled timestamp into the active peak-hour publishing window when enabled."""
+    try:
+        from . import render
+        pw = render.studio_presets().get("publishing_window") or {}
+        if not pw.get("enabled"):
+            return t
+        start_h = max(0, min(23, int(pw.get("start_hour", 12))))
+        end_h = max(start_h + 1, min(24, int(pw.get("end_hour", 23))))
+        lt = time.localtime(t)
+        if lt.tm_hour < start_h:
+            return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, start_h, 0, 0, 0, 0, -1))
+        if lt.tm_hour >= end_h:
+            nxt = time.localtime(t + 86400)
+            return time.mktime((nxt.tm_year, nxt.tm_mon, nxt.tm_mday, start_h, 0, 0, 0, 0, -1))
+    except Exception:
+        pass
+    return t
+
+
 def _next_slot(account_id, gap_min, gap_max, cap):
-    """Pick a randomized gap, then respect earlier posts and the account's daily cap."""
+    """Pick a randomized gap, then respect earlier posts, the peak-hour window, and the account's daily cap."""
     mine = [p for p in _mine() if p["account"] == account_id and p["status"] in OPEN + ("posted",)]
     gap = random.randint(int(gap_min), max(int(gap_min), int(gap_max)))
-    t = max(time.time(), max((p.get("posted_at") or p["due_at"] for p in mine), default=0) + gap * 60)
+    t = _apply_publishing_window(max(time.time(), max((p.get("posted_at") or p["due_at"] for p in mine), default=0) + gap * 60))
     if not cap:
         return t
     for _ in range(30):
         if sum(1 for p in mine if _day(p.get("posted_at") or p["due_at"]) == _day(t)) < cap:
             break
         lt = time.localtime(t + 86400)
-        t = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 9, 0, 0, 0, 0, -1))  # 9:00 next day
+        t = _apply_publishing_window(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 9, 0, 0, 0, 0, -1)))
     return t
 
 
@@ -124,13 +144,68 @@ def _clip_file(job, clip):
     return path
 
 
+PIPELINE_STAGES = (
+    "intake", "capture", "analysis", "rendering", "metadata",
+    "validation", "scheduling", "upload", "remote_verification"
+)
+DISTINCT_STATUSES = ("Scheduled", "Uploading", "Processing", "Public", "Private", "Held", "Failed")
+LEASE_SECONDS = 600
+
+
+def idempotency_key(job_id: str, clip_id: str, revision: int, platform: str, account_id: str) -> str:
+    import hashlib
+    raw = f"{job_id}:{clip_id}:v{int(revision or 1)}:{platform}:{account_id}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def display_status(post: dict) -> str:
+    """Map internal queue state to the 7 distinct user-facing publishing statuses."""
+    st = str(post.get("status") or "scheduled").lower()
+    if st in ("held", "review"):
+        return "Held"
+    if st == "failed":
+        return "Failed"
+    if st == "processing":
+        return "Processing"
+    if st in ("posting", "uploading"):
+        return "Processing" if post.get("bytes_uploaded_complete") else "Uploading"
+    if st == "posted":
+        vis = str(post.get("visibility") or "public").lower()
+        return "Private" if vis in ("private", "unlisted") else "Public"
+    return "Scheduled"
+
+
 def _post_row(job, clip, acc, due, metadata, *, automatic=False, autopilot=False):
-    return {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"],
-            "creator": job.get("creator"), "account": acc["id"], "account_name": acc["name"],
-            "platform": acc["platform"], "status": "scheduled", "due_at": due, "created": time.time(),
-            "title": metadata["title"], "description": metadata["description"], "hashtags": metadata["hashtags"],
-            "score": clip.get("score", 0), "tries": 0, "url": "", "remote_id": "", "error": None,
-            "views": None, "automatic": automatic, "autopilot": bool(autopilot)}
+    rev = int(clip.get("version") or 1)
+    return {
+        "id": secrets.token_hex(8),
+        "idempotency_key": idempotency_key(job["id"], clip["id"], rev, acc["platform"], acc["id"]),
+        "clip_revision": rev,
+        "user": ctx.uid(),
+        "job": job["id"],
+        "clip": clip["id"],
+        "creator": job.get("creator"),
+        "account": acc["id"],
+        "account_name": acc["name"],
+        "platform": acc["platform"],
+        "status": "scheduled",
+        "pipeline_stage": "scheduling",
+        "due_at": due,
+        "created": time.time(),
+        "title": metadata["title"],
+        "description": metadata["description"],
+        "hashtags": metadata["hashtags"],
+        "score": clip.get("score", 0),
+        "tries": 0,
+        "url": "",
+        "remote_id": "",
+        "error": None,
+        "views": None,
+        "automatic": automatic,
+        "autopilot": bool(autopilot),
+        "lease_owner": None,
+        "lease_expires_at": 0.0,
+    }
 
 
 def _sync_rows(rows):
@@ -680,10 +755,87 @@ def _stats():
         time.sleep(1800)
 
 
+def check_eligibility(job: dict, clip: dict, account_id: str, overrides: dict = None) -> dict:
+    """Verify rights, rendered 9:16 MP4 integrity, unique title/description copy, and connected account before enqueueing."""
+    reasons = []
+    if not job or not clip:
+        return {"eligible": False, "status": "Held", "reasons": ["Clip or project not found."]}
+    if job.get("rights_cleared") is False:
+        reasons.append("Confirm source rights for this video before publishing.")
+    if clip.get("status") != "done":
+        reasons.append("Clip has not finished rendering yet.")
+    path = None
+    try:
+        path = _clip_file(job, clip)
+        spec = media.probe(path, require_audio=False)
+        if spec["width"] * 16 != spec["height"] * 9:
+            reasons.append(f"Clip is {spec['width']}x{spec['height']} instead of 9:16 vertical.")
+        if spec["duration"] > 180:
+            reasons.append("Clip exceeds the 180-second vertical Short limit.")
+    except Exception as exc:
+        reasons.append(str(exc))
+
+    acc = accounts.get(account_id) if account_id else None
+    if not acc:
+        reasons.append("Connect a destination account in Settings → Connected Accounts.")
+    meta = jobs.post_metadata(job, clip, overrides)
+    try:
+        brain.validate_post_title(meta["title"])
+    except ValueError as exc:
+        reasons.append(str(exc))
+    try:
+        brain.validate_post_description(meta["description"])
+    except ValueError as exc:
+        reasons.append(str(exc))
+    if acc:
+        with _lock:
+            hist = [
+                {"title": p.get("title", ""), "description": p.get("description", "")}
+                for p in _mine()
+                if p.get("account") == acc["id"]
+                and (p.get("job"), p.get("clip")) != (job["id"], clip["id"])
+                and p.get("status") != "cancelled"
+            ]
+        if brain.is_near_duplicate_copy(meta["title"], meta["description"], hist):
+            reasons.append("Title or description duplicates or closely resembles an existing post on this channel.")
+    return {
+        "eligible": len(reasons) == 0,
+        "status": "Scheduled" if len(reasons) == 0 else "Held",
+        "reasons": reasons,
+        "metadata": meta,
+        "account": acc["name"] if acc else "",
+    }
+
+
+def hold_post(pid: str, reason: str = "Held for review by user."):
+    with _lock:
+        p = next((p for p in _mine() if p["id"] == pid), None)
+        if not p or p["status"] not in ("scheduled", "failed"):
+            raise ValueError("Only scheduled or failed posts can be placed on hold.")
+        p.update(status="held", pipeline_stage="validation", error=reason)
+        _save()
+    _sync_rows([p])
+    return p
+
+
+def approve_held(pid: str, visibility: str = None):
+    with _lock:
+        p = next((p for p in _mine() if p["id"] == pid), None)
+        if not p or p["status"] not in ("held", "scheduled", "failed"):
+            raise ValueError("Only held, waiting, or failed posts can be approved.")
+        if visibility in ("private", "unlisted", "public"):
+            p["visibility"] = visibility
+        p.update(status="scheduled", pipeline_stage="scheduling",
+                 due_at=max(time.time(), blocked_until(p["platform"], p["account"])), error=None)
+        _save()
+    _sync_rows([p])
+    return p
+
+
 def cancel(pid):
     with _lock:
         p = next((p for p in _mine() if p["id"] == pid), None)
-        if not p or p["status"] != "scheduled":
+        if not p or p["status"] not in ("scheduled", "held"):
             raise ValueError("Only posts that are still waiting can be cancelled.")
         p["status"] = "cancelled"
         _save()
@@ -694,12 +846,13 @@ def expedite(pid, jid, cid):
     with _lock:
         post = next((p for p in _mine() if p["id"] == pid and p["platform"] == "youtube"
                      and p["job"] == jid and p["clip"] == cid), None)
-        if not post or post["status"] != "scheduled":
+        if not post or post["status"] not in ("scheduled", "held"):
             raise ValueError("Only a waiting YouTube post can be moved forward.")
         if not accounts.get(post["account"]):
             raise ValueError("Reconnect the channel selected for this post.")
         if post.get("batch"):
             raise ValueError("This clip is part of an ordered batch. Its place in the schedule is fixed.")
+        post["status"] = "scheduled"
         post["due_at"] = max(time.time(), blocked_until("youtube", post["account"]))
         _save()
     _sync_rows([post])
@@ -708,8 +861,8 @@ def expedite(pid, jid, cid):
 def retry(pid):
     with _lock:
         p = next((p for p in _mine() if p["id"] == pid), None)
-        if not p or p["status"] not in ("failed", "cancelled"):
-            raise ValueError("Only failed or cancelled posts can be retried.")
+        if not p or p["status"] not in ("failed", "cancelled", "held"):
+            raise ValueError("Only failed, held, or cancelled posts can be retried.")
         job = jobs.get(p["job"])
         if not job:
             raise ValueError("That video is no longer available.")
@@ -718,7 +871,8 @@ def retry(pid):
         if any(q is not p and (q["job"], q["clip"], q["account"]) == (p["job"], p["clip"], p["account"])
                and q["status"] in OPEN + ("posted",) for q in _mine()):
             raise ValueError("A post for this clip and account already exists.")
-        p.update(status="scheduled", due_at=max(time.time(), blocked_until(p["platform"], p["account"])), tries=0, error=None)
+        p.update(status="scheduled", pipeline_stage="scheduling",
+                 due_at=max(time.time(), blocked_until(p["platform"], p["account"])), tries=0, error=None)
         changed = [p, *_space_batch(p)]
         _save()
     _sync_rows(changed)

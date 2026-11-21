@@ -1,5 +1,6 @@
 /* Source timeline and timed captions. Uses the app's existing API and session. */
 const clipPresets = {
+  fit_blur: {layout: "blur", style: "clean", captions: "burn"},
   action: {layout: "crop", style: "clean", captions: "burn"},
   gameplay: {layout: "auto", style: "clean", captions: "burn"},
   clean: {layout: "crop", style: "clean", captions: "clean"},
@@ -57,6 +58,7 @@ function openSourceEditor(job, clip) {
         </div>
         <div class="source-fields">
           <label class="f">Preset<select name="preset"><option value="">Custom</option>
+            <option value="fit_blur">Fit with blur (9:16)</option>
             <option value="action">Full-screen gameplay</option><option value="gameplay">Gameplay with HUD</option>
             <option value="clean">Clean export</option></select></label>
           <div class="two">
@@ -66,7 +68,7 @@ function openSourceEditor(job, clip) {
           <label class="f">Drag start <input name="inPoint" type="range" min="0" max="${duration}" step="0.001" value="${clip?.start ?? 0}"></label>
           <label class="f">Drag end <input name="outPoint" type="range" min="0" max="${duration}" step="0.001" value="${clip?.end ?? length}"></label>
           <div class="layout-picks" role="radiogroup" aria-label="Layout">
-            ${[["auto", "Auto facecam"], ["stack", "Facecam below"], ["crop", "Full-screen"]].map(([id, label]) =>
+            ${[["blur", "Fit with blur"], ["auto", "Auto facecam"], ["stack", "Facecam below"], ["crop", "Full-screen"]].map(([id, label]) =>
               `<button type="button" class="btn sm" data-layout="${id}" aria-pressed="false">${label}</button>`).join("")}
           </div>
           <div class="two">
@@ -95,7 +97,7 @@ function openSourceEditor(job, clip) {
           <label class="f">Title<input name="title" maxlength="100" value="${esc(clip?.title || "Manual clip")}"></label>
           <label class="ck"><input name="watermark" type="checkbox" ${(saved.watermark ?? (!clip && job.options?.watermark)) ? "checked" : ""}> MJ video watermark</label>
           <label class="f">Hook<input name="hook" maxlength="60" value="${esc(clip?.hook || "")}"></label>
-          <label class="f">Title tag<select name="motion"><option value="none">No title tag</option><option value="highlight" ${clip?.motion === "highlight" ? "selected" : ""}>MJ title tag</option></select></label>
+          <label class="f">Title tag<select name="motion">${opts(S.status.motion_presets || {none:"No title tag", highlight:"MJ title tag"}, clip?.motion || "none")}</select></label>
           <h3>Music</h3>
           <label class="f">Track<select name="music_id"><option value="">Original audio only</option>${(S.status.music || []).map(t => `<option value="${esc(t.id)}" ${t.id === clip?.music_id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>
           <label class="f">Volume <output data-vol>${Math.round((clip?.music_volume ?? 0.3) * 100)}%</output><input name="music_volume" type="range" min="0" max="1" step="0.01" value="${clip?.music_volume ?? 0.3}"></label>

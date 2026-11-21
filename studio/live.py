@@ -759,34 +759,68 @@ def recover(job):
     jobs.submit_live(cleanup)
 
 
+_start_lock = threading.RLock()
+_transition_state: dict = {}  # (uid, norm_url) -> {"hits": int, "first_at": float, "last_at": float}
+
+
+def verify_live_transition(url: str, *, required_checks: int = 2, debounce_sec: float = 1.5, immediate: bool = False) -> bool:
+    """Require repeated confirmation across a debounce window so a single transient signal cannot start duplicate recordings."""
+    norm = normalize(url)
+    key = (ctx.uid_or_none() or "system", norm)
+    now = time.time()
+    with _start_lock:
+        if any(s.job.get("source", {}).get("url") == norm for s in active()):
+            return False
+        st = _transition_state.get(key)
+        if immediate or required_checks <= 1:
+            _transition_state[key] = {"hits": required_checks, "first_at": now, "last_at": now}
+            return True
+        if not st or (now - st["last_at"]) > 600:
+            _transition_state[key] = {"hits": 1, "first_at": now, "last_at": now}
+            if debounce_sec > 0:
+                time.sleep(min(5.0, debounce_sec))
+                try:
+                    resolve(norm)
+                    _transition_state[key]["hits"] += 1
+                    _transition_state[key]["last_at"] = time.time()
+                except Exception:
+                    _transition_state.pop(key, None)
+                    return False
+            return _transition_state[key]["hits"] >= required_checks
+        st["hits"] += 1
+        st["last_at"] = now
+        return st["hits"] >= required_checks
+
+
 def start_session(creator: dict, url=None) -> dict:
-    url = normalize(url or creator.get("channel") or "")
-    if not re.match(r"^https?://[^/]+\.[^/]+/", url + "/"):
-        raise ValueError("Add this creator's channel link first.")
-    same = [s for s in active() if s.job.get("source", {}).get("url") == url]
-    if same:
-        raise ValueError("This stream is already being recorded.")
-    if active_for(creator["id"]) and not creator.get("allow_parallel"):
-        raise ValueError("This creator is already being recorded.")
-    if not media.site_allowed(url):
-        raise ValueError("Channel links must be from YouTube, Twitch or Kick.")
-    if media.is_youtube(url) and media.youtube_paused():
-        raise ValueError(media.YT_BLOCKED.replace("download videos", "record YouTube streams")
-                         .replace("Upload the video file instead, or use a Twitch or Kick link. YouTube links",
-                                  "Twitch and Kick streams still work. YouTube"))
-    if len(active_mine()) >= config.MAX_LIVE_PER_USER:
-        raise ValueError(f"You're already recording {len(active_mine())} streams, the most this server allows at once. Stop one first.")
-    if len(active()) >= config.MAX_LIVE_TOTAL or (active() and load.busy()):
-        raise ValueError("PeakCut is recording as many streams as it can right now. Try again in a little while.")
-    from . import tools
-    if tools.missing():
-        raise ValueError(tools.HELP)
-    job = jobs.create({"type": "live", "url": url, "name": f"{creator['name']} live"}, {}, enqueue=False,
-                      creator=creator["id"], kind="live", rights_cleared=True)
-    job.update(status="live", stage="Connecting to the stream")
-    jobs.save(job)
-    Session(job, creator).start()
-    return job
+    with _start_lock:
+        url = normalize(url or creator.get("channel") or "")
+        if not re.match(r"^https?://[^/]+\.[^/]+/", url + "/"):
+            raise ValueError("Add this creator's channel link first.")
+        same = [s for s in active() if s.job.get("source", {}).get("url") == url]
+        if same:
+            raise ValueError("This stream is already being recorded.")
+        if active_for(creator["id"]) and not creator.get("allow_parallel"):
+            raise ValueError("This creator is already being recorded.")
+        if not media.site_allowed(url):
+            raise ValueError("Channel links must be from YouTube, Twitch or Kick.")
+        if media.is_youtube(url) and media.youtube_paused():
+            raise ValueError(media.YT_BLOCKED.replace("download videos", "record YouTube streams")
+                             .replace("Upload the video file instead, or use a Twitch or Kick link. YouTube links",
+                                      "Twitch and Kick streams still work. YouTube"))
+        if len(active_mine()) >= config.MAX_LIVE_PER_USER:
+            raise ValueError(f"You're already recording {len(active_mine())} streams, the most this server allows at once. Stop one first.")
+        if len(active()) >= config.MAX_LIVE_TOTAL or (active() and load.busy()):
+            raise ValueError("PeakCut is recording as many streams as it can right now. Try again in a little while.")
+        from . import tools
+        if tools.missing():
+            raise ValueError(tools.HELP)
+        job = jobs.create({"type": "live", "url": url, "name": f"{creator['name']} live"}, {}, enqueue=False,
+                          creator=creator["id"], kind="live", rights_cleared=True)
+        job.update(status="live", stage="Connecting to the stream")
+        jobs.save(job)
+        Session(job, creator).start()
+        return job
 
 
 def _watch_user(uid):

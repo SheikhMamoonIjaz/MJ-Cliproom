@@ -156,15 +156,68 @@ def _tidy(c, s, e):
     tags = c.get("hashtags") if isinstance(c.get("hashtags"), list) else []
     tags = [re.sub(r"\W", "", str(h))[:30] for h in tags if isinstance(h, (str, int))]
     words = c.get("highlight_words") if isinstance(c.get("highlight_words"), list) else []
+    score = max(0, min(100, int(_num(c.get("score")))))
+    hook = roman.to_roman(_text(c.get("hook"), 60)).upper()
+    title = roman.to_roman(_text(c.get("title"), 100))
+    desc = roman.to_roman(_text(c.get("description"), 300))
+    reason = _text(c.get("reason"), 200)
+    setup = _text(c.get("setup"), 180) or (f"Opens on: {hook.title()}" if hook else "Opens on the setup line.")
+    payoff = _text(c.get("payoff"), 180) or (reason or "Resolves on a complete sentence payoff.")
+    evidence = _text(c.get("evidence"), 200) or (" ".join(roman.to_roman(_text(h, 30)) for h in words[:5]) if words else reason)
     return {
-        "start": s, "end": e, "score": max(0, min(100, int(_num(c.get("score"))))),
+        "start": s, "end": e, "score": score,
+        "source_relevance_score": max(0, min(100, int(_num(c.get("source_relevance_score"), score)))),
         "category": cat if cat in CATEGORIES else "other",
-        "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
-        "description": roman.to_roman(_text(c.get("description"), 300)),
+        "hook": hook, "title": title,
+        "description": desc,
         "hashtags": [t for t in tags if t][:8],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
-        "reason": _text(c.get("reason"), 200),
+        "reason": reason,
+        "standalone_reason": _text(c.get("standalone_reason"), 200) or reason or "Works as a self-contained vertical clip.",
+        "setup": setup,
+        "payoff": payoff,
+        "evidence": evidence,
     }
+
+
+CONTENT_PRESETS = {
+    "mj_gta": {
+        "label": "MJ Plays GTA",
+        "layout": "auto",
+        "style": "bounce",
+        "focus": "Focus on high-energy GTA reactions, hidden map spots, secret tricks, impossible vehicle stunts, and hilarious fails.",
+    },
+    "gaming": {
+        "label": "Gaming & Tournaments",
+        "layout": "auto",
+        "style": "bounce",
+        "focus": "Focus on clutch plays, tournament caster hype, high-action turnarounds, funny team comms, and dramatic reactions.",
+    },
+    "podcast": {
+        "label": "Podcasts & Roundtables",
+        "layout": "blur",
+        "style": "clean",
+        "focus": "Focus on self-contained contrarian takes, debaters trading a clear setup and punchline, and memorable stories.",
+    },
+    "interview": {
+        "label": "Interviews & Fireside Chats",
+        "layout": "blur",
+        "style": "clean",
+        "focus": "Focus on a clear question or prompt followed by the guest's strongest insight, revelation, or emotional answer.",
+    },
+    "tutorial": {
+        "label": "Tutorials & How-To",
+        "layout": "blur",
+        "style": "clean",
+        "focus": "Focus on a clear problem statement followed by the exact actionable tip, command, or visual demonstration and result.",
+    },
+    "highlights": {
+        "label": "Creator Highlights & Vlogs",
+        "layout": "blur",
+        "style": "hype",
+        "focus": "Focus on standalone story arcs, emotional peaks, reveal moments, and strong visual/audio transitions.",
+    },
+}
 
 
 def _same_word(old, new):
@@ -174,7 +227,57 @@ def _same_word(old, new):
 
 
 def _overlaps(s, e, others):
-    return any(min(e, k["end"]) - max(s, k["start"]) > 0.3 * (e - s) for k in others)
+    for k in others:
+        inter = min(e, k["end"]) - max(s, k["start"])
+        if inter > 0.25 * min(max(1.0, e - s), max(1.0, k["end"] - k["start"])):
+            return True
+    return False
+
+
+def is_similar_candidate(cand: dict, accepted: list) -> bool:
+    """Reject candidates that overlap in time or are near-duplicate variations of an already accepted moment."""
+    s, e = float(cand.get("start", 0)), float(cand.get("end", 0))
+    if _overlaps(s, e, accepted):
+        return True
+    c_text = f"{cand.get('hook', '')} {cand.get('title', '')} {cand.get('evidence', '')}".lower()
+    c_tokens = set(re.findall(r"[a-z0-9]{3,}", c_text))
+    for other in accepted:
+        o_text = f"{other.get('hook', '')} {other.get('title', '')} {other.get('evidence', '')}".lower()
+        if c_text.strip() and o_text.strip():
+            if difflib.SequenceMatcher(None, c_text, o_text).ratio() >= 0.76:
+                return True
+        o_tokens = set(re.findall(r"[a-z0-9]{3,}", o_text))
+        if len(c_tokens) >= 4 and len(o_tokens) >= 4:
+            jaccard = len(c_tokens & o_tokens) / max(1, len(c_tokens | o_tokens))
+            if jaccard >= 0.65:
+                return True
+    return False
+
+
+def is_near_duplicate_copy(title: str, description: str, history: list) -> bool:
+    """Check exact and near-duplicate title or description similarity across a destination's history."""
+    t_norm = " ".join(re.findall(r"\w+", str(title or "").casefold()))
+    d_norm = " ".join(re.findall(r"\w+", str(description or "").casefold()))
+    t_tokens = set(t_norm.split())
+    d_tokens = set(d_norm.split())
+    for row in history or ():
+        if not isinstance(row, dict):
+            continue
+        rt = " ".join(re.findall(r"\w+", str(row.get("title") or "").casefold()))
+        rd = " ".join(re.findall(r"\w+", str(row.get("description") or "").casefold()))
+        if (t_norm and t_norm == rt) or (d_norm and d_norm == rd):
+            return True
+        if t_norm and rt and len(t_norm) >= 12 and len(rt) >= 12:
+            if difflib.SequenceMatcher(None, t_norm, rt).ratio() >= 0.86:
+                return True
+        if d_norm and rd and len(d_norm) >= 25 and len(rd) >= 25:
+            if difflib.SequenceMatcher(None, d_norm, rd).ratio() >= 0.82:
+                return True
+            rd_tokens = set(rd.split())
+            if len(d_tokens) >= 6 and len(rd_tokens) >= 6:
+                if len(d_tokens & rd_tokens) / max(1, len(d_tokens | rd_tokens)) >= 0.78:
+                    return True
+    return False
 
 
 def make_lines(words, loud=None, chat=None):
@@ -207,36 +310,21 @@ def loud_zscore(db):
     return (db - np.median(db)) / (db.std() + 1e-6)
 
 
-def ask_ai(prompt, schema=None, purpose="AI call"):
-    """Try the selected models, then opted-in independent providers on outages or throttles."""
-    why = ""
-    selected_id = ai.current()["id"]
-    for profile in ai.attempts():
-        with ai.use(profile):
-            for model in profile["models"]:
-                try:
-                    out, sent, wrote = ai.call(model, prompt, schema or SCHEMA)
-                    usage.record(sent, wrote, purpose)
-                    if profile["id"] != selected_id:
-                        # Stop starting every request with a provider already in cooldown.
-                        ai.manage(profile["id"], "activate")
-                    ai.clear_problem()
-                    return out, model, sent + wrote
-                except (ai.AIError, httpx.TransportError) as e:
-                    status = getattr(e, "status", 0)
-                    why = ai.explain(e) or f"{ai.label()} could not answer with {model}."
-                    if status in (400, 404, 422):
-                        continue  # try the next selected model on this profile
-                    if status in (401, 403, 429) or status >= 500 or isinstance(e, httpx.TransportError):
-                        break  # one request per service during this failure; try an opted-in independent provider
-                    ai.note_problem(e)
-                    raise RuntimeError(f"The AI did not answer: {why}") from None
-                except (ValueError, KeyError, IndexError, TypeError):
-                    why = f"{ai.label()} did not return usable data for {model}."
-            # After rejected models, continue only to an opted-in backup service.
-    why = why or "Save a working profile in Settings, AI."
-    ai.problem.update(text=why, at=time.time())
-    raise RuntimeError(f"The AI did not answer: {why}")
+def ask_ai(prompt, schema=None, purpose="AI call", *, is_live=False, cancel_event=None, carries_clip_text=True):
+    """Try the ordered distinct AI providers across bounded retry rounds (up to 3 providers/round, 4 rounds: 0s, 5s, 10s, 15s)."""
+    try:
+        out, model, sent, wrote, meta = ai.execute_with_failover(
+            prompt,
+            schema or SCHEMA,
+            carries_clip_text=carries_clip_text,
+            is_live=is_live or purpose.lower().startswith("live"),
+            cancel_event=cancel_event,
+            call_fn=lambda m, p, s: ai.call(m, p, s),
+        )
+        usage.record(sent, wrote, purpose)
+        return out, model, sent + wrote
+    except ai.AIError as exc:
+        raise RuntimeError(str(exc)) from None
 
 
 def sentence_ends(words) -> list:
@@ -297,11 +385,13 @@ def fallback_by_loudness(db, words, n, max_len, duration):
     return picks
 
 
-def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=15, max_len=60, log=print, direction=""):
+def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=15, max_len=60, log=print, direction="", preset="mj_gta"):
     z = loud_zscore(db)
     lines = make_lines(words, z)
     if not lines:
         return [], {"model": None, "note": "No speech found."}
+    preset_info = CONTENT_PRESETS.get(preset or "mj_gta", CONTENT_PRESETS["mj_gta"])
+    preset_note = f"\nContent preset ({preset_info['label']}): {preset_info['focus']}\n" if preset else ""
     found, used_model, tokens = [], None, 0
     last_problem = ""
     t = 0.0
@@ -315,6 +405,7 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
         if len(chunk) < 3:
             continue
         prompt = (HEAD.format(title=_safe(title) or "unknown", uploader=_safe(uploader) or "unknown", n=per_window)
+                  + preset_note
                   + RULES.format(min_len=min_len, max_len=max_len, transcript=_fmt(chunk))
                   + _editor_direction(direction))
         try:
@@ -349,10 +440,12 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
         s, e = _snap(c, lines, words, min_len, max_len, duration)
         if e - s < min(min_len, duration) - 1:
             continue
-        if _overlaps(s, e, clips):
-            continue  # overlaps a better clip
         clip = _tidy(c, s, e)
-        if direction and used_model:
+        if is_similar_candidate(clip, clips):
+            continue  # overlaps or duplicates a stronger moment
+        if not used_model:
+            clip["score_source"] = "local_signals"
+        elif direction:
             clip["score_source"] = "prompt_ai"
         clips.append(clip)
         if len(clips) >= max_clips:

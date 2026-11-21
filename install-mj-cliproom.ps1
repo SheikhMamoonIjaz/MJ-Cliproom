@@ -28,7 +28,7 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
         throw "The virtual environment could not be created."
     }
 }
-Write-Host "Installing MJ-Cliping requirements & dependencies ..."
+Write-Host "Installing MJ Cliproom 2.0.0 requirements & dependencies ..."
 & $venvPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip could not be updated." }
 & $venvPython -m pip install -r (Join-Path $root "requirements.txt")
@@ -43,8 +43,8 @@ try {
 
 Write-Host ""
 Write-Host "============================================================"
-Write-Host "  MJ Cliproom is installed and ready!"
+Write-Host "  MJ Cliproom 2.0.0 is installed and ready!"
 Write-Host "============================================================"
 Write-Host "Start it from your Desktop shortcut or with:"
-Write-Host "  .\.venv\Scripts\python.exe -m studio.launcher"
-Write-Host "Dashboard runs at: http://localhost:8765"
+Write-Host "  .\Start-MJ-Cliproom.bat"
+Write-Host "Dashboard runs at: http://localhost:8766"

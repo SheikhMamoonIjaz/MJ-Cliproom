@@ -13,11 +13,11 @@ $updateBat = Join-Path $root "update-mj-cliproom.bat"
 
 foreach ($dp in $desktopPaths) {
     # 1. Main App Launcher Shortcut
-    $shortcutPath = Join-Path $dp "MJ-Cliping.lnk"
+    $shortcutPath = Join-Path $dp "MJ Cliproom.lnk"
     $shortcut = $WshShell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $startBat
     $shortcut.WorkingDirectory = $root
-    $shortcut.Description = "Launch MJ Cliproom"
+    $shortcut.Description = "Launch MJ Cliproom 2.0.0"
     $shortcut.Save()
     Write-Host "Desktop shortcut created: $shortcutPath"
 
@@ -37,9 +37,11 @@ foreach ($dp in $desktopPaths) {
     $updater.Description = "Update MJ Cliproom to the latest release"
     $updater.Save()
 
-    # Clean up obsolete beta 0.10 shortcut name if present
-    $oldBeta = Join-Path $dp "MJ Cliproom Beta 0.10 - Start Server.lnk"
-    if (Test-Path $oldBeta) {
-        Remove-Item -Path $oldBeta -Force -ErrorAction SilentlyContinue
+    # Clean up obsolete shortcut names if present
+    foreach ($oldName in @("MJ Cliproom Beta 0.10 - Start Server.lnk", "MJ-Cliping.lnk")) {
+        $oldPath = Join-Path $dp $oldName
+        if (Test-Path $oldPath) {
+            Remove-Item -Path $oldPath -Force -ErrorAction SilentlyContinue
+        }
     }
 }

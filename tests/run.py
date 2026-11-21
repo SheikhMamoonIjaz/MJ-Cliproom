@@ -65,7 +65,8 @@ def main() -> int:
                 ("captions never overlap, stuck clips, sentence endings", ["tests/test_stuck.py"]),
                 ("source editor, gameplay and free AI", ["tests/test_editor.py"]),
                 ("fresh installs: ffmpeg, the speech model, AI errors", ["tests/test_tools.py"]),
-                ("the storage folder: full drive, open, move", ["tests/test_storage.py"])]
+                ("the storage folder: full drive, open, move", ["tests/test_storage.py"]),
+                ("2.0.0 failover, summarizer, 9:16 blur, safe zones and migration", ["tests/test_200.py"])]
         for name, args in runs:
             print(f"\n=== {name} ===", flush=True)
             r = subprocess.run([sys.executable, *args], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")

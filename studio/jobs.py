@@ -110,9 +110,9 @@ _cancel_events: dict = {}
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
-DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "auto", "quality": 720,
+DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
             "range_start": None, "range_end": None, "mode": "news", "motion": "none", "watermark": False,
-            "ai_post_text": False}
+            "ai_post_text": False, "preset": "mj_gta"}
 
 
 LIMITS = {"max_clips": (1, 20), "min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
@@ -130,7 +130,7 @@ def clean_options(options) -> dict:
         elif k == "style":
             v = v if v in render.STYLES else DEFAULTS["style"]
         elif k == "layout":
-            if v in ("blur", "zoom"):
+            if v == "zoom":
                 v = "crop"
             elif v == "split":
                 v = "stack"
@@ -139,8 +139,12 @@ def clean_options(options) -> dict:
             if v not in ("news", "gameplay", "manual"):
                 raise ValueError("Choose News, Gameplay, or Manual.")
         elif k == "motion":
-            if v not in ("none", "highlight"):
+            if v not in render.MOTION_PRESETS:
                 raise ValueError("Choose a motion graphics preset.")
+        elif k == "preset":
+            v = str(v).strip().lower()
+            if v not in brain.CONTENT_PRESETS:
+                v = "mj_gta"
         elif k in ("ai_post_text", "watermark"):
             if not isinstance(v, bool):
                 raise ValueError("Clip export switches must be on or off.")
@@ -314,8 +318,18 @@ def public(job) -> dict:
             out["can_delete_source"] = False
     ai = job.get("ai") or {}
     out["ai"] = {"tokens": ai.get("tokens", 0), "note": ai.get("note", ""), "used": bool(ai.get("model"))}   # never the model, never raw errors
+    qdir = Path(job.get("dir", "")) / "quarantine"
+    out["quarantined_files"] = []
+    if qdir.is_dir():
+        for qf in qdir.glob("*"):
+            if qf.is_file():
+                try:
+                    out["quarantined_files"].append({"name": qf.name, "size": qf.stat().st_size})
+                except OSError:
+                    pass
     if job.get("status") == "queued":
         n = _q.ahead().get(job["id"])
+        out["queue_position"] = (n + 1) if n is not None else 1
         if n:
             out["stage"] = (f"High demand right now: {n} video{'s' if n != 1 else ''} ahead of yours" if _q.held else
                             f"Waiting in line: {n} video{'s' if n != 1 else ''} ahead of yours")
@@ -360,7 +374,7 @@ def _job_folder(job) -> Path:
 
 
 def _write_job(folder: Path, text: str):
-    """Write job.json without following a link out of the job folder."""
+    """Write job.json without following a link out of the job folder. Retries transient Windows locks."""
     target = folder / "job.json"
     tmp = folder / "job.json.tmp"
     for path in (target, tmp):
@@ -375,7 +389,14 @@ def _write_job(folder: Path, text: str):
         os.write(fd, text.encode("utf-8"))
     finally:
         os.close(fd)
-    os.replace(tmp, target)
+    for attempt in range(6):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.02 * (attempt + 1))
 
 
 def save(job):
@@ -616,7 +637,7 @@ def clip_changes(job, clip, changes):
             raise ValueError("Choose captions on video or clean video.")
         new["captions"] = changes["captions"]
     if "motion" in changes:
-        if changes["motion"] not in ("none", "highlight"):
+        if changes["motion"] not in render.MOTION_PRESETS:
             raise ValueError("Choose a motion graphics preset.")
         new["motion"] = changes["motion"]
     if "watermark" in changes:
@@ -1248,7 +1269,8 @@ def _run_job(job):
         s0 = int((a - lo) / 16000)
         found, ai = brain.find_clips(bw, db[s0: s0 + int((b - a) / 16000) + 1], (b - a) / 16000, job["title"],
                                      job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append,
-                                     (job.get("automation") or {}).get("prompt", ""))
+                                     (job.get("automation") or {}).get("prompt", ""),
+                                     preset=o.get("preset", "mj_gta"))
         tokens += ai.get("tokens", 0)
         model = ai.get("model") or model
         if ai.get("note"):

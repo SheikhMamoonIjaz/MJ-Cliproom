@@ -57,6 +57,42 @@ try:
 except (OSError, ValueError):
     _cooldowns = {}
 _saved = {"at": None, "data": {}}
+_health: dict = {}          # profile_id -> {"requires_config": bool, "error_kind": str, "reason": str, "at": float}
+_semaphores: dict = {}      # service_family -> BoundedSemaphore
+_clock = {"now": time.time, "sleep": time.sleep}
+
+MAX_PROVIDERS_PER_ROUND = 3
+ROUND_DELAYS = (5, 10, 15)  # 4 rounds total: Round 0 (0s), Round 1 (+5s), Round 2 (+10s), Round 3 (+15s)
+MAX_REQUESTS_PER_OP = 12    # 3 providers/round * 4 rounds ceiling
+LIVE_OP_DEADLINE = 55.0
+OFFLINE_OP_DEADLINE = 180.0
+
+
+def _now() -> float:
+    return float(_clock["now"]())
+
+
+def _sleep(seconds: float, cancel_event=None) -> bool:
+    """Sleep for `seconds` using the active clock; returns False if cancelled during the wait."""
+    if seconds <= 0:
+        return not (cancel_event and cancel_event.is_set())
+    if cancel_event is not None:
+        if _clock["sleep"] is time.sleep:
+            if cancel_event.wait(timeout=seconds):
+                return False
+            return not cancel_event.is_set()
+        # Fake clock in tests: step in 1s increments or directly check cancel_event
+        step = min(1.0, seconds)
+        rem = float(seconds)
+        while rem > 0:
+            if cancel_event.is_set():
+                return False
+            dt = min(step, rem)
+            _clock["sleep"](dt)
+            rem -= dt
+        return not cancel_event.is_set()
+    _clock["sleep"](seconds)
+    return True
 
 
 def _file():
@@ -79,16 +115,40 @@ def _from_dashboard() -> dict:
     return _saved["data"]
 
 
+def _normalize_profile(p: dict, idx: int = 0) -> dict:
+    prov = ALIASES.get(str(p.get("provider") or "").strip().lower(), str(p.get("provider") or "").strip().lower())
+    return {
+        "id": str(p.get("id") or f"prof_{idx + 1}"),
+        "name": str(p.get("name") or PROVIDERS.get(prov, (prov or "Primary",))[0]),
+        "provider": prov,
+        "models": list(p.get("models") or []),
+        "base_url": str(p.get("base_url") or "").rstrip("/"),
+        "key": str(p.get("key") or ""),
+        "fallback": bool(p.get("fallback", False)),
+        "order": int(p.get("order", idx + 1)),
+        "enabled": bool(p.get("enabled", True)),
+        "is_local": bool(p.get("is_local", prov in ("ollama", "custom"))),
+        "allow_clip_text": bool(p.get("allow_clip_text", True)),
+        "max_concurrency": max(1, min(16, int(p.get("max_concurrency", 2)))),
+    }
+
+
 def _profiles() -> list:
     data = _from_dashboard()
     if isinstance(data.get("profiles"), list) and data["profiles"]:
-        return data["profiles"]
+        rows = [_normalize_profile(p, i) for i, p in enumerate(data["profiles"]) if isinstance(p, dict)]
+        rows.sort(key=lambda r: r.get("order", 999))
+        return rows
     p = str(data.get("provider") or config.AI_PROVIDER or "").strip().lower()
-    return [{"id": "primary", "name": "Primary", "provider": ALIASES.get(p, p),
-             "models": list(data.get("models") or []) if data.get("provider") else list(config.AI_MODELS),
-             "base_url": str(data.get("base_url") or "").rstrip("/") if data.get("provider") else config.AI_BASE_URL,
-             "key": str(data.get("key", config.ai_key())) if data.get("provider") else config.ai_key(),
-             "fallback": False}]
+    prov = ALIASES.get(p, p)
+    return [_normalize_profile({
+        "id": "primary", "name": "Primary", "provider": prov,
+        "models": list(data.get("models") or []) if data.get("provider") else list(config.AI_MODELS),
+        "base_url": str(data.get("base_url") or "").rstrip("/") if data.get("provider") else config.AI_BASE_URL,
+        "key": str(data.get("key", config.ai_key())) if data.get("provider") else config.ai_key(),
+        "fallback": False, "order": 1, "enabled": True,
+        "is_local": prov in ("ollama", "custom"), "allow_clip_text": True
+    }, 0)]
 
 
 def current() -> dict:
@@ -117,25 +177,42 @@ def service(profile):
     for provider_id, row in PROVIDERS.items():
         if provider_id not in ("custom", "ollama") and host and urlsplit(row[1]).hostname == host:
             return {"openrouter-free": "openrouter"}.get(provider_id, provider_id)
-    return host
+    return host or name
 
 
-def attempts():
+def _ordered_distinct_profiles(carries_clip_text: bool = False) -> list:
+    """Return up to MAX_PROVIDERS_PER_ROUND distinct-service profiles eligible to be considered."""
     primary = current()
     all_profiles = _profiles()
-    seen = set()
     ordered = [primary] + [p for p in all_profiles if p.get("fallback") and p["id"] != primary["id"]]
+    seen = set()
+    out = []
     for p in ordered:
-        if p["provider"] not in PROVIDERS:
+        if not p.get("enabled", True) or p["provider"] not in PROVIDERS:
+            continue
+        if carries_clip_text and not p.get("allow_clip_text", True):
+            continue
+        if _health.get(p["id"], {}).get("requires_config"):
             continue
         family = service(p)
         if family in seen:
             continue
         with use(p):
-            available = ready() and not cooling()
-        if available:
-            seen.add(family)
-            yield p
+            is_ready = ready()
+        if not is_ready:
+            continue
+        seen.add(family)
+        out.append(p)
+        if len(out) >= MAX_PROVIDERS_PER_ROUND:
+            break
+    return out
+
+
+def attempts(carries_clip_text: bool = False):
+    for p in _ordered_distinct_profiles(carries_clip_text=carries_clip_text):
+        with use(p):
+            if not cooling(p):
+                yield p
 
 
 def can_answer() -> bool:
@@ -143,19 +220,42 @@ def can_answer() -> bool:
     return next(attempts(), None) is not None
 
 
-def cooling(profile=None) -> bool:
+def cooldown_until(profile=None) -> float:
     with _lock:
+        if not _cooldowns and _cooldown_file.exists():
+            try:
+                _cooldowns.update(json.loads(_cooldown_file.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
         target = profile or current()
-        return _cooldowns.get(service(target), 0) > time.time()
+        return float(_cooldowns.get(service(target), 0) or 0)
+
+
+def cooling(profile=None) -> bool:
+    return cooldown_until(profile) > _now()
+
+
+def set_cooldown(profile, delay_seconds: float):
+    with _lock:
+        family = service(profile)
+        until = _now() + max(1.0, float(delay_seconds))
+        _cooldowns[family] = max(_cooldowns.get(family, 0), until)
+        try:
+            tmp = _cooldown_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_cooldowns), encoding="utf-8")
+            tmp.replace(_cooldown_file)
+        except OSError:
+            pass
+        return _cooldowns[family]
 
 
 def retry_delay(headers, default):
-    raw = headers.get("retry-after", headers.get("Retry-After", ""))
+    raw = (headers or {}).get("retry-after", (headers or {}).get("Retry-After", ""))
     try:
-        return max(1, int(raw))
+        return max(1, int(float(raw)))
     except (ValueError, TypeError):
         try:
-            return max(1, int(parsedate_to_datetime(raw).timestamp() - time.time()))
+            return max(1, int(parsedate_to_datetime(raw).timestamp() - _now()))
         except (ValueError, TypeError, OverflowError):
             return default
 
@@ -188,27 +288,62 @@ def ready() -> bool:
                 and (c["provider"] != "openrouter-free" or all(_free_model(m) for m in c["models"])))
 
 
+def redact_text(text: str, raw_secret: str = "") -> str:
+    out = str(text or "")
+    for p in _profiles():
+        if p.get("key") and len(p["key"]) >= 6:
+            out = out.replace(p["key"], "<redacted>")
+    if raw_secret and len(raw_secret) >= 6:
+        out = out.replace(raw_secret, "<redacted>")
+    return out
+
+
 def _summary(c):
     with use(c):
+        h = _health.get(c["id"], {})
+        cd_until = cooldown_until(c) if ready() else 0.0
+        now = _now()
         return {k: c[k] for k in ("id", "name", "provider", "models", "base_url", "fallback")} | {
-            "has_key": bool(c["key"]), "key_hint": c["key"][-4:] if len(c["key"]) >= 12 else "",
-            "ready": ready(), "cooling": cooling() if ready() else False, "label": label()}
+            "order": c.get("order", 1),
+            "enabled": c.get("enabled", True),
+            "is_local": c.get("is_local", c["provider"] in ("ollama", "custom")),
+            "allow_clip_text": c.get("allow_clip_text", True),
+            "has_key": bool(c["key"]),
+            "key_hint": c["key"][-4:] if len(c["key"]) >= 12 else "",
+            "ready": ready(),
+            "cooling": cd_until > now if ready() else False,
+            "next_eligible_at": round(cd_until, 2) if cd_until > now else 0,
+            "requires_config": bool(h.get("requires_config", False)),
+            "last_error_kind": h.get("error_kind", ""),
+            "last_reason": redact_text(h.get("reason", ""), c.get("key", "")),
+            "label": label(),
+        }
 
 
 def public() -> dict:
-    return {**_summary(current()), "saved_here": bool(_from_dashboard()),
-            "profiles": [_summary(p) for p in _profiles()],
-            "providers": [{"id": k, "label": v[0], "address": v[1], "needs_key": k not in NO_KEY, "key_url": v[3], "example": v[4]}
-                          for k, v in PROVIDERS.items()]}
+    dash = _from_dashboard()
+    return {
+        **_summary(current()),
+        "saved_here": bool(dash),
+        "promote_healthy_globally": bool(dash.get("promote_healthy_globally", False)),
+        "profiles": [_summary(p) for p in _profiles()],
+        "providers": [
+            {"id": k, "label": v[0], "address": v[1], "needs_key": k not in NO_KEY, "key_url": v[3], "example": v[4]}
+            for k, v in PROVIDERS.items()
+        ],
+    }
 
 
-def _write_profiles(rows, active):
+def _write_profiles(rows, active, promote_healthy_globally=None):
     f = _file()
     tmp = f.with_suffix(".tmp")
-    # Keep the active settings readable by an older version if the operator rolls back.
-    primary = next(row for row in rows if row["id"] == active)
+    for idx, r in enumerate(rows):
+        r["order"] = idx + 1
+    primary = next((row for row in rows if row["id"] == active), rows[0])
+    dash = _from_dashboard()
+    promote = dash.get("promote_healthy_globally", False) if promote_healthy_globally is None else bool(promote_healthy_globally)
     data = {k: primary[k] for k in ("provider", "models", "base_url", "key")}
-    tmp.write_text(json.dumps({**data, "profiles": rows, "active": active}), encoding="utf-8")
+    tmp.write_text(json.dumps({**data, "profiles": rows, "active": active, "promote_healthy_globally": promote}), encoding="utf-8")
     try:
         os.chmod(tmp, 0o600)
     except OSError:
@@ -220,15 +355,27 @@ def _write_profiles(rows, active):
 def manage(profile_id, action):
     with _lock:
         rows = _profiles()
-        if not any(p["id"] == profile_id for p in rows):
+        idx = next((i for i, p in enumerate(rows) if p["id"] == profile_id), None)
+        if idx is None:
             raise ValueError("That AI profile no longer exists.")
         active = current()["id"]
         if action == "activate":
             active = profile_id
+            _health.pop(profile_id, None)
+        elif action == "move_up" and idx > 0:
+            rows[idx - 1], rows[idx] = rows[idx], rows[idx - 1]
+        elif action == "move_down" and idx + 1 < len(rows):
+            rows[idx + 1], rows[idx] = rows[idx], rows[idx + 1]
+        elif action == "toggle_clip_text":
+            rows[idx]["allow_clip_text"] = not rows[idx].get("allow_clip_text", True)
+        elif action == "clear_error":
+            _health.pop(profile_id, None)
+            _cooldowns.pop(service(rows[idx]), None)
         elif action == "delete":
             if len(rows) == 1:
                 raise ValueError("Save another profile before deleting this one.")
             rows = [p for p in rows if p["id"] != profile_id]
+            _health.pop(profile_id, None)
             if active == profile_id:
                 active = rows[0]["id"]
         else:
@@ -238,7 +385,8 @@ def manage(profile_id, action):
 
 
 def save(provider_id: str, model_ids, address: str = "", new_key=None, *, profile_id=None,
-         name=None, fallback=None) -> dict:
+         name=None, fallback=None, allow_clip_text=None, is_local=None, order=None,
+         promote_healthy_globally=None) -> dict:
     p = ALIASES.get(str(provider_id or "").strip().lower(), str(provider_id or "").strip().lower())
     if p not in PROVIDERS:
         raise ValueError("Choose one of the AI services in the list.")
@@ -271,11 +419,26 @@ def save(provider_id: str, model_ids, address: str = "", new_key=None, *, profil
              else str(new_key or "").strip()[:400])
         if not k and p not in NO_KEY:
             raise ValueError("Paste a key for this profile and address.")
-        row = {"id": old["id"] if old else secrets.token_hex(8), "provider": p, "models": ms,
-               "base_url": address, "key": k, "name": (str(name or "").strip()[:64] or (old["name"] if old else PROVIDERS[p][0])),
-               "fallback": (old or {}).get("fallback", False) if fallback is None else fallback is True}
+        row_id = old["id"] if old else secrets.token_hex(8)
+        _health.pop(row_id, None)
+        row = {
+            "id": row_id,
+            "provider": p,
+            "models": ms,
+            "base_url": address,
+            "key": k,
+            "name": (str(name or "").strip()[:64] or (old["name"] if old else PROVIDERS[p][0])),
+            "fallback": (old or {}).get("fallback", False) if fallback is None else bool(fallback),
+            "allow_clip_text": (old or {}).get("allow_clip_text", True) if allow_clip_text is None else bool(allow_clip_text),
+            "is_local": (p in ("ollama", "custom")) if is_local is None else bool(is_local),
+            "order": int(order) if order is not None else (old or {}).get("order", len(rows) + 1),
+            "enabled": True,
+        }
         rows = [row if old is other else other for other in rows] if old else [*rows, row]
-        _write_profiles(rows, active if any(r["id"] == active and r["provider"] for r in rows) else row["id"])
+        if order is not None:
+            rows.sort(key=lambda r: r.get("order", 999))
+        _write_profiles(rows, active if any(r["id"] == active and r["provider"] for r in rows) else row["id"],
+                        promote_healthy_globally=promote_healthy_globally)
     return public()
 
 
@@ -337,55 +500,308 @@ def _test() -> dict:
 
 
 class AIError(RuntimeError):
-    def __init__(self, message, status=0):
+    def __init__(self, message, status=0, error_kind="", retry_after=None, body_text=""):
         super().__init__(message)
         self.status = status
+        self.error_kind = error_kind
+        self.retry_after = retry_after
+        self.body_text = body_text
 
+
+class AIWaitError(AIError):
+    """Raised after bounded retry rounds complete without an eligible or answering provider."""
+    def __init__(self, message, *, earliest_retry_at=0.0, attempts_log=None, error_kind="rate_limit"):
+        super().__init__(message, status=429, error_kind=error_kind)
+        self.earliest_retry_at = float(earliest_retry_at or 0.0)
+        self.attempts_log = list(attempts_log or [])
 
 
 problem = {"text": "", "at": 0.0}       # why the AI last failed, for the dashboard; cleared when it answers again
 
 
+def classify_error(exc, status: int = 0, body_text: str = "") -> str:
+    """Classify an AI error into distinct operational buckets."""
+    status = status or getattr(exc, "status", 0) or 0
+    existing = getattr(exc, "error_kind", "")
+    if existing:
+        return existing
+    raw = f"{exc} {body_text}".lower()
+    if isinstance(exc, (httpx.TimeoutException, TimeoutError)) or "timed out" in raw or "timeout" in raw:
+        return "network_timeout"
+    if isinstance(exc, httpx.TransportError) or any(k in raw for k in ("connect", "getaddrinfo", "dns", "refused", "reset", "network")):
+        return "network_transient"
+    if status == 402 or any(k in raw for k in ("insufficient_quota", "credit", "billing", "free-tier", "balance", "payment")):
+        return "credits_exhausted"
+    if status in (401, 403) or any(k in raw for k in ("api key", "api_key", "unauthorized", "invalid_api_key", "authentication", "permission_denied")):
+        return "auth_invalid"
+    if status == 404 or any(k in raw for k in ("not found", "does not exist", "unknown model", "not_found", "model_not_found")):
+        return "model_invalid"
+    if status == 429 or any(k in raw for k in ("rate limit", "rate_limit", "resource_exhausted", "too many requests", "quota")):
+        return "rate_limit"
+    if "did not answer with json" in raw or isinstance(exc, (json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError)):
+        return "malformed_output"
+    if status >= 500:
+        return "server_transient"
+    return "permanent_error"
+
+
 def explain(e) -> str:
     """What went wrong with an AI call, in words the owner can act on."""
-    text, low = str(e), str(e).lower()
+    text, low = redact_text(str(e)), redact_text(str(e)).lower()
     name = (models() or ["?"])[0]
-    if "404" in text or "not found" in low or "does not exist" in low or "unknown model" in low or "not_found" in low:
+    kind = classify_error(e)
+    if kind == "model_invalid" or "404" in text or "not found" in low or "does not exist" in low or "unknown model" in low or "not_found" in low:
         return f"{label()} doesn't know the model \"{name}\". Open Settings, AI, press Find models and pick one from the list."
-    if "401" in text or "403" in text or "api key" in low or "api_key" in low or "unauthorized" in low or "permission" in low:
+    if kind == "auth_invalid" or "401" in text or "403" in text or "api key" in low or "api_key" in low or "unauthorized" in low or "permission" in low:
         return f"{label()} refused the key. Paste a working key under Settings, AI."
-    if "429" in text or "quota" in low or "rate limit" in low or "exhausted" in low:
+    if kind in ("rate_limit", "credits_exhausted") or "429" in text or "quota" in low or "rate limit" in low or "exhausted" in low:
         return f"{label()} says the key has hit its limit or has no credit left. Check the account with {label()}, or try again later."
-    if "connect" in low or "timed out" in low or "timeout" in low or "getaddrinfo" in low or "refused" in low:
+    if kind in ("network_timeout", "network_transient") or "connect" in low or "timed out" in low or "timeout" in low or "getaddrinfo" in low or "refused" in low:
         return f"PeakCut couldn't reach {label()}. Check the internet connection" + (" and that Ollama is running." if provider() == "ollama" else ".")
     return ""
 
 
 def note_problem(e):
-    import time
     why = explain(e)
     if why:
-        problem.update(text=why, at=time.time())
+        problem.update(text=why, at=_now())
 
 
 def clear_problem():
     problem.update(text="", at=0.0)
 
 
+def _extract_retry_after(headers: dict) -> float | None:
+    if not headers:
+        return None
+    for k in ("retry-after", "Retry-After", "x-ratelimit-reset-after", "X-RateLimit-Reset-After"):
+        if k in headers and str(headers[k]).strip():
+            delay = retry_delay({"retry-after": headers[k]}, None)
+            if delay is not None:
+                return float(delay)
+    return None
+
+
 def _fail(r, model):
-    headers = getattr(r, "headers", {})
-    if r.status_code == 429 or (r.status_code >= 500 and headers.get("retry-after")):
-        with _lock:
-            family = service(current())
-            until = time.time() + retry_delay(headers, 900)
-            _cooldowns[family] = max(_cooldowns.get(family, 0), until)
+    headers = getattr(r, "headers", {}) or {}
+    body_text = (getattr(r, "text", "") or "")[:400]
+    explicit_ra = _extract_retry_after(headers)
+    kind = classify_error(None, status=r.status_code, body_text=body_text)
+    if r.status_code == 429 or kind == "credits_exhausted" or (r.status_code >= 500 and explicit_ra is not None):
+        delay = explicit_ra if explicit_ra is not None else 900.0
+        set_cooldown(current(), delay)
+    raise AIError(
+        f"HTTP {r.status_code} for model {model}",
+        status=r.status_code,
+        error_kind=kind,
+        retry_after=explicit_ra,
+        body_text=redact_text(body_text),
+    )
+
+
+def _service_semaphore(profile) -> threading.BoundedSemaphore:
+    family = service(profile)
+    with _lock:
+        sem = _semaphores.get(family)
+        if sem is None:
+            sem = _semaphores[family] = threading.BoundedSemaphore(max(1, int(profile.get("max_concurrency", 2))))
+        return sem
+
+
+def execute_with_failover(prompt: str, schema: dict | None = None, *, carries_clip_text: bool = True,
+                          is_live: bool = False, cancel_event=None, cancel_check=None, call_fn=None) -> tuple:
+    """Execute an AI schema call with sensitive provider switching and bounded retries.
+
+    Contract:
+    - Up to 3 eligible, distinct providers per round.
+    - Immediate failover (0s) within a round on transient/rate-limit/credit errors.
+    - Up to 3 additional rounds with 5s, 10s, and 15s delays between rounds (4 rounds total).
+    - Maximum 12 requests per operation, bounded by operation deadline and per-request timeout.
+    - Respects explicit Retry-After / reset times per provider; never calls a provider before its due time.
+    - Marks invalid credentials (401/403) or unsupported models (404) as requires_config.
+    - Retries malformed JSON output once on the same provider within the 12-request budget.
+    """
+    invoke = call_fn or call
+    schema = schema or {}
+    start_t = _now()
+    deadline = start_t + (LIVE_OP_DEADLINE if is_live else OFFLINE_OP_DEADLINE)
+    total_calls = 0
+    attempts_log = []
+    last_why = ""
+    last_kind = "rate_limit"
+    primary_id = current()["id"]
+    transient_no_header_families = set()
+    is_cancelled = lambda: bool((cancel_event is not None and cancel_event.is_set()) or (cancel_check is not None and cancel_check()))
+
+    for round_idx in range(len(ROUND_DELAYS) + 1):
+        if is_cancelled():
+            raise AIWaitError("Operation cancelled during AI retry wait.", earliest_retry_at=0.0,
+                              attempts_log=attempts_log, error_kind="cancelled")
+        now = _now()
+        if now >= deadline or total_calls >= MAX_REQUESTS_PER_OP:
+            break
+
+        # Gather up to 3 distinct providers configured for this operation
+        candidates = _ordered_distinct_profiles(carries_clip_text=carries_clip_text)
+        if not candidates:
+            break
+
+        round_tried_any = False
+        for prof in candidates:
+            if is_cancelled():
+                raise AIWaitError("Operation cancelled.", earliest_retry_at=0.0,
+                                  attempts_log=attempts_log, error_kind="cancelled")
+            now = _now()
+            if now >= deadline or total_calls >= MAX_REQUESTS_PER_OP:
+                break
+            family = service(prof)
+            cd_until = cooldown_until(prof)
+            # If the provider is in an explicit Retry-After cooldown (not a transient no-header retry within this op), skip it
+            if cd_until > now and family not in transient_no_header_families:
+                continue
+
+            round_tried_any = True
+            sem = _service_semaphore(prof)
+            sem.acquire()
             try:
-                tmp = _cooldown_file.with_suffix(".tmp")
-                tmp.write_text(json.dumps(_cooldowns), encoding="utf-8")
-                tmp.replace(_cooldown_file)
-            except OSError:  # keep honoring the cooldown in memory
-                pass
-    raise AIError(f"HTTP {r.status_code} for model {model}", status=r.status_code)
+                with use(prof):
+                    prof_models = prof["models"] or [""]
+                    all_models_404 = True
+                    for model in prof_models:
+                        if total_calls >= MAX_REQUESTS_PER_OP or _now() >= deadline:
+                            break
+                        malformed_retries = 0
+                        while total_calls < MAX_REQUESTS_PER_OP and _now() < deadline:
+                            total_calls += 1
+                            attempt_rec = {
+                                "round": round_idx,
+                                "profile_id": prof["id"],
+                                "provider": prof["provider"],
+                                "service": family,
+                                "model": model,
+                                "at": round(_now() - start_t, 3),
+                            }
+                            try:
+                                out, sent, wrote = invoke(model, prompt, schema)
+                                if not isinstance(out, (list, dict)):
+                                    raise AIError("The AI did not return a JSON object or array.", error_kind="malformed_output")
+                                attempt_rec["status"] = "ok"
+                                attempts_log.append(attempt_rec)
+                                _health.pop(prof["id"], None)
+                                if family in transient_no_header_families:
+                                    transient_no_header_families.discard(family)
+                                    with _lock:
+                                        _cooldowns.pop(family, None)
+                                if prof["id"] != primary_id and _from_dashboard().get("promote_healthy_globally"):
+                                    manage(prof["id"], "activate")
+                                clear_problem()
+                                route_note = ""
+                                if prof["id"] != primary_id or round_idx > 0 or len(attempts_log) > 1:
+                                    route_note = f"Answered by {label()} ({model}) on round {round_idx + 1} after {len(attempts_log) - 1} fallback attempt(s)."
+                                return out, model, sent, wrote, {
+                                    "profile_id": prof["id"],
+                                    "provider": prof["provider"],
+                                    "label": label(),
+                                    "round": round_idx,
+                                    "attempts": attempts_log,
+                                    "route_note": route_note,
+                                }
+                            except (AIError, httpx.TransportError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
+                                status = getattr(exc, "status", 0)
+                                kind = classify_error(exc, status=status)
+                                last_kind = kind
+                                last_why = explain(exc) or redact_text(f"{label()} could not answer with {model}: {exc}")
+                                attempt_rec.update(status="error", error_kind=kind, reason=last_why)
+                                attempts_log.append(attempt_rec)
+                                _health[prof["id"]] = {
+                                    "requires_config": kind in ("auth_invalid",),
+                                    "error_kind": kind,
+                                    "reason": last_why,
+                                    "at": _now(),
+                                }
+
+                                if kind == "malformed_output":
+                                    all_models_404 = False
+                                    if malformed_retries < 1 and total_calls < MAX_REQUESTS_PER_OP:
+                                        malformed_retries += 1
+                                        continue
+                                    break  # move to next model or provider
+
+                                if kind == "model_invalid" or status in (400, 404, 422):
+                                    break  # try next model on this profile
+
+                                all_models_404 = False
+                                if kind == "auth_invalid":
+                                    _health[prof["id"]]["requires_config"] = True
+                                    break  # skip remaining models on dead key
+
+                                if kind in ("rate_limit", "credits_exhausted", "server_transient", "network_timeout", "network_transient"):
+                                    ra = getattr(exc, "retry_after", None)
+                                    if ra is not None:
+                                        transient_no_header_families.discard(family)
+                                        set_cooldown(prof, ra)
+                                    else:
+                                        # Allow the next round (5s/10s/15s) in this operation to re-test if needed,
+                                        # while recording a post-op cooldown if all rounds fail.
+                                        transient_no_header_families.add(family)
+                                    break  # immediate switch (0s) to next distinct provider in this round
+
+                                break
+                        else:
+                            continue
+                        if _health.get(prof["id"], {}).get("requires_config") or last_kind in (
+                            "rate_limit", "credits_exhausted", "server_transient", "network_timeout", "network_transient"
+                        ):
+                            break
+                    if all_models_404 and prof_models:
+                        _health[prof["id"]] = {
+                            "requires_config": True,
+                            "error_kind": "model_invalid",
+                            "reason": last_why or f"{label()} rejected configured models.",
+                            "at": _now(),
+                        }
+            finally:
+                sem.release()
+
+        # End of round: decide whether another round is permitted
+        if round_idx >= len(ROUND_DELAYS) or total_calls >= MAX_REQUESTS_PER_OP:
+            break
+        wait_sec = ROUND_DELAYS[round_idx]
+        now = _now()
+        if now + wait_sec >= deadline:
+            break
+        # Check if any candidate could possibly be eligible in a future round
+        remaining_candidates = _ordered_distinct_profiles(carries_clip_text=carries_clip_text)
+        if not remaining_candidates:
+            break
+        future_horizon = start_t + sum(ROUND_DELAYS[round_idx:])
+        any_eligible_soon = any(
+            (service(p) in transient_no_header_families) or (cooldown_until(p) <= max(now + wait_sec, min(deadline, future_horizon)))
+            for p in remaining_candidates
+        )
+        if not round_tried_any and not any_eligible_soon:
+            break
+        if is_cancelled() or not _sleep(wait_sec, cancel_event=cancel_event):
+            raise AIWaitError("Operation cancelled during AI retry wait.", earliest_retry_at=0.0,
+                              attempts_log=attempts_log, error_kind="cancelled")
+
+    # Apply cooldown for any provider that failed transiently without an explicit Retry-After header
+    now = _now()
+    for p in _profiles():
+        fam = service(p)
+        if fam in transient_no_header_families and cooldown_until(p) <= now:
+            set_cooldown(p, 60.0)
+
+    future_dues = [cooldown_until(p) for p in _ordered_distinct_profiles(carries_clip_text=carries_clip_text) if cooldown_until(p) > now]
+    earliest = min(future_dues) if future_dues else (now + 60.0 if attempts_log else 0.0)
+    last_why = last_why or "Save a working profile in Settings, AI."
+    problem.update(text=last_why, at=now)
+    raise AIWaitError(
+        f"The AI did not answer: {last_why}",
+        earliest_retry_at=earliest,
+        attempts_log=attempts_log,
+        error_kind=last_kind,
+    )
 
 
 # ---------------------------------------------------------------- the schema, said in words for chat models
@@ -412,8 +828,11 @@ def _parse(text):
     except ValueError:
         m = re.search(r"[\[{].*[\]}]", text, re.S)
         if not m:
-            raise AIError("The AI did not answer with JSON.")
-        out = json.loads(m.group(0))
+            raise AIError("The AI did not answer with JSON.", error_kind="malformed_output")
+        try:
+            out = json.loads(m.group(0))
+        except ValueError as exc:
+            raise AIError("The AI did not answer with JSON.", error_kind="malformed_output") from exc
     if isinstance(out, dict) and "items" in out:
         out = out["items"]
     return out
@@ -433,10 +852,14 @@ def _gemini(model, prompt, schema):
     if r.status_code != 200:
         _fail(r, model)
     data = r.json()
-    text = "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+    try:
+        text = "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+        parsed = json.loads(text)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise AIError("The AI did not answer with JSON.", error_kind="malformed_output") from exc
     u = data.get("usageMetadata", {})
     sent = int(u.get("promptTokenCount") or 0)
-    return json.loads(text), sent, max(0, int(u.get("totalTokenCount") or 0) - sent)   # the answer, and any thinking billed with it
+    return parsed, sent, max(0, int(u.get("totalTokenCount") or 0) - sent)   # the answer, and any thinking billed with it
 
 
 def _openai(model, prompt, schema):
